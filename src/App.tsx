@@ -9,19 +9,26 @@ const Icon = ({ name, className }) => {
     play: <path d="m5 3 14 9-14 9V3z" />,
     pause: <path d="M6 4h4v16H6zM14 4h4v16h-4z" />,
     rotateCcw: (
-        <>
-            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-            <path d="M3 3v5h5" />
-        </>
+      <>
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+        <path d="M3 3v5h5" />
+      </>
     ),
     settings: (
-        <>
-            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-            <circle cx="12" cy="12" r="3" />
-        </>
+      <>
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </>
     ),
     x: <path d="M18 6 6 18M6 6l12 12" />,
     heart: <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />,
+    bell: <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M13.73 21a2 2 0 0 1-3.46 0" />,
+    volume2: (
+      <>
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+      </>
+    ),
   };
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -112,6 +119,8 @@ interface TimerSettings {
   showActivityTimer: boolean;
   showActivityProgress: boolean;
   activityProgressType: 'fill' | 'drain';
+  enableNotifications: boolean;
+  playSoundOnEnd: boolean;
 }
 
 interface ColorPickerProps {
@@ -123,24 +132,8 @@ interface ColorPickerProps {
   onAddFavorite: (color: string) => void;
 }
 
-// --- Utility functions for localStorage ---
-const saveToLocalStorage = (key: string, value: any) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (error) {
-    console.warn(`Failed to save ${key} to localStorage:`, error);
-  }
-};
-
-const loadFromLocalStorage = (key: string, defaultValue: any) => {
-  try {
-    const item = localStorage.getItem(key);
-    return item ? JSON.parse(item) : defaultValue;
-  } catch (error) {
-    console.warn(`Failed to load ${key} from localStorage:`, error);
-    return defaultValue;
-  }
-};
+// Notification sound - using a data URL for a simple beep sound
+const notificationSound = "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT";
 
 // --- Modals ---
 const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, onAddFavorite }: ColorPickerProps) => {
@@ -337,232 +330,100 @@ const DistributeTimeModal = ({ isOpen, onClose, bankedTime, onDistribute }) => {
     );
 };
 
+
 // --- Main Application Component ---
 export default function App() {
-  // Initialize state with time adjustment for elapsed time
-  const initializeStateWithTimeAdjustment = useCallback(() => {
-    const savedActivities = loadFromLocalStorage('timeslice_activities', [
-      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false },
-      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false },
-    ]);
-    
-    const savedIsTimerActive = loadFromLocalStorage('timeslice_isTimerActive', false);
-    const savedIsPaused = loadFromLocalStorage('timeslice_isPaused', false);
-    const savedCurrentActivityIndex = loadFromLocalStorage('timeslice_currentActivityIndex', 0);
-    const savedLastTickTimestamp = loadFromLocalStorage('timeslice_lastTickTimestamp', Date.now());
-    
-    // If timer was active and not paused, calculate elapsed time and adjust activities
-    if (savedIsTimerActive && !savedIsPaused) {
-      const now = Date.now();
-      const elapsedSeconds = Math.floor((now - savedLastTickTimestamp) / 1000);
-      
-      if (elapsedSeconds > 0 && savedCurrentActivityIndex < savedActivities.length) {
-        const adjustedActivities = [...savedActivities];
-        let remainingElapsedTime = elapsedSeconds;
-        let currentIndex = savedCurrentActivityIndex;
-        
-        // Process elapsed time through activities
-        while (remainingElapsedTime > 0 && currentIndex < adjustedActivities.length) {
-          const currentActivity = adjustedActivities[currentIndex];
-          
-          if (currentActivity.isCompleted) {
-            currentIndex++;
-            continue;
-          }
-          
-          const timeToSubtract = Math.min(remainingElapsedTime, currentActivity.timeRemaining);
-          currentActivity.timeRemaining -= timeToSubtract;
-          remainingElapsedTime -= timeToSubtract;
-          
-          if (currentActivity.timeRemaining <= 0) {
-            currentActivity.isCompleted = true;
-            currentIndex++;
-          }
-        }
-        
-        return {
-          activities: adjustedActivities,
-          isTimerActive: currentIndex < adjustedActivities.length && !adjustedActivities.every(a => a.isCompleted),
-          isPaused: true, // Always start paused after reload
-          currentActivityIndex: Math.min(currentIndex, adjustedActivities.length - 1),
-          lastTickTimestamp: now
-        };
-      }
-    }
-    
-    return {
-      activities: savedActivities,
-      isTimerActive: false, // Always start inactive after reload
-      isPaused: savedIsPaused,
-      currentActivityIndex: savedCurrentActivityIndex,
-      lastTickTimestamp: savedLastTickTimestamp
-    };
-  }, []);
+  const [activities, setActivities] = useState<Activity[]>([
+    { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false },
+    { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false },
+  ]);
 
-  const initialState = initializeStateWithTimeAdjustment();
-  
-  const [activities, setActivities] = useState<Activity[]>(initialState.activities);
-  const [totalHours, setTotalHours] = useState(() => loadFromLocalStorage('timeslice_totalHours', 2));
-  const [totalMinutes, setTotalMinutes] = useState(() => loadFromLocalStorage('timeslice_totalMinutes', 0));
-  const [isTimerActive, setIsTimerActive] = useState(initialState.isTimerActive);
-  const [isPaused, setIsPaused] = useState(initialState.isPaused);
-  const [currentActivityIndex, setCurrentActivityIndex] = useState(initialState.currentActivityIndex);
-  const [lastTickTimestamp, setLastTickTimestamp] = useState(initialState.lastTickTimestamp);
-  const [lastHiddenTimestamp, setLastHiddenTimestamp] = useState(0);
-  
+  const [totalHours, setTotalHours] = useState(2);
+  const [totalMinutes, setTotalMinutes] = useState(0);
+  const [isTimerActive, setIsTimerActive] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [currentActivityIndex, setCurrentActivityIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [colorPickerState, setColorPickerState] = useState({ isOpen: false, activityId: "", currentColor: "" });
-  
-  const [favoriteColors, setFavoriteColors] = useState<string[]>(() => 
-    loadFromLocalStorage('timeslice_favoriteColors', [
-      "hsl(220, 70%, 50%)", "hsl(120, 60%, 50%)", "hsl(0, 70%, 50%)", "hsl(280, 60%, 50%)", "hsl(40, 80%, 50%)",
-    ])
-  );
-  
-  const [settings, setSettings] = useState<TimerSettings>(() => 
-    loadFromLocalStorage('timeslice_settings', {
-      showMainProgress: true, 
-      showOverallTime: true, 
-      showEndTime: true, 
-      showActivityTimer: true,
-      showActivityProgress: false, 
-      activityProgressType: 'drain'
-    })
-  );
-  
-  const [durationType, setDurationType] = useState<'duration' | 'endTime'>(() => loadFromLocalStorage('timeslice_durationType', 'duration'));
-  const [endTime, setEndTime] = useState(() => loadFromLocalStorage('timeslice_endTime', '23:30'));
-  const [bankedTime, setBankedTime] = useState(() => loadFromLocalStorage('timeslice_bankedTime', 0));
+  const [favoriteColors, setFavoriteColors] = useState<string[]>([
+    "hsl(220, 70%, 50%)", "hsl(120, 60%, 50%)", "hsl(0, 70%, 50%)", "hsl(280, 60%, 50%)", "hsl(40, 80%, 50%)",
+  ]);
+  const [settings, setSettings] = useState<TimerSettings>({
+    showMainProgress: true, 
+    showOverallTime: true, 
+    showEndTime: true, 
+    showActivityTimer: true,
+    showActivityProgress: false, 
+    activityProgressType: 'drain',
+    enableNotifications: false,
+    playSoundOnEnd: false
+  });
+  const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
+  const [endTime, setEndTime] = useState('23:30');
+  const [bankedTime, setBankedTime] = useState(0);
   const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
   const prevIsTimerActive = useRef(false);
 
-  // Handle visibility change for background tab time adjustment
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      const now = Date.now();
-      
-      if (document.hidden) {
-        // Page is being hidden - store the timestamp
-        setLastHiddenTimestamp(now);
-      } else {
-        // Page is becoming visible again
-        if (lastHiddenTimestamp > 0 && isTimerActive && !isPaused) {
-          const elapsedSeconds = Math.floor((now - lastHiddenTimestamp) / 1000);
-          
-          if (elapsedSeconds > 0) {
-            // Adjust activities for the elapsed time
-            setActivities(prevActivities => {
-              const adjustedActivities = [...prevActivities];
-              let remainingElapsedTime = elapsedSeconds;
-              let newCurrentIndex = currentActivityIndex;
-              let timeToBank = 0;
-              
-              // Process elapsed time through activities starting from current activity
-              while (remainingElapsedTime > 0 && newCurrentIndex < adjustedActivities.length) {
-                const currentActivity = adjustedActivities[newCurrentIndex];
-                
-                if (currentActivity.isCompleted) {
-                  newCurrentIndex++;
-                  continue;
-                }
-                
-                const timeToSubtract = Math.min(remainingElapsedTime, currentActivity.timeRemaining);
-                currentActivity.timeRemaining -= timeToSubtract;
-                remainingElapsedTime -= timeToSubtract;
-                
-                if (currentActivity.timeRemaining <= 0) {
-                  currentActivity.isCompleted = true;
-                  newCurrentIndex++;
-                }
-              }
-              
-              // If there's still remaining elapsed time and all activities are completed, add to banked time
-              if (remainingElapsedTime > 0) {
-                timeToBank = remainingElapsedTime;
-              }
-              
-              // Update current activity index if it changed
-              if (newCurrentIndex !== currentActivityIndex) {
-                setCurrentActivityIndex(Math.min(newCurrentIndex, adjustedActivities.length - 1));
-              }
-              
-              // Add any remaining time to banked time
-              if (timeToBank > 0) {
-                setBankedTime(prev => prev + timeToBank);
-              }
-              
-              // Check if all activities are completed
-              const allCompleted = adjustedActivities.every(a => a.isCompleted);
-              if (allCompleted) {
-                setIsTimerActive(false);
-              }
-              
-              return adjustedActivities;
-            });
-          }
-        }
-        
-        // Reset hidden timestamp and update last tick timestamp
-        setLastHiddenTimestamp(0);
-        setLastTickTimestamp(now);
+  // Request notification permission
+  const requestNotificationPermission = async () => {
+    if (!("Notification" in window)) {
+      alert("This browser does not support notifications");
+      setSettings(prev => ({ ...prev, enableNotifications: false }));
+      return;
+    }
+
+    if (Notification.permission === "default") {
+      const permission = await Notification.requestPermission();
+      if (permission === "denied") {
+        setSettings(prev => ({ ...prev, enableNotifications: false }));
       }
-    };
+    } else if (Notification.permission === "denied") {
+      alert("Notifications are blocked. Please enable them in your browser settings.");
+      setSettings(prev => ({ ...prev, enableNotifications: false }));
+    }
+  };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [lastHiddenTimestamp, isTimerActive, isPaused, currentActivityIndex]);
+  // Play notification sound
+  const playNotificationSound = () => {
+    try {
+      const audio = new Audio(notificationSound);
+      audio.volume = 0.7;
+      audio.play().catch(error => {
+        console.warn("Could not play notification sound:", error);
+      });
+    } catch (error) {
+      console.warn("Error creating audio:", error);
+    }
+  };
 
-  // Save state to localStorage whenever it changes
-  useEffect(() => {
-    saveToLocalStorage('timeslice_activities', activities);
-  }, [activities]);
+  // Send notification
+  const sendNotification = (title: string, body: string) => {
+    if (settings.enableNotifications && Notification.permission === "granted") {
+      try {
+        const notification = new Notification(title, {
+          body,
+          icon: "/vite.svg",
+          badge: "/vite.svg",
+          tag: "timeslice-timer",
+          requireInteraction: true,
+          silent: !settings.playSoundOnEnd
+        });
 
-  useEffect(() => {
-    saveToLocalStorage('timeslice_totalHours', totalHours);
-  }, [totalHours]);
+        // Auto-close notification after 10 seconds
+        setTimeout(() => {
+          notification.close();
+        }, 10000);
 
-  useEffect(() => {
-    saveToLocalStorage('timeslice_totalMinutes', totalMinutes);
-  }, [totalMinutes]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_isTimerActive', isTimerActive);
-  }, [isTimerActive]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_isPaused', isPaused);
-  }, [isPaused]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_currentActivityIndex', currentActivityIndex);
-  }, [currentActivityIndex]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_lastTickTimestamp', lastTickTimestamp);
-  }, [lastTickTimestamp]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_favoriteColors', favoriteColors);
-  }, [favoriteColors]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_settings', settings);
-  }, [settings]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_durationType', durationType);
-  }, [durationType]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_endTime', endTime);
-  }, [endTime]);
-
-  useEffect(() => {
-    saveToLocalStorage('timeslice_bankedTime', bankedTime);
-  }, [bankedTime]);
+        // Handle notification click
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+      } catch (error) {
+        console.warn("Could not send notification:", error);
+      }
+    }
+  };
 
   const calculateTotalSessionMinutes = useCallback(() => {
     if (durationType === 'endTime') {
@@ -581,69 +442,110 @@ export default function App() {
   const totalSessionMinutes = calculateTotalSessionMinutes();
   const totalPercentage = activities.reduce((sum, activity) => sum + activity.percentage, 0);
 
-  // Update durations when percentages or total time changes, but preserve timeRemaining for active sessions
+  // This effect keeps durations in sync with percentages and total time
+  const activityPercentages = activities.map(a => a.percentage).join(',');
   useEffect(() => {
+    if (isTimerActive) return;
     const totalMins = calculateTotalSessionMinutes();
-    setActivities((prev) =>
-      prev.map((activity) => {
-        if (activity.percentage === 0) return activity; 
+    setActivities(prev => prev.map(activity => {
         const newDuration = Math.round((activity.percentage / 100) * totalMins);
-        
-        // Only reset timeRemaining if timer is not active or activity is completed
-        const shouldResetTimeRemaining = !isTimerActive || activity.isCompleted;
-        
         return {
-          ...activity,
-          duration: newDuration,
-          timeRemaining: shouldResetTimeRemaining ? newDuration * 60 : activity.timeRemaining,
+            ...activity,
+            duration: newDuration,
+            timeRemaining: newDuration * 60,
+            isCompleted: false,
         };
-      }),
-    );
-  }, [activities.map((a) => a.percentage).join(","), totalSessionMinutes, isTimerActive]);
+    }));
+  }, [activityPercentages, totalSessionMinutes, isTimerActive]);
 
-  // Main timer effect with timestamp tracking
+
+  // Effect 1: Handles the 1-second timer tick down
   useEffect(() => {
-    let interval: number;
+    if (!isTimerActive || isPaused) return;
 
-    if (isTimerActive && !isPaused) {
-      interval = window.setInterval(() => {
-        const now = Date.now();
-        setLastTickTimestamp(now);
-        
-        setActivities(prevActivities => {
-            const newActivities = prevActivities.map(a => ({...a}));
-            const currentActivity = newActivities[currentActivityIndex];
-
-            if (currentActivity && !currentActivity.isCompleted && currentActivity.timeRemaining > 0) {
-                currentActivity.timeRemaining -= 1;
-                return newActivities;
-            } else {
-                const nextIndex = newActivities.findIndex((act, index) => index > currentActivityIndex && !act.isCompleted);
-                if (nextIndex !== -1) {
-                    setCurrentActivityIndex(nextIndex);
-                } else {
-                    const firstUncompletedIndex = newActivities.findIndex(act => !act.isCompleted);
-                    if (firstUncompletedIndex !== -1) {
-                        setCurrentActivityIndex(firstUncompletedIndex);
-                    } else {
-                        setIsTimerActive(false);
-                    }
-                }
-                return prevActivities;
-            }
-        });
-      }, 1000);
-    }
+    const interval = window.setInterval(() => {
+      setActivities(prev => {
+        const current = prev[currentActivityIndex];
+        // Only tick if the activity exists and has time remaining
+        if (current && current.timeRemaining > 0) {
+          return prev.map((act, index) =>
+            index === currentActivityIndex
+              ? { ...act, timeRemaining: act.timeRemaining - 1 }
+              : act
+          );
+        }
+        return prev; // No change if timer is at 0 or activity is invalid
+      });
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [isTimerActive, isPaused, currentActivityIndex]);
+
+  // Effect 2: Handles the moment an activity finishes
+  useEffect(() => {
+    if (!isTimerActive) return;
+
+    const currentActivity = activities[currentActivityIndex];
+    if (currentActivity && currentActivity.timeRemaining === 0 && !currentActivity.isCompleted) {
+      // Mark as complete
+      setActivities(prev =>
+        prev.map((act) =>
+          act.id === currentActivity.id ? { ...act, isCompleted: true } : act
+        )
+      );
+
+      sendNotification(
+        "Activity Completed!",
+        `${currentActivity.name} has finished. Time for the next one!`
+      );
+      if (settings.playSoundOnEnd) {
+        playNotificationSound();
+      }
+    }
+  }, [activities, isTimerActive, currentActivityIndex, settings.playSoundOnEnd, settings.enableNotifications]);
+
+  // Effect 3: Moves to the next activity or ends the session
+  useEffect(() => {
+    if (!isTimerActive) return;
+    
+    const currentActivity = activities[currentActivityIndex];
+    if (currentActivity && currentActivity.isCompleted) {
+      const nextIndex = activities.findIndex(act => !act.isCompleted);
+      if (nextIndex !== -1) {
+        setCurrentActivityIndex(nextIndex);
+      } else {
+        // All activities are completed
+        setIsTimerActive(false);
+      }
+    }
+  }, [activities, isTimerActive, currentActivityIndex]);
   
   useEffect(() => {
-    if (prevIsTimerActive.current && !isTimerActive && bankedTime > 0) {
+    if (prevIsTimerActive.current && !isTimerActive) {
+      // Timer has stopped - check if session is complete
+      const allActivitiesCompleted = activities.every(activity => activity.isCompleted);
+      
+      if (allActivitiesCompleted && bankedTime === 0) {
+        // Complete session without banked time
+        sendNotification(
+          "Session Complete!",
+          "All activities have been completed. Great work!"
+        );
+        
+        if (settings.playSoundOnEnd) {
+          playNotificationSound();
+        }
+      } else if (bankedTime > 0) {
+        // Session ended with banked time
         setIsDistributeModalOpen(true);
+        sendNotification(
+          "Session Complete!",
+          `You have ${Math.round(bankedTime / 60)} minutes of banked time to distribute.`
+        );
+      }
     }
     prevIsTimerActive.current = isTimerActive;
-  }, [isTimerActive, bankedTime]);
+  }, [isTimerActive, bankedTime, activities, settings.enableNotifications, settings.playSoundOnEnd]);
 
   const formatTime = (seconds: number) => {
     if (seconds < 0) seconds = 0;
@@ -682,30 +584,45 @@ export default function App() {
     }
   };
 
-  const updateActivityPercentage = (id: string, newPercentage: number) => {
+  const updateAndScalePercentages = (id: string, newPercentage: number) => {
     setActivities(prev => {
         const activityToUpdate = prev.find(a => a.id === id);
         if (!activityToUpdate) return prev;
 
         const otherActivities = prev.filter(a => a.id !== id);
-        const otherTotal = otherActivities.reduce((sum, a) => sum + a.percentage, 0);
+        const otherTotalPercentage = otherActivities.reduce((sum, a) => sum + a.percentage, 0);
 
         const safeNewPercentage = Math.min(100, Math.max(0, newPercentage));
         
-        if (otherTotal === 0) {
-            return prev.map(a => (a.id === id ? { ...a, percentage: safeNewPercentage } : a));
+        if (otherActivities.length === 0 || otherTotalPercentage === 0) {
+            return prev.map(a => a.id === id ? { ...a, percentage: safeNewPercentage } : a);
         }
         
         const remainingPercentage = 100 - safeNewPercentage;
-        const scaleFactor = otherTotal > 0 ? remainingPercentage / otherTotal : 0;
+        const scaleFactor = remainingPercentage / otherTotalPercentage;
 
-        return prev.map(act => {
+        if (scaleFactor < 0) {
+            return prev.map(a => a.id === id ? { ...a, percentage: safeNewPercentage } : a);
+        }
+
+        const updatedActivities = prev.map(act => {
             if (act.id === id) {
                 return { ...act, percentage: safeNewPercentage };
             } else {
-                return { ...act, percentage: Math.max(0, act.percentage * scaleFactor) };
+                return { ...act, percentage: act.percentage * scaleFactor };
             }
         });
+
+        // Correct for rounding errors
+        const finalTotalPercentage = updatedActivities.reduce((sum, p) => sum + p.percentage, 0);
+        const diff = 100 - finalTotalPercentage;
+        if (Math.abs(diff) > 0.001) {
+            const targetIndex = updatedActivities.findIndex(a => a.id === id);
+            if (targetIndex !== -1) {
+                updatedActivities[targetIndex].percentage += diff;
+            }
+        }
+        return updatedActivities;
     });
   };
 
@@ -719,30 +636,26 @@ export default function App() {
 
   const startSession = () => {
     if (Math.abs(totalPercentage - 100) < 0.1) {
-      const now = Date.now();
       setIsTimerActive(true);
       setIsPaused(false);
-      setLastTickTimestamp(now);
-      setLastHiddenTimestamp(0); // Reset hidden timestamp when starting
       setCurrentActivityIndex(activities.findIndex(a => !a.isCompleted) ?? 0);
+      
+      // Send session start notification
+      sendNotification(
+        "Session Started!",
+        `Starting with ${activities[0]?.name}. Focus time begins now!`
+      );
     }
   };
 
   const pauseResumeTimer = () => {
-    const now = Date.now();
-    setLastTickTimestamp(now);
-    setLastHiddenTimestamp(0); // Reset hidden timestamp when pausing/resuming
-    setIsPaused(prev => !prev);
+      setIsPaused(prev => !prev);
   };
 
   const resetSession = useCallback(() => {
-    const now = Date.now();
     setIsTimerActive(false);
     setIsPaused(false);
     setBankedTime(0);
-    setLastTickTimestamp(now);
-    setLastHiddenTimestamp(0); // Reset hidden timestamp when resetting
-    
     const totalMins = calculateTotalSessionMinutes();
     setActivities((prev) =>
       prev.map((activity) => ({
@@ -757,7 +670,6 @@ export default function App() {
   const switchToActivity = (index: number) => {
     if (!activities[index].isCompleted) {
         setCurrentActivityIndex(index);
-        setLastTickTimestamp(Date.now());
     }
   };
 
@@ -776,7 +688,6 @@ export default function App() {
     }
     
     setActivities(updatedActivities);
-    setLastTickTimestamp(Date.now());
 
     const allCompleted = updatedActivities.every(a => a.isCompleted);
     if (allCompleted) {
@@ -811,8 +722,6 @@ export default function App() {
     setBankedTime(0);
     setIsDistributeModalOpen(false);
     setIsTimerActive(false);
-    setLastTickTimestamp(Date.now());
-    setLastHiddenTimestamp(0);
   };
 
   const handleCloseDistributeModal = () => {
@@ -841,14 +750,10 @@ export default function App() {
     }
   };
   
-  const handleBarDrag = useCallback((e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-    e.preventDefault(); // Prevent default touch behaviors like scrolling
-    
+  const handleBarDrag = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const bar = e.currentTarget;
     const rect = bar.getBoundingClientRect();
-    
-    // Get initial position from either mouse or touch event
-    const startX = "touches" in e ? e.touches[0].clientX : e.clientX;
+    const startX = e.clientX;
     const startPercentages = activities.map(a => a.percentage);
 
     let segmentIndex = -1;
@@ -856,7 +761,7 @@ export default function App() {
     for (let i = 0; i < activities.length - 1; i++) {
         cumulativePercentage += activities[i].percentage;
         const handlePosition = rect.left + (cumulativePercentage / 100) * rect.width;
-        if (Math.abs(startX - handlePosition) < 12) { // Increased touch target size
+        if (Math.abs(startX - handlePosition) < 8) {
             segmentIndex = i;
             break;
         }
@@ -864,12 +769,9 @@ export default function App() {
 
     if (segmentIndex === -1) return;
 
-    const handleMove = (moveEvent: MouseEvent | TouchEvent) => {
+    const handleMouseMove = (moveEvent: MouseEvent) => {
         moveEvent.preventDefault();
-        
-        // Get current position from either mouse or touch event
-        const currentX = "touches" in moveEvent ? moveEvent.touches[0].clientX : moveEvent.clientX;
-        const deltaX = currentX - startX;
+        const deltaX = moveEvent.clientX - startX;
         const deltaPercentage = (deltaX / rect.width) * 100;
 
         const newPercentages = [...startPercentages];
@@ -897,14 +799,9 @@ export default function App() {
         })));
     };
 
-    const handleEnd = () => {
-        // Remove both mouse and touch event listeners
-        document.removeEventListener('mousemove', handleMove);
-        document.removeEventListener('mouseup', handleEnd);
-        document.removeEventListener('touchmove', handleMove);
-        document.removeEventListener('touchend', handleEnd);
-        
-        // Round percentages and ensure they sum to 100
+    const handleMouseUp = () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
         setActivities(prev => {
             const roundedPercentages = prev.map(a => Math.round(a.percentage));
             const roundedTotal = roundedPercentages.reduce((sum, p) => sum + p, 0);
@@ -927,11 +824,8 @@ export default function App() {
         });
     };
 
-    // Add both mouse and touch event listeners
-    document.addEventListener('mousemove', handleMove, { passive: false });
-    document.addEventListener('mouseup', handleEnd);
-    document.addEventListener('touchmove', handleMove, { passive: false });
-    document.addEventListener('touchend', handleEnd);
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
   }, [activities]);
   
   const getTotalRemainingTime = () => {
@@ -955,6 +849,25 @@ export default function App() {
     }
 
     return completedPercentage + currentActivityProgressPercentage;
+  };
+
+  const handleNotificationToggle = async (checked: boolean) => {
+    if (checked) {
+      await requestNotificationPermission();
+      // Only update if permission was granted or already granted
+      if (Notification.permission === "granted") {
+        setSettings(prev => ({ ...prev, enableNotifications: true }));
+      }
+    } else {
+      setSettings(prev => ({ ...prev, enableNotifications: false }));
+    }
+  };
+
+  const testNotification = () => {
+    sendNotification("Test Notification", "This is a test notification from TimeSlice!");
+    if (settings.playSoundOnEnd) {
+      playNotificationSound();
+    }
   };
   
   const currentActivity = activities[currentActivityIndex];
@@ -1027,18 +940,18 @@ export default function App() {
                     return (
                         <div
                           key={activity.id}
-                          className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${
+                          className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border transition-colors ${
                             index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
-                          } ${activity.isCompleted ? 'bg-green-50' : ''}`}
-                          onClick={() => switchToActivity(index)}
+                          } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}`}
+                          onClick={() => !activity.isCompleted && switchToActivity(index)}
                         >
                           {settings.showActivityProgress && (
-                             <div className="absolute top-0 left-0 h-full opacity-20" style={{width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear'}}></div>
+                              <div className="absolute top-0 left-0 h-full opacity-20" style={{width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear'}}></div>
                           )}
                           <div className="flex items-center space-x-4 z-10">
                             <input type="checkbox" className="h-5 w-5 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
                             <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
-                            <span className={`font-medium ${activity.isCompleted ? 'line-through text-gray-500' : ''}`}>{activity.name}</span>
+                            <span className={`font-medium ${activity.isCompleted ? 'line-through' : ''}`}>{activity.name}</span>
                           </div>
                           <div className="text-sm text-gray-600 z-10">{activity.duration} min</div>
                         </div>
@@ -1060,7 +973,10 @@ export default function App() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-3xl font-bold">TimeSlice</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => setShowSettings(!showSettings)}>
+              <Button variant="outline" size="sm" onClick={() => {
+                console.log("showSettings before toggle:", showSettings);
+                setShowSettings(!showSettings);
+              }}>
                 <Icon name="settings" className="h-4 w-4 mr-2" />
                 Settings
               </Button>
@@ -1102,6 +1018,53 @@ export default function App() {
                         </div>
                     </div>
                   )}
+                  
+                  <Separator />
+                  
+                  <div className="space-y-4">
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <Icon name="bell" className="h-4 w-4" />
+                      Notification Settings
+                    </h3>
+                    
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label htmlFor="enable-notifications">Enable browser notifications</Label>
+                        <p className="text-xs text-gray-500">Get notified when activities complete</p>
+                      </div>
+                      <Switch 
+                        id="enable-notifications" 
+                        checked={settings.enableNotifications} 
+                        onCheckedChange={handleNotificationToggle} 
+                      />
+                    </div>
+                    
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label htmlFor="play-sound">Play sound on timer end</Label>
+                        <p className="text-xs text-gray-500">Audio alert when activities finish</p>
+                      </div>
+                      <Switch 
+                        id="play-sound" 
+                        checked={settings.playSoundOnEnd} 
+                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, playSoundOnEnd: checked }))} 
+                      />
+                    </div>
+                    
+                    {(settings.enableNotifications || settings.playSoundOnEnd) && (
+                      <div className="pt-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={testNotification}
+                          className="w-full"
+                        >
+                          <Icon name="volume2" className="h-4 w-4 mr-2" />
+                          Test Notification & Sound
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -1125,9 +1088,9 @@ export default function App() {
                   </div>
               ) : (
                   <div className="flex flex-wrap items-center gap-4">
-                     <div className="flex items-center space-x-2">
-                        <Label htmlFor="end-time">End Time:</Label>
-                        <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-32" />
+                       <div className="flex items-center space-x-2">
+                           <Label htmlFor="end-time">End Time:</Label>
+                           <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-32" />
                     </div>
                   </div>
               )}
@@ -1137,11 +1100,10 @@ export default function App() {
             <div className="space-y-4">
               <h2 className="text-xl font-semibold">Time Allocation</h2>
               <div 
-                className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex cursor-col-resize touch-none select-none"
+                className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex cursor-col-resize"
                 onMouseDown={handleBarDrag}
-                onTouchStart={handleBarDrag}
               >
-                {activities.map((activity) => (
+                  {activities.map((activity) => (
                     <div
                       key={activity.id}
                       className="h-full flex items-center justify-center text-white font-medium text-sm transition-all duration-200 pointer-events-none"
@@ -1153,7 +1115,7 @@ export default function App() {
                 {activities.slice(0, -1).map((_, index) => {
                   const position = activities.slice(0, index + 1).reduce((sum, a) => sum + a.percentage, 0);
                   return (
-                    <div key={index} className="absolute top-0 w-3 h-full bg-white/70 border-x border-gray-600/50 hover:bg-white transition-colors transform -translate-x-1/2 pointer-events-none" style={{ left: `${position}%` }} />
+                    <div key={index} className="absolute top-0 w-2 h-full bg-white/50 border-x border-gray-600/50 hover:bg-white transition-colors transform -translate-x-1/2 pointer-events-none" style={{ left: `${position}%` }} />
                   );
                 })}
               </div>
@@ -1168,17 +1130,46 @@ export default function App() {
               </div>
               <div className="space-y-3">
                 {activities.map((activity) => (
-                  <div key={activity.id} className="flex flex-wrap items-center gap-4 p-4 border rounded-lg">
-                    <button className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
-                    <Input value={activity.name} onChange={(e) => updateActivityName(activity.id, e.target.value)} className="flex-grow min-w-[150px]" placeholder="Activity name" />
-                    <div className="flex items-center space-x-2">
-                      <Input type="number" min="0" max="100" step="1" value={Math.round(activity.percentage)} onChange={(e) => updateActivityPercentage(activity.id, Number.parseFloat(e.target.value) || 0)} className="w-24" />
+                  <div key={activity.id} className="grid grid-cols-1 sm:grid-cols-12 items-center gap-x-4 gap-y-2 p-3 border rounded-lg">
+                    <button className="sm:col-span-1 w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
+                    
+                    <Input value={activity.name} onChange={(e) => updateActivityName(activity.id, e.target.value)} className="sm:col-span-5" placeholder="Activity name" />
+                    
+                    <div className="sm:col-span-2 flex items-center space-x-2">
+                      <Input 
+                          type="number" 
+                          min="0" max="100" step="1" 
+                          value={Math.round(activity.percentage)} 
+                          onChange={(e) => updateAndScalePercentages(activity.id, Number.parseFloat(e.target.value) || 0)} 
+                          className="w-full" 
+                      />
                       <span className="text-sm text-gray-600">%</span>
                     </div>
-                    <div className="text-sm text-gray-600 w-20 text-right">{activity.duration} min</div>
-                    <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1}>
-                      <Icon name="trash2" className="h-4 w-4" />
-                    </Button>
+
+                    <div className="sm:col-span-3 flex items-center space-x-2">
+                      <Input 
+                          type="number" 
+                          min="0" step="1" 
+                          value={activity.duration} 
+                          onChange={(e) => {
+                              const totalMins = calculateTotalSessionMinutes();
+                              if (totalMins > 0) {
+                                  const newDur = Number.parseInt(e.target.value) || 0;
+                                  const cappedDur = Math.min(newDur, totalMins);
+                                  const newPerc = (cappedDur / totalMins) * 100;
+                                  updateAndScalePercentages(activity.id, newPerc);
+                              }
+                          }}
+                          className="w-full" 
+                      />
+                      <span className="text-sm text-gray-600">min</span>
+                    </div>
+                    
+                    <div className="sm:col-span-1 flex justify-end">
+                        <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1}>
+                          <Icon name="trash2" className="h-4 w-4" />
+                        </Button>
+                    </div>
                   </div>
                 ))}
               </div>
