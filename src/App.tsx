@@ -29,6 +29,18 @@ const Icon = ({ name, className }) => {
         <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
       </>
     ),
+    lock: (
+      <>
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </>
+    ),
+    unlock: (
+      <>
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+        <path d="M7 11V7a5 5 0 0 1 5-5v0a5 5 0 0 1 5 5v4" />
+      </>
+    ),
   };
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -110,6 +122,7 @@ interface Activity {
   duration: number; // in minutes
   timeRemaining: number; // in seconds
   isCompleted: boolean;
+  isLocked: boolean;
 }
 
 interface TimerSettings {
@@ -121,6 +134,7 @@ interface TimerSettings {
   activityProgressType: 'fill' | 'drain';
   enableNotifications: boolean;
   playSoundOnEnd: boolean;
+  overtimeType: 'none' | 'postpone' | 'drain';
 }
 
 interface ColorPickerProps {
@@ -334,8 +348,8 @@ const DistributeTimeModal = ({ isOpen, onClose, bankedTime, onDistribute }) => {
 // --- Main Application Component ---
 export default function App() {
   const [activities, setActivities] = useState<Activity[]>([
-    { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false },
-    { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false },
+    { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
+    { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
   ]);
 
   const [totalHours, setTotalHours] = useState(2);
@@ -356,7 +370,8 @@ export default function App() {
     showActivityProgress: false, 
     activityProgressType: 'drain',
     enableNotifications: false,
-    playSoundOnEnd: false
+    playSoundOnEnd: false,
+    overtimeType: 'none',
   });
   const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
   const [endTime, setEndTime] = useState('23:30');
@@ -464,49 +479,60 @@ export default function App() {
     if (!isTimerActive || isPaused) return;
 
     const interval = window.setInterval(() => {
-      setActivities(prev => {
-        const current = prev[currentActivityIndex];
-        // Only tick if the activity exists and has time remaining
-        if (current && current.timeRemaining > 0) {
-          return prev.map((act, index) =>
-            index === currentActivityIndex
-              ? { ...act, timeRemaining: act.timeRemaining - 1 }
-              : act
-          );
-        }
-        return prev; // No change if timer is at 0 or activity is invalid
-      });
+        setActivities(prev => {
+            const newActivities = [...prev];
+            const current = newActivities[currentActivityIndex];
+
+            if (!current) return prev;
+
+            // Regular countdown
+            if (current.timeRemaining > 0) {
+                current.timeRemaining -= 1;
+                return newActivities;
+            }
+
+            // Time is up, check for overtime
+            if (settings.overtimeType === 'drain') {
+                current.timeRemaining -= 1; // Go into negative
+                
+                // Find donor with most time
+                let donorIndex = -1;
+                let maxTime = -1;
+                for (let i = 0; i < newActivities.length; i++) {
+                    const potentialDonor = newActivities[i];
+                    if (i !== currentActivityIndex && !potentialDonor.isLocked && !potentialDonor.isCompleted && potentialDonor.timeRemaining > maxTime) {
+                        maxTime = potentialDonor.timeRemaining;
+                        donorIndex = i;
+                    }
+                }
+
+                if (donorIndex !== -1) {
+                    newActivities[donorIndex].timeRemaining -= 1;
+                }
+                return newActivities;
+
+            } else if (settings.overtimeType === 'postpone') {
+                current.timeRemaining -= 1; // Go into negative
+                return newActivities;
+
+            } else { // 'none'
+                if (!current.isCompleted) {
+                    current.isCompleted = true;
+                    sendNotification("Activity Completed!", `${current.name} has finished.`);
+                    if (settings.playSoundOnEnd) playNotificationSound();
+                }
+            }
+
+            return newActivities;
+        });
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isTimerActive, isPaused, currentActivityIndex]);
+  }, [isTimerActive, isPaused, currentActivityIndex, settings.overtimeType, settings.playSoundOnEnd]);
 
-  // Effect 2: Handles the moment an activity finishes
+  // Effect 2: Moves to the next activity or ends the session (only when NOT in overtime mode)
   useEffect(() => {
-    if (!isTimerActive) return;
-
-    const currentActivity = activities[currentActivityIndex];
-    if (currentActivity && currentActivity.timeRemaining === 0 && !currentActivity.isCompleted) {
-      // Mark as complete
-      setActivities(prev =>
-        prev.map((act) =>
-          act.id === currentActivity.id ? { ...act, isCompleted: true } : act
-        )
-      );
-
-      sendNotification(
-        "Activity Completed!",
-        `${currentActivity.name} has finished. Time for the next one!`
-      );
-      if (settings.playSoundOnEnd) {
-        playNotificationSound();
-      }
-    }
-  }, [activities, isTimerActive, currentActivityIndex, settings.playSoundOnEnd, settings.enableNotifications]);
-
-  // Effect 3: Moves to the next activity or ends the session
-  useEffect(() => {
-    if (!isTimerActive) return;
+    if (!isTimerActive || settings.overtimeType !== 'none') return;
     
     const currentActivity = activities[currentActivityIndex];
     if (currentActivity && currentActivity.isCompleted) {
@@ -514,11 +540,10 @@ export default function App() {
       if (nextIndex !== -1) {
         setCurrentActivityIndex(nextIndex);
       } else {
-        // All activities are completed
         setIsTimerActive(false);
       }
     }
-  }, [activities, isTimerActive, currentActivityIndex]);
+  }, [activities, isTimerActive, currentActivityIndex, settings.overtimeType]);
   
   useEffect(() => {
     if (prevIsTimerActive.current && !isTimerActive) {
@@ -548,14 +573,21 @@ export default function App() {
   }, [isTimerActive, bankedTime, activities, settings.enableNotifications, settings.playSoundOnEnd]);
 
   const formatTime = (seconds: number) => {
-    if (seconds < 0) seconds = 0;
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    if (seconds >= 0) {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+        if (hours > 0) {
+          return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+        }
+        return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    } else {
+        // Overtime formatting
+        const positiveSeconds = Math.abs(seconds);
+        const minutes = Math.floor(positiveSeconds / 60);
+        const secs = positiveSeconds % 60;
+        return `+${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
     }
-    return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
   const getPredictedEndTime = () => {
@@ -574,6 +606,7 @@ export default function App() {
       duration: 0,
       timeRemaining: 0,
       isCompleted: false,
+      isLocked: false,
     };
     setActivities([...activities, newActivity]);
   };
@@ -584,46 +617,48 @@ export default function App() {
     }
   };
 
-  const updateAndScalePercentages = (id: string, newPercentage: number) => {
+  const updateAndScalePercentages = (idOfChangedActivity: string, newPercentage: number) => {
     setActivities(prev => {
-        const activityToUpdate = prev.find(a => a.id === id);
-        if (!activityToUpdate) return prev;
+        const lockedTotal = prev.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+        const maxAllowed = 100 - lockedTotal;
+        const safeNewPercentage = Math.min(newPercentage, maxAllowed);
 
-        const otherActivities = prev.filter(a => a.id !== id);
-        const otherTotalPercentage = otherActivities.reduce((sum, a) => sum + a.percentage, 0);
-
-        const safeNewPercentage = Math.min(100, Math.max(0, newPercentage));
+        const otherUnlockedActivities = prev.filter(a => !a.isLocked && a.id !== idOfChangedActivity);
+        const otherUnlockedTotal = otherUnlockedActivities.reduce((sum, a) => sum + a.percentage, 0);
         
-        if (otherActivities.length === 0 || otherTotalPercentage === 0) {
-            return prev.map(a => a.id === id ? { ...a, percentage: safeNewPercentage } : a);
-        }
-        
-        const remainingPercentage = 100 - safeNewPercentage;
-        const scaleFactor = remainingPercentage / otherTotalPercentage;
-
-        if (scaleFactor < 0) {
-            return prev.map(a => a.id === id ? { ...a, percentage: safeNewPercentage } : a);
-        }
+        const remainingForOthers = maxAllowed - safeNewPercentage;
+        const scaleFactor = otherUnlockedTotal > 0 ? remainingForOthers / otherUnlockedTotal : 0;
 
         const updatedActivities = prev.map(act => {
-            if (act.id === id) {
+            if (act.id === idOfChangedActivity) {
                 return { ...act, percentage: safeNewPercentage };
-            } else {
-                return { ...act, percentage: act.percentage * scaleFactor };
             }
+            if (act.isLocked) {
+                return act;
+            }
+            // It's another unlocked activity, scale it
+            return { ...act, percentage: act.percentage * scaleFactor };
         });
 
-        // Correct for rounding errors
-        const finalTotalPercentage = updatedActivities.reduce((sum, p) => sum + p.percentage, 0);
-        const diff = 100 - finalTotalPercentage;
+        // Correct for rounding errors to ensure total is exactly 100
+        const finalTotal = updatedActivities.reduce((sum, p) => sum + p.percentage, 0);
+        const diff = 100 - finalTotal;
         if (Math.abs(diff) > 0.001) {
-            const targetIndex = updatedActivities.findIndex(a => a.id === id);
-            if (targetIndex !== -1) {
-                updatedActivities[targetIndex].percentage += diff;
+            const firstUnlocked = updatedActivities.find(a => !a.isLocked && a.id !== idOfChangedActivity);
+            if (firstUnlocked) {
+                firstUnlocked.percentage += diff;
+            } else {
+                 const changedActivity = updatedActivities.find(a => a.id === idOfChangedActivity);
+                 if(changedActivity) changedActivity.percentage += diff;
             }
         }
+
         return updatedActivities;
     });
+  };
+
+  const toggleLockActivity = (id: string) => {
+    setActivities(prev => prev.map(act => act.id === id ? { ...act, isLocked: !act.isLocked } : act));
   };
 
   const updateActivityName = (id: string, name: string) => {
@@ -714,6 +749,7 @@ export default function App() {
         duration: Math.round(bankedTime / 60),
         timeRemaining: bankedTime,
         isCompleted: false,
+        isLocked: false,
     };
     const totalMins = newActivity.duration;
     setTotalHours(Math.floor(totalMins / 60));
@@ -753,15 +789,13 @@ export default function App() {
   const handleBarDrag = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const bar = e.currentTarget;
     const rect = bar.getBoundingClientRect();
-    const startX = e.clientX;
-    const startPercentages = activities.map(a => a.percentage);
-
+    
     let segmentIndex = -1;
     let cumulativePercentage = 0;
     for (let i = 0; i < activities.length - 1; i++) {
         cumulativePercentage += activities[i].percentage;
         const handlePosition = rect.left + (cumulativePercentage / 100) * rect.width;
-        if (Math.abs(startX - handlePosition) < 8) {
+        if (Math.abs(e.clientX - handlePosition) < 8) {
             segmentIndex = i;
             break;
         }
@@ -769,59 +803,47 @@ export default function App() {
 
     if (segmentIndex === -1) return;
 
+    const leftActivity = activities[segmentIndex];
+    const rightActivity = activities[segmentIndex + 1];
+
+    if (leftActivity.isLocked && rightActivity.isLocked) {
+        return; 
+    }
+
     const handleMouseMove = (moveEvent: MouseEvent) => {
         moveEvent.preventDefault();
-        const deltaX = moveEvent.clientX - startX;
-        const deltaPercentage = (deltaX / rect.width) * 100;
-
-        const newPercentages = [...startPercentages];
-        const originalLeft = startPercentages[segmentIndex];
-        const originalRight = startPercentages[segmentIndex + 1];
-
-        let newLeft = originalLeft + deltaPercentage;
-        let newRight = originalRight - deltaPercentage;
         
-        if (newLeft < 0) {
-            newRight += newLeft;
-            newLeft = 0;
-        }
-        if (newRight < 0) {
-            newLeft += newRight;
-            newRight = 0;
-        }
+        const mousePercentage = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+        const prefixPercentage = activities.slice(0, segmentIndex).reduce((sum, act) => sum + act.percentage, 0);
 
-        newPercentages[segmentIndex] = newLeft;
-        newPercentages[segmentIndex + 1] = newRight;
-        
-        setActivities(prev => prev.map((activity, index) => ({
-            ...activity,
-            percentage: newPercentages[index]
-        })));
+        if (!leftActivity.isLocked && !rightActivity.isLocked) {
+            const newLeftPercentage = mousePercentage - prefixPercentage;
+            const combinedOriginal = leftActivity.percentage + rightActivity.percentage;
+            const newRightPercentage = combinedOriginal - newLeftPercentage;
+
+            if (newLeftPercentage >= 0 && newRightPercentage >= 0) {
+                setActivities(prev => prev.map(act => {
+                    if (act.id === leftActivity.id) return { ...act, percentage: newLeftPercentage };
+                    if (act.id === rightActivity.id) return { ...act, percentage: newRightPercentage };
+                    return act;
+                }));
+            }
+        } else if (!leftActivity.isLocked) {
+            const newLeftPercentage = mousePercentage - prefixPercentage;
+            if (newLeftPercentage >= 0) {
+                updateAndScalePercentages(leftActivity.id, newLeftPercentage);
+            }
+        } else { // !rightActivity.isLocked
+            const newRightPercentage = prefixPercentage + leftActivity.percentage + rightActivity.percentage - mousePercentage;
+             if (newRightPercentage >= 0) {
+                updateAndScalePercentages(rightActivity.id, newRightPercentage);
+            }
+        }
     };
 
     const handleMouseUp = () => {
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
-        setActivities(prev => {
-            const roundedPercentages = prev.map(a => Math.round(a.percentage));
-            const roundedTotal = roundedPercentages.reduce((sum, p) => sum + p, 0);
-            const diff = 100 - roundedTotal;
-
-            if (diff !== 0) {
-                let maxIndex = 0;
-                roundedPercentages.forEach((p, i) => {
-                    if (p > roundedPercentages[maxIndex]) {
-                        maxIndex = i;
-                    }
-                });
-                roundedPercentages[maxIndex] += diff;
-            }
-            
-            return prev.map((activity, index) => ({
-                ...activity,
-                percentage: roundedPercentages[index]
-            }));
-        });
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -829,26 +851,22 @@ export default function App() {
   }, [activities]);
   
   const getTotalRemainingTime = () => {
-    return activities.reduce((sum, activity) => sum + activity.timeRemaining, 0) + bankedTime;
+    return activities.reduce((sum, activity) => {
+        if (activity.isCompleted) return sum;
+        return sum + Math.max(0, activity.timeRemaining);
+    }, 0) + bankedTime;
   };
 
   const getOverallProgress = () => {
-    const completedPercentage = activities
-        .filter(act => act.isCompleted)
-        .reduce((sum, act) => sum + act.percentage, 0);
+    const totalDurationSeconds = activities.reduce((sum, act) => sum + (act.duration * 60), 0);
+    if (totalDurationSeconds === 0) return 0;
+    
+    const totalElapsedSeconds = activities.reduce((sum, act) => {
+        const elapsed = (act.duration * 60) - Math.max(0, act.timeRemaining);
+        return sum + elapsed;
+    }, 0);
 
-    let currentActivityProgressPercentage = 0;
-    const currentActivity = activities[currentActivityIndex];
-    if (currentActivity && !currentActivity.isCompleted && isTimerActive) {
-        const durationSeconds = currentActivity.duration * 60;
-        if (durationSeconds > 0) {
-            const elapsedSecondsInCurrent = durationSeconds - currentActivity.timeRemaining;
-            const progressRatio = elapsedSecondsInCurrent / durationSeconds;
-            currentActivityProgressPercentage = currentActivity.percentage * progressRatio;
-        }
-    }
-
-    return completedPercentage + currentActivityProgressPercentage;
+    return (totalElapsedSeconds / totalDurationSeconds) * 100;
   };
 
   const handleNotificationToggle = async (checked: boolean) => {
@@ -934,7 +952,7 @@ export default function App() {
                 <h3 className="font-semibold">Activities</h3>
                 <div className="space-y-2">
                   {activities.map((activity, index) => {
-                    const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - activity.timeRemaining) / (activity.duration * 60)) * 100 : 0;
+                    const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - Math.max(0, activity.timeRemaining)) / (activity.duration * 60)) * 100 : 0;
                     const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
                     
                     return (
@@ -953,7 +971,7 @@ export default function App() {
                             <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
                             <span className={`font-medium ${activity.isCompleted ? 'line-through' : ''}`}>{activity.name}</span>
                           </div>
-                          <div className="text-sm text-gray-600 z-10">{activity.duration} min</div>
+                          <div className="text-sm text-gray-600 z-10">{formatTime(activity.timeRemaining)}</div>
                         </div>
                     );
                   })}
@@ -989,6 +1007,15 @@ export default function App() {
                   <CardTitle className="text-lg">Timer Settings</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Overtime Behavior</Label>
+                    <div className="flex items-center gap-2">
+                        <Button size="sm" variant={settings.overtimeType === 'none' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'none'}))}>Off</Button>
+                        <Button size="sm" variant={settings.overtimeType === 'postpone' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'postpone'}))}>Postpone</Button>
+                        <Button size="sm" variant={settings.overtimeType === 'drain' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'drain'}))}>Drain</Button>
+                    </div>
+                  </div>
+                  <Separator />
                   <div className="flex items-center justify-between">
                     <Label htmlFor="show-progress">Show main progress bar</Label>
                     <Switch id="show-progress" checked={settings.showMainProgress} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showMainProgress: checked }))} />
@@ -1100,7 +1127,7 @@ export default function App() {
             <div className="space-y-4">
               <h2 className="text-xl font-semibold">Time Allocation</h2>
               <div 
-                className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex cursor-col-resize"
+                className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex"
                 onMouseDown={handleBarDrag}
               >
                   {activities.map((activity) => (
@@ -1114,8 +1141,17 @@ export default function App() {
                   ))}
                 {activities.slice(0, -1).map((_, index) => {
                   const position = activities.slice(0, index + 1).reduce((sum, a) => sum + a.percentage, 0);
+                  const isDividerLocked = activities[index].isLocked && (activities[index + 1] && activities[index + 1].isLocked);
                   return (
-                    <div key={index} className="absolute top-0 w-2 h-full bg-white/50 border-x border-gray-600/50 hover:bg-white transition-colors transform -translate-x-1/2 pointer-events-none" style={{ left: `${position}%` }} />
+                    <div 
+                        key={index} 
+                        className={`absolute top-0 w-2 h-full transform -translate-x-1/2  
+                            ${isDividerLocked 
+                                ? 'bg-slate-600/75 cursor-not-allowed' 
+                                : 'bg-white/50 border-x border-slate-400/50 cursor-col-resize'
+                            }`}
+                        style={{ left: `${position}%` }} 
+                    />
                   );
                 })}
               </div>
@@ -1133,7 +1169,7 @@ export default function App() {
                   <div key={activity.id} className="grid grid-cols-1 sm:grid-cols-12 items-center gap-x-4 gap-y-2 p-3 border rounded-lg">
                     <button className="sm:col-span-1 w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
                     
-                    <Input value={activity.name} onChange={(e) => updateActivityName(activity.id, e.target.value)} className="sm:col-span-5" placeholder="Activity name" />
+                    <Input value={activity.name} onChange={(e) => updateActivityName(activity.id, e.target.value)} className="sm:col-span-4" placeholder="Activity name" />
                     
                     <div className="sm:col-span-2 flex items-center space-x-2">
                       <Input 
@@ -1141,12 +1177,13 @@ export default function App() {
                           min="0" max="100" step="1" 
                           value={Math.round(activity.percentage)} 
                           onChange={(e) => updateAndScalePercentages(activity.id, Number.parseFloat(e.target.value) || 0)} 
-                          className="w-full" 
+                          className="w-full"
+                          disabled={activity.isLocked}
                       />
                       <span className="text-sm text-gray-600">%</span>
                     </div>
 
-                    <div className="sm:col-span-3 flex items-center space-x-2">
+                    <div className="sm:col-span-2 flex items-center space-x-2">
                       <Input 
                           type="number" 
                           min="0" step="1" 
@@ -1160,11 +1197,18 @@ export default function App() {
                                   updateAndScalePercentages(activity.id, newPerc);
                               }
                           }}
-                          className="w-full" 
+                          className="w-full"
+                          disabled={activity.isLocked}
                       />
                       <span className="text-sm text-gray-600">min</span>
                     </div>
                     
+                    <div className="sm:col-span-1 flex justify-center">
+                        <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)}>
+                          <Icon name={activity.isLocked ? 'lock' : 'unlock'} className="h-4 w-4" />
+                        </Button>
+                    </div>
+
                     <div className="sm:col-span-1 flex justify-end">
                         <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1}>
                           <Icon name="trash2" className="h-4 w-4" />
