@@ -377,7 +377,9 @@ export default function App() {
   const [endTime, setEndTime] = useState('23:30');
   const [bankedTime, setBankedTime] = useState(0);
   const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
-  const prevIsTimerActive = useRef(false);
+  
+  const lastTickTimestampRef = useRef<number>(0);
+  const lastDrainedIndex = useRef(-1);
 
   // Request notification permission
   const requestNotificationPermission = async () => {
@@ -473,105 +475,84 @@ export default function App() {
     }));
   }, [activityPercentages, totalSessionMinutes, isTimerActive]);
 
+  const handleTimerTick = useCallback(() => {
+    setActivities(prev => {
+        const now = Date.now();
+        const elapsedSeconds = Math.round((now - lastTickTimestampRef.current) / 1000);
+        lastTickTimestampRef.current = now;
 
-  // Effect 1: Handles the 1-second timer tick down
-  useEffect(() => {
-    if (!isTimerActive || isPaused) return;
+        if (elapsedSeconds <= 0) return prev;
 
-    const interval = window.setInterval(() => {
-        setActivities(prev => {
-            const newActivities = [...prev];
+        let newActivities = [...prev];
+        let secondsToProcess = elapsedSeconds;
+
+        while (secondsToProcess > 0) {
             const current = newActivities[currentActivityIndex];
+            if (!current) break;
 
-            if (!current) return prev;
-
-            // Regular countdown
             if (current.timeRemaining > 0) {
-                current.timeRemaining -= 1;
-                return newActivities;
+                const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
+                current.timeRemaining -= timeToTake;
+                secondsToProcess -= timeToTake;
             }
 
-            // Time is up, check for overtime
-            if (settings.overtimeType === 'drain') {
-                current.timeRemaining -= 1; // Go into negative
-                
-                // Find donor with most time
-                let donorIndex = -1;
-                let maxTime = -1;
-                for (let i = 0; i < newActivities.length; i++) {
-                    const potentialDonor = newActivities[i];
-                    if (i !== currentActivityIndex && !potentialDonor.isLocked && !potentialDonor.isCompleted && potentialDonor.timeRemaining > maxTime) {
-                        maxTime = potentialDonor.timeRemaining;
-                        donorIndex = i;
+            if (current.timeRemaining <= 0) {
+                if (settings.overtimeType === 'drain') {
+                    const donors = newActivities.map((act, index) => ({...act, originalIndex: index}))
+                        .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
+                    
+                    if (donors.length > 0) {
+                        const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
+                        const donorToDrain = donors[donorIndex];
+                        newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
                     }
-                }
+                    current.timeRemaining -= 1;
+                    secondsToProcess -= 1;
 
-                if (donorIndex !== -1) {
-                    newActivities[donorIndex].timeRemaining -= 1;
-                }
-                return newActivities;
-
-            } else if (settings.overtimeType === 'postpone') {
-                current.timeRemaining -= 1; // Go into negative
-                return newActivities;
-
-            } else { // 'none'
-                if (!current.isCompleted) {
-                    current.isCompleted = true;
-                    sendNotification("Activity Completed!", `${current.name} has finished.`);
-                    if (settings.playSoundOnEnd) playNotificationSound();
+                } else if (settings.overtimeType === 'postpone') {
+                    current.timeRemaining -= secondsToProcess;
+                    secondsToProcess = 0;
+                } else { // 'none'
+                    if (!current.isCompleted) {
+                        current.isCompleted = true;
+                        sendNotification("Activity Completed!", `${current.name} has finished.`);
+                        if (settings.playSoundOnEnd) playNotificationSound();
+                        
+                        const nextIndex = newActivities.findIndex(act => !act.isCompleted);
+                        if (nextIndex !== -1) {
+                            setCurrentActivityIndex(nextIndex);
+                        } else {
+                            setIsTimerActive(false);
+                        }
+                    }
+                    secondsToProcess = 0; // Stop processing after completion
                 }
             }
-
-            return newActivities;
-        });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isTimerActive, isPaused, currentActivityIndex, settings.overtimeType, settings.playSoundOnEnd]);
-
-  // Effect 2: Moves to the next activity or ends the session (only when NOT in overtime mode)
-  useEffect(() => {
-    if (!isTimerActive || settings.overtimeType !== 'none') return;
-    
-    const currentActivity = activities[currentActivityIndex];
-    if (currentActivity && currentActivity.isCompleted) {
-      const nextIndex = activities.findIndex(act => !act.isCompleted);
-      if (nextIndex !== -1) {
-        setCurrentActivityIndex(nextIndex);
-      } else {
-        setIsTimerActive(false);
-      }
-    }
-  }, [activities, isTimerActive, currentActivityIndex, settings.overtimeType]);
-  
-  useEffect(() => {
-    if (prevIsTimerActive.current && !isTimerActive) {
-      // Timer has stopped - check if session is complete
-      const allActivitiesCompleted = activities.every(activity => activity.isCompleted);
-      
-      if (allActivitiesCompleted && bankedTime === 0) {
-        // Complete session without banked time
-        sendNotification(
-          "Session Complete!",
-          "All activities have been completed. Great work!"
-        );
-        
-        if (settings.playSoundOnEnd) {
-          playNotificationSound();
         }
-      } else if (bankedTime > 0) {
-        // Session ended with banked time
-        setIsDistributeModalOpen(true);
-        sendNotification(
-          "Session Complete!",
-          `You have ${Math.round(bankedTime / 60)} minutes of banked time to distribute.`
-        );
-      }
-    }
-    prevIsTimerActive.current = isTimerActive;
-  }, [isTimerActive, bankedTime, activities, settings.enableNotifications, settings.playSoundOnEnd]);
+        return newActivities;
+    });
+  }, [currentActivityIndex, settings.overtimeType, settings.playSoundOnEnd]);
 
+  // Main timer loop
+  useEffect(() => {
+    if (isTimerActive && !isPaused) {
+        lastTickTimestampRef.current = Date.now();
+        const interval = setInterval(handleTimerTick, 1000);
+        return () => clearInterval(interval);
+    }
+  }, [isTimerActive, isPaused, handleTimerTick]);
+
+  // Handle returning to the tab
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible' && isTimerActive && !isPaused) {
+            handleTimerTick();
+        }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isTimerActive, isPaused, handleTimerTick]);
+  
   const formatTime = (seconds: number) => {
     if (seconds >= 0) {
         const hours = Math.floor(seconds / 3600);
