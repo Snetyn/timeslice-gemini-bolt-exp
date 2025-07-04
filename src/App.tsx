@@ -384,6 +384,7 @@ export default function App() {
     vibrateOnEnd: false,
     keepScreenAwake: false,
     overtimeType: 'none',
+    distributeTimeEqually: false,
   });
   const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
   const [endTime, setEndTime] = useState('23:30');
@@ -644,13 +645,25 @@ export default function App() {
       isCompleted: false,
       isLocked: false,
     };
-    setActivities([...activities, newActivity]);
+    setActivities(prev => [...prev, newActivity]);
   };
 
   const removeActivity = (id: string) => {
     if (activities.length > 1) {
       setActivities(activities.filter((activity) => activity.id !== id));
     }
+  };
+
+  const handleDistributeEqually = () => {
+    const lockedTotal = activities.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+    const unlockedActivities = activities.filter(a => !a.isLocked);
+    const remainingPercentage = 100 - lockedTotal;
+    const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
+    
+    setActivities(prev => prev.map(act => {
+        if (act.isLocked) return act;
+        return { ...act, percentage: equalPercentage };
+    }));
   };
 
   const updateAndScalePercentages = (idOfChangedActivity: string, newPercentage: number) => {
@@ -1054,6 +1067,10 @@ export default function App() {
                   <CardTitle className="text-lg">Timer Settings</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="distribute-equally">Distribute Time Equally</Label>
+                    <Button size="sm" variant="outline" onClick={handleDistributeEqually}>Distribute</Button>
+                  </div>
                   <div className="space-y-2">
                     <Label>Overtime Behavior</Label>
                     <div className="flex items-center gap-2">
@@ -1231,9 +1248,12 @@ export default function App() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold">Activities</h2>
-                <Badge variant={Math.abs(totalPercentage - 100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
-                  Total: {Math.round(totalPercentage)}%
-                </Badge>
+                <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={handleDistributeEqually}>Distribute</Button>
+                    <Badge variant={Math.abs(totalPercentage - 100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
+                      Total: {Math.round(totalPercentage)}%
+                    </Badge>
+                </div>
               </div>
               <div className="space-y-3">
                 {activities.map((activity) => (
