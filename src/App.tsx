@@ -135,6 +135,7 @@ interface TimerSettings {
   enableNotifications: boolean;
   playSoundOnEnd: boolean;
   vibrateOnEnd: boolean;
+  keepScreenAwake: boolean;
   overtimeType: 'none' | 'postpone' | 'drain';
 }
 
@@ -373,6 +374,7 @@ export default function App() {
     enableNotifications: false,
     playSoundOnEnd: false,
     vibrateOnEnd: false,
+    keepScreenAwake: false,
     overtimeType: 'none',
   });
   const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
@@ -383,6 +385,7 @@ export default function App() {
   const lastTickTimestampRef = useRef<number>(0);
   const lastDrainedIndex = useRef(-1);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const wakeLockRef = useRef<any>(null);
 
   // Request notification permission
   const requestNotificationPermission = async () => {
@@ -565,6 +568,38 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isTimerActive, isPaused, handleTimerTick]);
   
+  // Screen Wake Lock
+  useEffect(() => {
+    const acquireWakeLock = async () => {
+        if ('wakeLock' in navigator && settings.keepScreenAwake) {
+            try {
+                wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+                console.log('Screen Wake Lock is active.');
+            } catch (err: any) {
+                console.error(`${err.name}, ${err.message}`);
+            }
+        }
+    };
+
+    const releaseWakeLock = () => {
+        if (wakeLockRef.current) {
+            wakeLockRef.current.release();
+            wakeLockRef.current = null;
+            console.log('Screen Wake Lock released.');
+        }
+    };
+
+    if (isTimerActive && !isPaused) {
+        acquireWakeLock();
+    } else {
+        releaseWakeLock();
+    }
+
+    return () => {
+        releaseWakeLock();
+    };
+  }, [isTimerActive, isPaused, settings.keepScreenAwake]);
+
   const formatTime = (seconds: number) => {
     if (seconds >= 0) {
         const hours = Math.floor(seconds / 3600);
@@ -1091,6 +1126,18 @@ export default function App() {
                         id="vibrate-on-end" 
                         checked={settings.vibrateOnEnd} 
                         onCheckedChange={(checked) => setSettings(prev => ({ ...prev, vibrateOnEnd: checked }))} 
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label htmlFor="keep-screen-awake">Keep screen awake</Label>
+                        <p className="text-xs text-gray-500">Prevent screen from sleeping during session</p>
+                      </div>
+                      <Switch 
+                        id="keep-screen-awake" 
+                        checked={settings.keepScreenAwake} 
+                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, keepScreenAwake: checked }))} 
                       />
                     </div>
                     
