@@ -5,6 +5,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 const Icon = ({ name, className }) => {
   const icons = {
     plus: <path d="M5 12h14m-7-7v14" />,
+    plusCircle: <><circle cx="12" cy="12" r="10" /><path d="M12 8v8m-4-4h8" /></>,
     trash2: <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 8v-4m4 4v-4" />,
     play: <path d="m5 3 14 9-14 9V3z" />,
     pause: <path d="M6 4h4v16H6zM14 4h4v16h-4z" />,
@@ -39,6 +40,16 @@ const Icon = ({ name, className }) => {
       <>
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
         <path d="M7 11V7a5 5 0 0 1 5-5v0a5 5 0 0 1 5 5v4" />
+      </>
+    ),
+    dice: (
+      <>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+        <path d="M16 8h.01" />
+        <path d="M12 12h.01" />
+        <path d="M8 16h.01" />
+        <path d="M8 8h.01" />
+        <path d="M16 16h.01" />
       </>
     ),
   };
@@ -298,47 +309,44 @@ const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, 
   );
 };
 
-const DistributeTimeModal = ({ isOpen, onClose, bankedTime, onDistribute }) => {
-    const [newActivityName, setNewActivityName] = useState("Banked Time Activity");
+const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) => {
+    const [minutes, setMinutes] = useState(0);
+    const [seconds, setSeconds] = useState(0);
 
     if (!isOpen) return null;
 
-    const formatTime = (seconds: number) => {
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const secs = seconds % 60;
-        if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
-        if (minutes > 0) return `${minutes}m ${secs}s`;
-        return `${secs}s`;
-    };
-
-    const handleDistribute = () => {
-        if (newActivityName.trim()) {
-            onDistribute(newActivityName.trim());
+    const handleBorrow = () => {
+        const totalSeconds = minutes * 60 + seconds;
+        if (totalSeconds > 0 && totalSeconds <= maxTime) {
+            onBorrow(totalSeconds);
         }
     };
+    
+    const maxMinutes = Math.floor(maxTime / 60);
+    const maxSeconds = maxTime % 60;
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <Card className="w-full max-w-md">
+            <Card className="w-full max-w-sm">
                 <CardHeader>
-                    <CardTitle className="text-lg">Distribute Banked Time</CardTitle>
+                    <CardTitle>Borrow from Vault</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <p>You have <span className="font-bold text-green-600">{formatTime(bankedTime)}</span> of banked time.</p>
-                    <p>Create a new activity with this time.</p>
-                    <div className="space-y-2">
-                        <Label htmlFor="new-activity-name">New Activity Name</Label>
-                        <Input
-                            id="new-activity-name"
-                            value={newActivityName}
-                            onChange={(e) => setNewActivityName(e.target.value)}
-                            placeholder="e.g., Review, Extra Break"
-                        />
+                    <p>Add time to <span className="font-bold">{activityName}</span>.</p>
+                    <p>Vault has: <span className="font-semibold">{maxMinutes}m {maxSeconds}s</span></p>
+                    <div className="flex items-center gap-4">
+                        <div className="space-y-1">
+                            <Label htmlFor="borrow-minutes">Minutes</Label>
+                            <Input id="borrow-minutes" type="number" min="0" max={maxMinutes} value={minutes} onChange={e => setMinutes(Number(e.target.value))} />
+                        </div>
+                        <div className="space-y-1">
+                            <Label htmlFor="borrow-seconds">Seconds</Label>
+                            <Input id="borrow-seconds" type="number" min="0" max="59" value={seconds} onChange={e => setSeconds(Number(e.target.value))} />
+                        </div>
                     </div>
                     <div className="flex justify-end space-x-2">
                         <Button variant="outline" onClick={onClose}>Cancel</Button>
-                        <Button onClick={handleDistribute}>Create Activity</Button>
+                        <Button onClick={handleBorrow}>Borrow</Button>
                     </div>
                 </CardContent>
             </Card>
@@ -379,8 +387,8 @@ export default function App() {
   });
   const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
   const [endTime, setEndTime] = useState('23:30');
-  const [bankedTime, setBankedTime] = useState(0);
-  const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
+  const [vaultTime, setVaultTime] = useState(0);
+  const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
   
   const lastTickTimestampRef = useRef<number>(0);
   const lastDrainedIndex = useRef(-1);
@@ -726,7 +734,7 @@ export default function App() {
   const resetSession = useCallback(() => {
     setIsTimerActive(false);
     setIsPaused(false);
-    setBankedTime(0);
+    setVaultTime(0);
     const totalMins = calculateTotalSessionMinutes();
     setActivities((prev) =>
       prev.map((activity) => ({
@@ -744,18 +752,32 @@ export default function App() {
     }
   };
 
+  const selectRandomActivity = useCallback(() => {
+    const availableIndices = activities.reduce((acc: number[], activity, index) => {
+      if (!activity.isCompleted && index !== currentActivityIndex) {
+        acc.push(index);
+      }
+      return acc;
+    }, []);
+  
+    if (availableIndices.length > 0) {
+      const randomIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
+      setCurrentActivityIndex(randomIndex);
+    }
+  }, [activities, currentActivityIndex]);
+
   const handleCompleteActivity = (activityId: string) => {
-    let timeToBank = 0;
+    let timeToVault = 0;
     const updatedActivities = activities.map(act => {
         if (act.id === activityId && !act.isCompleted) {
-            timeToBank = act.timeRemaining;
+            timeToVault = act.timeRemaining;
             return { ...act, timeRemaining: 0, isCompleted: true };
         }
         return act;
     });
 
-    if (timeToBank > 0) {
-        setBankedTime(prev => prev + timeToBank);
+    if (timeToVault > 0) {
+        setVaultTime(prev => prev + timeToVault);
     }
     
     setActivities(updatedActivities);
@@ -776,31 +798,16 @@ export default function App() {
     }
   };
 
-  const handleDistributeTime = (newActivityName: string) => {
-    const newActivity: Activity = {
-        id: Date.now().toString(),
-        name: newActivityName,
-        percentage: 100,
-        color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`,
-        duration: Math.round(bankedTime / 60),
-        timeRemaining: bankedTime,
-        isCompleted: false,
-        isLocked: false,
-    };
-    const totalMins = newActivity.duration;
-    setTotalHours(Math.floor(totalMins / 60));
-    setTotalMinutes(totalMins % 60);
-    setActivities([newActivity]);
-    setBankedTime(0);
-    setIsDistributeModalOpen(false);
-    setIsTimerActive(false);
+  const handleBorrowTime = (amountInSeconds: number) => {
+    setVaultTime(prev => prev - amountInSeconds);
+    setActivities(prev => prev.map(act => {
+        if (act.id === borrowModalState.activityId) {
+            return { ...act, timeRemaining: act.timeRemaining + amountInSeconds };
+        }
+        return act;
+    }));
+    setBorrowModalState({ isOpen: false, activityId: '' });
   };
-
-  const handleCloseDistributeModal = () => {
-    setIsDistributeModalOpen(false);
-    setBankedTime(0);
-    resetSession();
-  }
 
   const openColorPicker = (activityId: string, currentColor: string) => {
     setColorPickerState({ isOpen: true, activityId, currentColor });
@@ -890,7 +897,7 @@ export default function App() {
     return activities.reduce((sum, activity) => {
         if (activity.isCompleted) return sum;
         return sum + Math.max(0, activity.timeRemaining);
-    }, 0) + bankedTime;
+    }, 0) + vaultTime;
   };
 
   const getOverallProgress = () => {
@@ -929,103 +936,104 @@ export default function App() {
   
   const currentActivity = activities[currentActivityIndex];
 
-  if (isTimerActive) {
-    return (
-      <div className="min-h-screen bg-gray-50 p-4 font-sans">
-        <div className="max-w-2xl mx-auto">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-2xl">TimeSlice Timer</CardTitle>
-                <div className="flex space-x-2">
-                  <Button variant="outline" size="sm" onClick={pauseResumeTimer} className="w-24">
-                    <Icon name={isPaused ? "play" : "pause"} className="h-4 w-4 mr-2" />
-                    {isPaused ? "Resume" : "Pause"}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={resetSession} className="w-24">
-                    <Icon name="rotateCcw" className="h-4 w-4 mr-2" />
-                    Reset
-                  </Button>
-                </div>
+  const mainContent = isTimerActive ? (
+    <div className="max-w-2xl mx-auto">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-2xl">TimeSlice Timer</CardTitle>
+            <div className="flex space-x-2">
+              <Button variant="outline" size="sm" onClick={pauseResumeTimer} className="w-24">
+                <Icon name={isPaused ? "play" : "pause"} className="h-4 w-4 mr-2" />
+                {isPaused ? "Resume" : "Pause"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={resetSession} className="w-24">
+                <Icon name="rotateCcw" className="h-4 w-4 mr-2" />
+                Reset
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={selectRandomActivity}
+                disabled={activities.filter(a => !a.isCompleted).length <= 1}
+                className="w-24"
+              >
+                <Icon name="dice" className="h-4 w-4 mr-2" />
+                Random
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {settings.showMainProgress && (
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm text-gray-600">
+                <span>Overall Progress</span>
+                <span>{Math.round(getOverallProgress())}%</span>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {settings.showMainProgress && (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm text-gray-600">
-                    <span>Overall Progress</span>
-                    <span>{Math.round(getOverallProgress())}%</span>
-                  </div>
-                  <Progress value={getOverallProgress()} className="h-2" />
-                </div>
-              )}
-              <div className="text-center space-y-4">
-                <div className="flex items-center justify-center space-x-3">
-                  <div className="w-6 h-6 rounded-full" style={{ backgroundColor: currentActivity?.color }} />
-                  <h2 className="text-3xl font-bold">{currentActivity?.name}</h2>
-                </div>
-                {settings.showActivityTimer && (
-                    <div className="text-6xl font-mono font-bold text-slate-800">{currentActivity?.isCompleted ? "COMPLETED" : formatTime(currentActivity?.timeRemaining || 0)}</div>
-                )}
-                {isPaused && <Badge variant="secondary" className="text-lg px-4 py-2">PAUSED</Badge>}
+              <Progress value={getOverallProgress()} className="h-2" />
+            </div>
+          )}
+          <div className="text-center space-y-4">
+            <div className="flex items-center justify-center space-x-3">
+              <div className="w-6 h-6 rounded-full" style={{ backgroundColor: currentActivity?.color }} />
+              <h2 className="text-3xl font-bold">{currentActivity?.name}</h2>
+            </div>
+            {settings.showActivityTimer && (
+                <div className="text-6xl font-mono font-bold text-slate-800">{currentActivity?.isCompleted ? "COMPLETED" : formatTime(currentActivity?.timeRemaining || 0)}</div>
+            )}
+            {isPaused && <Badge variant="secondary" className="text-lg px-4 py-2">PAUSED</Badge>}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
+            <div className="space-y-1">
+                <div className="text-sm text-gray-600">Time Vault</div>
+                <div className="text-xl font-semibold text-green-600">{formatTime(vaultTime)}</div>
+            </div>
+            <div className="space-y-1">
+                <div className="text-sm text-gray-600">Predicted End</div>
+                <div className="text-xl font-semibold">{getPredictedEndTime()}</div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
-                {settings.showOverallTime && (
-                  <div className="space-y-1">
-                    <div className="text-sm text-gray-600">Total Remaining</div>
-                    <div className="text-xl font-semibold">
-                        {formatTime(getTotalRemainingTime())}
-                        {bankedTime > 0 && <span className="text-sm text-green-600 ml-2">(+{formatTime(bankedTime)} banked)</span>}
+          </div>
+          <Separator />
+          <div className="space-y-2">
+            <h3 className="font-semibold">Activities</h3>
+            <div className="space-y-2">
+              {activities.map((activity, index) => {
+                const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - Math.max(0, activity.timeRemaining)) / (activity.duration * 60)) * 100 : 0;
+                const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
+                
+                return (
+                    <div
+                      key={activity.id}
+                      className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border transition-colors ${
+                        index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
+                      } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}`}
+                      onClick={() => !activity.isCompleted && switchToActivity(index)}
+                    >
+                      {settings.showActivityProgress && (
+                          <div className="absolute top-0 left-0 h-full opacity-20" style={{width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear'}}></div>
+                      )}
+                      <div className="flex items-center space-x-4 z-10">
+                        <input type="checkbox" className="h-5 w-5 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
+                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
+                        <span className={`font-medium ${activity.isCompleted ? 'line-through' : ''}`}>{activity.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 z-10">
+                        <span className="text-sm text-gray-600">{formatTime(activity.timeRemaining)}</span>
+                        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setBorrowModalState({ isOpen: true, activityId: activity.id })}} disabled={vaultTime <= 0}>
+                            <Icon name="plusCircle" className="h-5 w-5" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                )}
-                {settings.showEndTime && (
-                  <div className="space-y-1">
-                    <div className="text-sm text-gray-600">Predicted End</div>
-                    <div className="text-xl font-semibold">{getPredictedEndTime()}</div>
-                  </div>
-                )}
-              </div>
-              <Separator />
-              <div className="space-y-2">
-                <h3 className="font-semibold">Activities</h3>
-                <div className="space-y-2">
-                  {activities.map((activity, index) => {
-                    const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - Math.max(0, activity.timeRemaining)) / (activity.duration * 60)) * 100 : 0;
-                    const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
-                    
-                    return (
-                        <div
-                          key={activity.id}
-                          className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border transition-colors ${
-                            index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
-                          } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}`}
-                          onClick={() => !activity.isCompleted && switchToActivity(index)}
-                        >
-                          {settings.showActivityProgress && (
-                              <div className="absolute top-0 left-0 h-full opacity-20" style={{width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear'}}></div>
-                          )}
-                          <div className="flex items-center space-x-4 z-10">
-                            <input type="checkbox" className="h-5 w-5 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
-                            <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
-                            <span className={`font-medium ${activity.isCompleted ? 'line-through' : ''}`}>{activity.name}</span>
-                          </div>
-                          <div className="text-sm text-gray-600 z-10">{formatTime(activity.timeRemaining)}</div>
-                        </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50 p-4 font-sans">
-      <div className="max-w-4xl mx-auto">
+                );
+              })}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  ) : (
+    <div className="max-w-4xl mx-auto">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -1295,8 +1303,21 @@ export default function App() {
           </CardContent>
         </Card>
       </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 font-sans">
+      {mainContent}
       <ColorPicker isOpen={colorPickerState.isOpen} onClose={closeColorPicker} currentColor={colorPickerState.currentColor} onColorChange={handleColorChange} favorites={favoriteColors} onAddFavorite={addFavoriteColor} />
-      <DistributeTimeModal isOpen={isDistributeModalOpen} onClose={handleCloseDistributeModal} bankedTime={bankedTime} onDistribute={handleDistributeTime} />
+      {borrowModalState.isOpen && (
+        <BorrowTimeModal 
+            isOpen={borrowModalState.isOpen}
+            onClose={() => setBorrowModalState({ isOpen: false, activityId: ''})}
+            onBorrow={handleBorrowTime}
+            maxTime={vaultTime}
+            activityName={activities.find(a => a.id === borrowModalState.activityId)?.name || ''}
+        />
+      )}
     </div>
   );
 }
