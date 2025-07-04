@@ -134,6 +134,7 @@ interface TimerSettings {
   activityProgressType: 'fill' | 'drain';
   enableNotifications: boolean;
   playSoundOnEnd: boolean;
+  vibrateOnEnd: boolean;
   overtimeType: 'none' | 'postpone' | 'drain';
 }
 
@@ -371,6 +372,7 @@ export default function App() {
     activityProgressType: 'drain',
     enableNotifications: false,
     playSoundOnEnd: false,
+    vibrateOnEnd: false,
     overtimeType: 'none',
   });
   const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
@@ -380,6 +382,7 @@ export default function App() {
   
   const lastTickTimestampRef = useRef<number>(0);
   const lastDrainedIndex = useRef(-1);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   // Request notification permission
   const requestNotificationPermission = async () => {
@@ -400,11 +403,19 @@ export default function App() {
     }
   };
 
+  const playVibration = () => {
+    if (settings.vibrateOnEnd && 'vibrate' in navigator) {
+      navigator.vibrate([200, 100, 200]);
+    }
+  };
+
   // Play notification sound
   const playNotificationSound = () => {
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume();
+    }
     try {
       const audio = new Audio(notificationSound);
-      audio.volume = 0.7;
       audio.play().catch(error => {
         console.warn("Could not play notification sound:", error);
       });
@@ -517,6 +528,7 @@ export default function App() {
                         current.isCompleted = true;
                         sendNotification("Activity Completed!", `${current.name} has finished.`);
                         if (settings.playSoundOnEnd) playNotificationSound();
+                        playVibration();
                         
                         const nextIndex = newActivities.findIndex(act => !act.isCompleted);
                         if (nextIndex !== -1) {
@@ -531,7 +543,7 @@ export default function App() {
         }
         return newActivities;
     });
-  }, [currentActivityIndex, settings.overtimeType, settings.playSoundOnEnd]);
+  }, [currentActivityIndex, settings.overtimeType, settings.playSoundOnEnd, settings.vibrateOnEnd]);
 
   // Main timer loop
   useEffect(() => {
@@ -651,6 +663,14 @@ export default function App() {
   };
 
   const startSession = () => {
+    // Unlock audio context on user gesture
+    if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume();
+    }
+
     if (Math.abs(totalPercentage - 100) < 0.1) {
       setIsTimerActive(true);
       setIsPaused(false);
@@ -867,6 +887,9 @@ export default function App() {
     if (settings.playSoundOnEnd) {
       playNotificationSound();
     }
+    if (settings.vibrateOnEnd) {
+      playVibration();
+    }
   };
   
   const currentActivity = activities[currentActivityIndex];
@@ -1058,8 +1081,20 @@ export default function App() {
                         onCheckedChange={(checked) => setSettings(prev => ({ ...prev, playSoundOnEnd: checked }))} 
                       />
                     </div>
+
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <Label htmlFor="vibrate-on-end">Vibrate on timer end</Label>
+                        <p className="text-xs text-gray-500">Vibrate device when activities finish</p>
+                      </div>
+                      <Switch 
+                        id="vibrate-on-end" 
+                        checked={settings.vibrateOnEnd} 
+                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, vibrateOnEnd: checked }))} 
+                      />
+                    </div>
                     
-                    {(settings.enableNotifications || settings.playSoundOnEnd) && (
+                    {(settings.enableNotifications || settings.playSoundOnEnd || settings.vibrateOnEnd) && (
                       <div className="pt-2">
                         <Button 
                           variant="outline" 
@@ -1068,7 +1103,7 @@ export default function App() {
                           className="w-full"
                         >
                           <Icon name="volume2" className="h-4 w-4 mr-2" />
-                          Test Notification & Sound
+                          Test Alerts
                         </Button>
                       </div>
                     )}
