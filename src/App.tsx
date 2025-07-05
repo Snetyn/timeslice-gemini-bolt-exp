@@ -100,11 +100,64 @@ const Badge = ({ variant = 'default', className = '', children }) => {
     return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
-const Progress = ({ value, className = '' }) => (
-  <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
-    <div className="h-full w-full flex-1 bg-slate-900 transition-all" style={{ transform: `translateX(-${100 - (value || 0)}%)` }} />
-  </div>
-);
+const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor }) => {
+    const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
+    if (totalDuration === 0) {
+        return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
+    }
+
+    if (style === 'segmented') {
+        return (
+            <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
+                {activities.map((activity) => {
+                    const segmentWidth = (activity.duration * 60 / totalDuration) * 100;
+                    let fillWidth = 0;
+                    if (activity.isCompleted) {
+                        fillWidth = 100;
+                    } else {
+                        const elapsed = (activity.duration * 60) - activity.timeRemaining;
+                        fillWidth = (elapsed / (activity.duration * 60)) * 100;
+                    }
+
+                    return (
+                        <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full bg-slate-200 border-r-2 border-slate-500 last:border-r-0">
+                            <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full" />
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    }
+    
+    if (style === 'dynamicColor') {
+        return (
+            <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
+                {activities.map(activity => {
+                    const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+                    const widthPercentage = (elapsed / totalDuration) * 100;
+                    
+                    if (widthPercentage === 0) return null;
+
+                    return (
+                        <div
+                            key={activity.id}
+                            style={{ width: `${widthPercentage}%`, backgroundColor: activity.color }}
+                            className="h-full"
+                        />
+                    );
+                })}
+            </div>
+        );
+    }
+
+    // Default style
+    return (
+        <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
+            <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
+        </div>
+    );
+};
+
 
 const Switch = ({ checked, onCheckedChange, id }) => (
     <button
@@ -148,6 +201,8 @@ interface TimerSettings {
   vibrateOnEnd: boolean;
   keepScreenAwake: boolean;
   overtimeType: 'none' | 'postpone' | 'drain';
+  showAllocationPercentage: boolean;
+  progressBarStyle: 'default' | 'dynamicColor' | 'segmented';
 }
 
 interface ColorPickerProps {
@@ -384,7 +439,8 @@ export default function App() {
     vibrateOnEnd: false,
     keepScreenAwake: false,
     overtimeType: 'none',
-    distributeTimeEqually: false,
+    showAllocationPercentage: true,
+    progressBarStyle: 'default',
   });
   const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
   const [endTime, setEndTime] = useState('23:30');
@@ -984,7 +1040,15 @@ export default function App() {
                 <span>Overall Progress</span>
                 <span>{Math.round(getOverallProgress())}%</span>
               </div>
-              <Progress value={getOverallProgress()} className="h-2" />
+              <VisualProgress
+                  activities={activities}
+                  style={settings.progressBarStyle}
+                  className="h-4"
+                  overallProgress={getOverallProgress()}
+                  currentActivityColor={currentActivity?.color}
+                  currentActivityIndex={currentActivityIndex}
+                  isTimerActive={isTimerActive}
+              />
             </div>
           )}
           <div className="text-center space-y-4">
@@ -1078,6 +1142,19 @@ export default function App() {
                         <Button size="sm" variant={settings.overtimeType === 'postpone' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'postpone'}))}>Postpone</Button>
                         <Button size="sm" variant={settings.overtimeType === 'drain' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'drain'}))}>Drain</Button>
                     </div>
+                  </div>
+                  <Separator />
+                  <div className="space-y-2">
+                    <Label>Progress Bar Style</Label>
+                    <div className="flex items-center gap-2">
+                        <Button size="sm" variant={settings.progressBarStyle === 'default' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'default'}))}>Default</Button>
+                        <Button size="sm" variant={settings.progressBarStyle === 'dynamicColor' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'dynamicColor'}))}>Dynamic</Button>
+                        <Button size="sm" variant={settings.progressBarStyle === 'segmented' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'segmented'}))}>Segmented</Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="show-allocation-percentage">Show allocation %</Label>
+                    <Switch id="show-allocation-percentage" checked={settings.showAllocationPercentage} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showAllocationPercentage: checked }))} />
                   </div>
                   <Separator />
                   <div className="flex items-center justify-between">
@@ -1224,7 +1301,7 @@ export default function App() {
                       className="h-full flex items-center justify-center text-white font-medium text-sm transition-all duration-200 pointer-events-none"
                       style={{ width: `${activity.percentage}%`, backgroundColor: activity.color }}
                     >
-                      {activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
+                      {settings.showAllocationPercentage && activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
                     </div>
                   ))}
                 {activities.slice(0, -1).map((_, index) => {
@@ -1296,7 +1373,7 @@ export default function App() {
                     
                     <div className="sm:col-span-1 flex justify-center">
                         <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)}>
-                          <Icon name={activity.isLocked ? 'lock' : 'unlock'} className="h-4 w-4" />
+                          <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
                         </Button>
                     </div>
 
