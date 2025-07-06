@@ -1046,8 +1046,6 @@ export default function App() {
                   className="h-4"
                   overallProgress={getOverallProgress()}
                   currentActivityColor={currentActivity?.color}
-                  currentActivityIndex={currentActivityIndex}
-                  isTimerActive={isTimerActive}
               />
             </div>
           )}
