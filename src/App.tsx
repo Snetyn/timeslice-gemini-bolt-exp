@@ -417,6 +417,19 @@ export default function App() {
     { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
   ]);
 
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      const swUrl = `${process.env.PUBLIC_URL}/service-worker.js`;
+      navigator.serviceWorker.register(swUrl)
+        .then(registration => {
+          console.log('ServiceWorker registration successful with scope: ', registration.scope);
+        })
+        .catch(err => {
+          console.log('ServiceWorker registration failed: ', err);
+        });
+    }
+  }, []);
+
   const [totalHours, setTotalHours] = useState(2);
   const [totalMinutes, setTotalMinutes] = useState(0);
   const [isTimerActive, setIsTimerActive] = useState(false);
