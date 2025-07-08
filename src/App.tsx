@@ -412,10 +412,25 @@ const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) =
 
 // --- Main Application Component ---
 export default function App() {
-  const [activities, setActivities] = useState<Activity[]>([
-    { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
-    { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
-  ]);
+  const [activities, setActivities] = useState(() => {
+    // 1. Try to get the saved data from localStorage
+    try {
+      const savedActivities = localStorage.getItem('timeSliceActivities');
+      // 2. If saved data exists, parse it from a string back to an array and return it
+      if (savedActivities) {
+        return JSON.parse(savedActivities);
+      }
+    } catch (e) {
+      // 3. If there's an error (e.g., corrupted data), log it
+      console.error("Failed to load activities from localStorage", e);
+    }
+
+    // 4. If no saved data is found (or there was an error), return the default array
+    return [
+      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
+      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
+    ];
+  });
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -430,22 +445,44 @@ export default function App() {
     }
   }, []);
 
-  const [totalHours, setTotalHours] = useState(2);
-  const [totalMinutes, setTotalMinutes] = useState(0);
+  const [totalHours, setTotalHours] = useState(() => {
+  try {
+    const saved = localStorage.getItem('timeSliceTotalHours');
+    return saved ? JSON.parse(saved) : 2;
+  } catch (e) { return 2; }
+});
+
+const [totalMinutes, setTotalMinutes] = useState(() => {
+  try {
+    const saved = localStorage.getItem('timeSliceTotalMinutes');
+    return saved ? JSON.parse(saved) : 0;
+  } catch (e) { return 0; }
+});
+
   const [isTimerActive, setIsTimerActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [currentActivityIndex, setCurrentActivityIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [colorPickerState, setColorPickerState] = useState({ isOpen: false, activityId: "", currentColor: "" });
-  const [favoriteColors, setFavoriteColors] = useState<string[]>([
+  const [favoriteColors, setFavoriteColors] = useState(() => {
+  const defaultValue = [
     "hsl(220, 70%, 50%)", "hsl(120, 60%, 50%)", "hsl(0, 70%, 50%)", "hsl(280, 60%, 50%)", "hsl(40, 80%, 50%)",
-  ]);
-  const [settings, setSettings] = useState<TimerSettings>({
-    showMainProgress: true, 
-    showOverallTime: true, 
-    showEndTime: true, 
+  ];
+  try {
+    const saved = localStorage.getItem('timeSliceFavColors');
+    return saved ? JSON.parse(saved) : defaultValue;
+  } catch (e) {
+    return defaultValue;
+  }
+});
+
+const [settings, setSettings] = useState(() => {
+  const defaultValue = {
+    showMainProgress: true,
+    showOverallTime: true,
+    showEndTime: true,
     showActivityTimer: true,
-    showActivityProgress: false, 
+    showActivityProgress: false,
     activityProgressType: 'drain',
     enableNotifications: false,
     playSoundOnEnd: false,
@@ -454,12 +491,91 @@ export default function App() {
     overtimeType: 'none',
     showAllocationPercentage: true,
     progressBarStyle: 'default',
-  });
+    enableTTS: false,
+    ttsVoice: null,
+    ttsRate: 1,
+    ttsPitch: 1,
+    ttsInterval: 0,
+    ttsCountdown: 0,
+  };
+  try {
+    const saved = localStorage.getItem('timeSliceSettings');
+    // If saved, merge it with defaults to ensure new settings are not missed
+    return saved ? { ...defaultValue, ...JSON.parse(saved) } : defaultValue;
+  } catch (e) {
+    return defaultValue;
+  }
+});
   const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
   const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
-  
+  // --- Add this entire block after your useState hooks ---
+
+// useEffect hook to save activities state
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceActivities', JSON.stringify(activities));
+  } catch (e) {
+    console.error("Failed to save activities", e);
+  }
+}, [activities]);
+
+// useEffect hook to save tasks state
+// useEffect(() => {
+//   try {
+//     localStorage.setItem('timeSliceTasks', JSON.stringify(tasks));
+//   } catch (e) {
+//     console.error("Failed to save tasks", e);
+//   }
+// }, [tasks]);
+
+// useEffect hook to save settings state
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceSettings', JSON.stringify(settings));
+  } catch (e) {
+    console.error("Failed to save settings", e);
+  }
+}, [settings]);
+
+// useEffect hook to save favorite colors state
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceFavColors', JSON.stringify(favoriteColors));
+  } catch (e) {
+    console.error("Failed to save favorite colors", e);
+  }
+}, [favoriteColors]);
+
+// useEffect hook to save total hours state
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceTotalHours', JSON.stringify(totalHours));
+  } catch (e) {
+    console.error("Failed to save total hours", e);
+  }
+}, [totalHours]);
+
+// useEffect hook to save total minutes state
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceTotalMinutes', JSON.stringify(totalMinutes));
+  } catch (e) {
+    console.error("Failed to save total minutes", e);
+  }
+}, [totalMinutes]);
+
+// --- End of the block to add ---
+  useEffect(() => {
+    try {
+      const serializedActivities = JSON.stringify(activities);
+      localStorage.setItem('timeSliceActivities', serializedActivities);
+    } catch (e) {
+      console.error("Failed to save activities to localStorage", e);
+    }
+  }, [activities]);
+
   const lastTickTimestampRef = useRef<number>(0);
   const lastDrainedIndex = useRef(-1);
   const audioContextRef = useRef<AudioContext | null>(null);
