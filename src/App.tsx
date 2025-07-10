@@ -530,7 +530,7 @@ export default function App() {
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      const swUrl = './service-worker.js'; // Use relative path if needed
+      const swUrl = '/service-worker.js'; // Use absolute path
       navigator.serviceWorker.register(swUrl)
         .then(registration => {
           console.log('ServiceWorker registration successful with scope: ', registration.scope);
