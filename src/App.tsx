@@ -323,7 +323,7 @@ const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, 
   const [hue, setHue] = useState(0);
   const [saturation, setSaturation] = useState(100);
   const [lightness, setLightness] = useState(50);
-  const canvasRef = useRef(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
@@ -642,7 +642,7 @@ useEffect(() => {
 
   const lastTickTimestampRef = useRef(0);
   const lastDrainedIndex = useRef(-1);
-  const wakeLockRef = useRef(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   const calculateTotalSessionMinutes = useCallback(() => {
     if (durationType === 'endTime') {
@@ -1127,7 +1127,6 @@ useEffect(() => {
                     style={settings.progressBarStyle}
                     totalProgress={getOverallProgress()}
                     activityProgress={activityProgress}
-                    totalColor="#0f172a"
                     activityColor={currentActivity?.color}
                 />
              ) : (
