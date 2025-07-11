@@ -172,19 +172,21 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
             const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
             accAngle += segmentAngle;
             const angleRad = ((accAngle - 90) * Math.PI) / 180;
-            const r0 = radius - strokeWidth / 2;
-            const r1 = radius + strokeWidth / 2;
-            const x0 = center + r0 * Math.cos(angleRad);
-            const y0 = center + r0 * Math.sin(angleRad);
-            const x1 = center + r1 * Math.cos(angleRad);
-            const y1 = center + r1 * Math.sin(angleRad);
+            // Draw from inner edge to outer edge of the ring for maximum visibility
+            const rInner = radius - strokeWidth / 2 - 2; // slightly inside
+            const rOuter = radius + strokeWidth / 2 + 2; // slightly outside
+            const x0 = center + rInner * Math.cos(angleRad);
+            const y0 = center + rInner * Math.sin(angleRad);
+            const x1 = center + rOuter * Math.cos(angleRad);
+            const y1 = center + rOuter * Math.sin(angleRad);
             lines.push(
                 <path
                     key={`divider-${i}`}
                     d={`M${x0},${y0} L${x1},${y1}`}
-                    stroke="#64748b"
-                    strokeWidth={2}
-                    opacity={0.85}
+                    stroke="#222"
+                    strokeWidth={3}
+                    opacity={0.95}
+                    style={{ filter: 'drop-shadow(0 0 2px #fff)' }}
                     shapeRendering="crispEdges"
                 />
             );
