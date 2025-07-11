@@ -85,270 +85,270 @@ const CardContent = ({ className = '', children }) => <div className={`p-6 pt-0 
 const Separator = ({ className = '' }) => <hr className={`-mx-6 border-slate-200 ${className}`} />;
 
 const Badge = ({ variant = 'default', className = '', children }) => {
-    const variantClasses = {
-        default: "border-transparent bg-slate-900 text-slate-50",
-        secondary: "border-transparent bg-slate-100 text-slate-900",
-        destructive: "border-transparent bg-red-500 text-slate-50",
-    };
-    return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
+  const variantClasses = {
+    default: "border-transparent bg-slate-900 text-slate-50",
+    secondary: "border-transparent bg-slate-100 text-slate-900",
+    destructive: "border-transparent bg-red-500 text-slate-50",
+  };
+  return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
 const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor }) => {
-    const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
-    if (totalDuration === 0) {
-        return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
+  const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
+  if (totalDuration === 0) {
+    return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
+  }
+
+  if (style === 'segmented') {
+    return (
+      <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
+        {activities.map((activity) => {
+          const segmentWidth = (activity.duration * 60 / totalDuration) * 100;
+          let fillWidth = 0;
+          if (activity.isCompleted) {
+            fillWidth = 100;
+          } else {
+            const elapsed = (activity.duration * 60) - activity.timeRemaining;
+            fillWidth = (elapsed / (activity.duration * 60)) * 100;
+          }
+
+          return (
+            <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full bg-slate-200 border-r-2 border-slate-500 last:border-r-0">
+              <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full" />
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (style === 'dynamicColor') {
+    return (
+      <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
+        {activities.map(activity => {
+          const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+          const widthPercentage = (elapsed / totalDuration) * 100;
+
+          if (widthPercentage === 0) return null;
+
+          return (
+            <div
+              key={activity.id}
+              style={{ width: `${widthPercentage}%`, backgroundColor: activity.color }}
+              className="h-full"
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Default style
+  return (
+    <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
+      <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
+    </div>
+  );
+};
+
+const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor }) => {
+  const size = 200;
+  const strokeWidth = 12;
+  const center = size / 2;
+  const radius = center - strokeWidth;
+  const activityRadius = radius - strokeWidth - 4;
+  const circumference = 2 * Math.PI * radius;
+  const activityCircumference = 2 * Math.PI * activityRadius;
+  const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
+
+  const activityOffset = activityCircumference - (activityProgress / 100) * activityCircumference;
+
+  // --- Divider lines for segmented style ---
+  const renderSegmentDividers = () => {
+    if (style !== 'segmented' || activities.length <= 1 || totalDuration === 0) return null;
+    let accAngle = 0;
+    const lines: React.ReactNode[] = [];
+    for (let i = 0; i < activities.length - 1; i++) {
+      const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
+      accAngle += segmentAngle;
+      const angleRad = ((accAngle - 90) * Math.PI) / 180;
+      // Draw from inner edge to outer edge of the ring for maximum visibility
+      const rInner = radius - strokeWidth / 2 - 2; // slightly inside
+      const rOuter = radius + strokeWidth / 2 + 2; // slightly outside
+      const x0 = center + rInner * Math.cos(angleRad);
+      const y0 = center + rInner * Math.sin(angleRad);
+      const x1 = center + rOuter * Math.cos(angleRad);
+      const y1 = center + rOuter * Math.sin(angleRad);
+      lines.push(
+        <path
+          key={`divider-${i}`}
+          d={`M${x0},${y0} L${x1},${y1}`}
+          stroke="#222"
+          strokeWidth={3}
+          opacity={0.95}
+          style={{ filter: 'drop-shadow(0 0 2px #fff)' }}
+          shapeRendering="crispEdges"
+        />
+      );
+    }
+    return <g id="segment-dividers">{lines}</g>;
+  };
+
+  const renderOuterRing = () => {
+    if (totalDuration === 0) return null;
+
+    if (style === 'dynamicColor') {
+      let cumulativeRotation = -90;
+      return activities.map(activity => {
+        const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+        if (elapsed <= 0) return null;
+
+        const progressAngle = (elapsed / totalDuration) * 360;
+        const arcLength = (progressAngle / 360) * circumference;
+
+        const rotation = cumulativeRotation;
+        cumulativeRotation += progressAngle;
+
+        return (
+          <circle
+            key={`progress-${activity.id}`}
+            stroke={activity.color}
+            fill="transparent"
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${arcLength} ${circumference}`}
+            r={radius}
+            cx={center}
+            cy={center}
+            transform={`rotate(${rotation} ${center} ${center})`}
+            strokeLinecap="butt"
+          />
+        );
+      });
     }
 
     if (style === 'segmented') {
-        return (
-            <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
-                {activities.map((activity) => {
-                    const segmentWidth = (activity.duration * 60 / totalDuration) * 100;
-                    let fillWidth = 0;
-                    if (activity.isCompleted) {
-                        fillWidth = 100;
-                    } else {
-                        const elapsed = (activity.duration * 60) - activity.timeRemaining;
-                        fillWidth = (elapsed / (activity.duration * 60)) * 100;
-                    }
+      let cumulativeRotation = -90;
+      return activities.map(activity => {
+        const segmentAngle = (activity.duration * 60 / totalDuration) * 360;
+        const segmentArcLength = (segmentAngle / 360) * circumference;
 
-                    return (
-                        <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full bg-slate-200 border-r-2 border-slate-500 last:border-r-0">
-                            <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full" />
-                        </div>
-                    );
-                })}
-            </div>
-        );
-    }
-    
-    if (style === 'dynamicColor') {
-        return (
-            <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
-                {activities.map(activity => {
-                    const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
-                    const widthPercentage = (elapsed / totalDuration) * 100;
-                    
-                    if (widthPercentage === 0) return null;
+        const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+        const progressWithinSegment = activity.duration > 0 ? (elapsed / (activity.duration * 60)) : 0;
+        const fillAngle = segmentAngle * progressWithinSegment;
+        const fillArcLength = (fillAngle / 360) * circumference;
 
-                    return (
-                        <div
-                            key={activity.id}
-                            style={{ width: `${widthPercentage}%`, backgroundColor: activity.color }}
-                            className="h-full"
-                        />
-                    );
-                })}
-            </div>
+        const rotation = cumulativeRotation;
+        cumulativeRotation += segmentAngle;
+
+        return (
+          <g key={`segment-${activity.id}`} transform={`rotate(${rotation} ${center} ${center})`}>
+            <circle
+              stroke="#e2e8f0"
+              fill="transparent"
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${segmentArcLength} ${circumference}`}
+              r={radius}
+              cx={center}
+              cy={center}
+              strokeLinecap="butt"
+            />
+            {fillArcLength > 0 && (
+              <circle
+                stroke={activity.color}
+                fill="transparent"
+                strokeWidth={strokeWidth}
+                strokeDasharray={`${fillArcLength} ${circumference}`}
+                r={radius}
+                cx={center}
+                cy={center}
+                strokeLinecap="butt"
+              />
+            )}
+          </g>
         );
+      });
     }
 
     // Default style
     return (
-        <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
-            <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
-        </div>
+      <circle
+        stroke="#0f172a"
+        fill="transparent"
+        strokeWidth={strokeWidth}
+        strokeDasharray={circumference}
+        strokeDashoffset={circumference - (totalProgress / 100) * circumference}
+        strokeLinecap="round"
+        r={radius}
+        cx={center}
+        cy={center}
+        transform={`rotate(-90 ${center} ${center})`}
+      />
     );
-};
+  };
 
-const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor }) => {
-    const size = 200;
-    const strokeWidth = 12;
-    const center = size / 2;
-    const radius = center - strokeWidth;
-    const activityRadius = radius - strokeWidth - 4;
-    const circumference = 2 * Math.PI * radius;
-    const activityCircumference = 2 * Math.PI * activityRadius;
-    const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
+  return (
+    <div className="flex items-center justify-center py-4">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {/* Background circles */}
+        <circle
+          stroke="#e2e8f0"
+          fill="transparent"
+          strokeWidth={strokeWidth}
+          r={radius}
+          cx={center}
+          cy={center}
+        />
+        <circle
+          stroke="#e2e8f0"
+          fill="transparent"
+          strokeWidth={strokeWidth}
+          r={activityRadius}
+          cx={center}
+          cy={center}
+        />
 
-    const activityOffset = activityCircumference - (activityProgress / 100) * activityCircumference;
+        {/* Segment divider lines for segmented style */}
+        {renderSegmentDividers()}
 
-    // --- Divider lines for segmented style ---
-    const renderSegmentDividers = () => {
-        if (style !== 'segmented' || activities.length <= 1 || totalDuration === 0) return null;
-        let accAngle = 0;
-        const lines: React.ReactNode[] = [];
-        for (let i = 0; i < activities.length - 1; i++) {
-            const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
-            accAngle += segmentAngle;
-            const angleRad = ((accAngle - 90) * Math.PI) / 180;
-            // Draw from inner edge to outer edge of the ring for maximum visibility
-            const rInner = radius - strokeWidth / 2 - 2; // slightly inside
-            const rOuter = radius + strokeWidth / 2 + 2; // slightly outside
-            const x0 = center + rInner * Math.cos(angleRad);
-            const y0 = center + rInner * Math.sin(angleRad);
-            const x1 = center + rOuter * Math.cos(angleRad);
-            const y1 = center + rOuter * Math.sin(angleRad);
-            lines.push(
-                <path
-                    key={`divider-${i}`}
-                    d={`M${x0},${y0} L${x1},${y1}`}
-                    stroke="#222"
-                    strokeWidth={3}
-                    opacity={0.95}
-                    style={{ filter: 'drop-shadow(0 0 2px #fff)' }}
-                    shapeRendering="crispEdges"
-                />
-            );
-        }
-        return <g id="segment-dividers">{lines}</g>;
-    };
+        {/* Outer Progress Ring(s) */}
+        {renderOuterRing()}
 
-    const renderOuterRing = () => {
-        if (totalDuration === 0) return null;
-
-        if (style === 'dynamicColor') {
-            let cumulativeRotation = -90;
-            return activities.map(activity => {
-                const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
-                if (elapsed <= 0) return null;
-
-                const progressAngle = (elapsed / totalDuration) * 360;
-                const arcLength = (progressAngle / 360) * circumference;
-                
-                const rotation = cumulativeRotation;
-                cumulativeRotation += progressAngle;
-
-                return (
-                    <circle
-                        key={`progress-${activity.id}`}
-                        stroke={activity.color}
-                        fill="transparent"
-                        strokeWidth={strokeWidth}
-                        strokeDasharray={`${arcLength} ${circumference}`}
-                        r={radius}
-                        cx={center}
-                        cy={center}
-                        transform={`rotate(${rotation} ${center} ${center})`}
-                        strokeLinecap="butt"
-                    />
-                );
-            });
-        }
-
-        if (style === 'segmented') {
-            let cumulativeRotation = -90;
-            return activities.map(activity => {
-                const segmentAngle = (activity.duration * 60 / totalDuration) * 360;
-                const segmentArcLength = (segmentAngle / 360) * circumference;
-                
-                const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
-                const progressWithinSegment = activity.duration > 0 ? (elapsed / (activity.duration * 60)) : 0;
-                const fillAngle = segmentAngle * progressWithinSegment;
-                const fillArcLength = (fillAngle / 360) * circumference;
-
-                const rotation = cumulativeRotation;
-                cumulativeRotation += segmentAngle;
-
-                return (
-                    <g key={`segment-${activity.id}`} transform={`rotate(${rotation} ${center} ${center})`}>
-                        <circle
-                            stroke="#e2e8f0"
-                            fill="transparent"
-                            strokeWidth={strokeWidth}
-                            strokeDasharray={`${segmentArcLength} ${circumference}`}
-                            r={radius}
-                            cx={center}
-                            cy={center}
-                            strokeLinecap="butt"
-                        />
-                        {fillArcLength > 0 && (
-                             <circle
-                                stroke={activity.color}
-                                fill="transparent"
-                                strokeWidth={strokeWidth}
-                                strokeDasharray={`${fillArcLength} ${circumference}`}
-                                r={radius}
-                                cx={center}
-                                cy={center}
-                                strokeLinecap="butt"
-                            />
-                        )}
-                    </g>
-                );
-            });
-        }
-
-        // Default style
-        return (
-             <circle
-                stroke="#0f172a"
-                fill="transparent"
-                strokeWidth={strokeWidth}
-                strokeDasharray={circumference}
-                strokeDashoffset={circumference - (totalProgress / 100) * circumference}
-                strokeLinecap="round"
-                r={radius}
-                cx={center}
-                cy={center}
-                transform={`rotate(-90 ${center} ${center})`}
-            />
-        );
-    };
-
-    return (
-        <div className="flex items-center justify-center py-4">
-            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-                {/* Background circles */}
-                <circle
-                    stroke="#e2e8f0"
-                    fill="transparent"
-                    strokeWidth={strokeWidth}
-                    r={radius}
-                    cx={center}
-                    cy={center}
-                />
-                <circle
-                    stroke="#e2e8f0"
-                    fill="transparent"
-                    strokeWidth={strokeWidth}
-                    r={activityRadius}
-                    cx={center}
-                    cy={center}
-                />
-
-                {/* Segment divider lines for segmented style */}
-                {renderSegmentDividers()}
-
-                {/* Outer Progress Ring(s) */}
-                {renderOuterRing()}
-
-                {/* Inner Activity Ring */}
-                <circle
-                    stroke={activityColor}
-                    fill="transparent"
-                    strokeWidth={strokeWidth}
-                    strokeDasharray={activityCircumference}
-                    strokeDashoffset={activityOffset}
-                    strokeLinecap="round"
-                    r={activityRadius}
-                    cx={center}
-                    cy={center}
-                    transform={`rotate(-90 ${center} ${center})`}
-                />
-                <text x="50%" y="50%" textAnchor="middle" dy=".3em" className="text-3xl font-bold fill-current text-slate-700">
-                    {Math.round(totalProgress)}%
-                </text>
-            </svg>
-        </div>
-    );
+        {/* Inner Activity Ring */}
+        <circle
+          stroke={activityColor}
+          fill="transparent"
+          strokeWidth={strokeWidth}
+          strokeDasharray={activityCircumference}
+          strokeDashoffset={activityOffset}
+          strokeLinecap="round"
+          r={activityRadius}
+          cx={center}
+          cy={center}
+          transform={`rotate(-90 ${center} ${center})`}
+        />
+        <text x="50%" y="50%" textAnchor="middle" dy=".3em" className="text-3xl font-bold fill-current text-slate-700">
+          {Math.round(totalProgress)}%
+        </text>
+      </svg>
+    </div>
+  );
 };
 
 
 const Switch = ({ checked, onCheckedChange, id }) => (
-    <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onCheckedChange(!checked)}
-        id={id}
-        className={`${checked ? 'bg-slate-900' : 'bg-slate-200'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2`}
-    >
-        <span
-            aria-hidden="true"
-            className={`${checked ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
-        />
-    </button>
+  <button
+    type="button"
+    role="switch"
+    aria-checked={checked}
+    onClick={() => onCheckedChange(!checked)}
+    id={id}
+    className={`${checked ? 'bg-slate-900' : 'bg-slate-200'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-slate-900 focus:ring-offset-2`}
+  >
+    <span
+      aria-hidden="true"
+      className={`${checked ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+    />
+  </button>
 );
 
 const Label = ({ className = '', children, ...props }) => <label className={`text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 ${className}`} {...props}>{children}</label>;
@@ -501,48 +501,48 @@ const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, 
 };
 
 const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) => {
-    const [minutes, setMinutes] = useState(0);
-    const [seconds, setSeconds] = useState(0);
+  const [minutes, setMinutes] = useState(0);
+  const [seconds, setSeconds] = useState(0);
 
-    if (!isOpen) return null;
+  if (!isOpen) return null;
 
-    const handleBorrow = () => {
-        const totalSeconds = minutes * 60 + seconds;
-        if (totalSeconds > 0 && totalSeconds <= maxTime) {
-            onBorrow(totalSeconds);
-        }
-    };
-    
-    const maxMinutes = Math.floor(maxTime / 60);
-    const maxSeconds = maxTime % 60;
+  const handleBorrow = () => {
+    const totalSeconds = minutes * 60 + seconds;
+    if (totalSeconds > 0 && totalSeconds <= maxTime) {
+      onBorrow(totalSeconds);
+    }
+  };
 
-    return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <Card className="w-full max-w-sm">
-                <CardHeader>
-                    <CardTitle>Borrow from Vault</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <p>Add time to <span className="font-bold">{activityName}</span>.</p>
-                    <p>Vault has: <span className="font-semibold">{maxMinutes}m {maxSeconds}s</span></p>
-                    <div className="flex items-center gap-4">
-                        <div className="space-y-1">
-                            <Label htmlFor="borrow-minutes">Minutes</Label>
-                            <Input id="borrow-minutes" type="number" min="0" max={maxMinutes} value={minutes} onChange={e => setMinutes(Number(e.target.value))} />
-                        </div>
-                        <div className="space-y-1">
-                            <Label htmlFor="borrow-seconds">Seconds</Label>
-                            <Input id="borrow-seconds" type="number" min="0" max="59" value={seconds} onChange={e => setSeconds(Number(e.target.value))} />
-                        </div>
-                    </div>
-                    <div className="flex justify-end space-x-2">
-                        <Button variant="outline" onClick={onClose}>Cancel</Button>
-                        <Button onClick={handleBorrow}>Borrow</Button>
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
-    );
+  const maxMinutes = Math.floor(maxTime / 60);
+  const maxSeconds = maxTime % 60;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle>Borrow from Vault</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p>Add time to <span className="font-bold">{activityName}</span>.</p>
+          <p>Vault has: <span className="font-semibold">{maxMinutes}m {maxSeconds}s</span></p>
+          <div className="flex items-center gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="borrow-minutes">Minutes</Label>
+              <Input id="borrow-minutes" type="number" min="0" max={maxMinutes} value={minutes} onChange={e => setMinutes(Number(e.target.value))} />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="borrow-seconds">Seconds</Label>
+              <Input id="borrow-seconds" type="number" min="0" max="59" value={seconds} onChange={e => setSeconds(Number(e.target.value))} />
+            </div>
+          </div>
+          <div className="flex justify-end space-x-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={handleBorrow}>Borrow</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
 };
 
 
@@ -577,18 +577,18 @@ export default function App() {
   }, []);
 
   const [totalHours, setTotalHours] = useState(() => {
-  try {
-    const saved = localStorage.getItem('timeSliceTotalHours');
-    return saved ? JSON.parse(saved) : 2;
-  } catch (e) { return 2; }
-});
+    try {
+      const saved = localStorage.getItem('timeSliceTotalHours');
+      return saved ? JSON.parse(saved) : 2;
+    } catch (e) { return 2; }
+  });
 
-const [totalMinutes, setTotalMinutes] = useState(() => {
-  try {
-    const saved = localStorage.getItem('timeSliceTotalMinutes');
-    return saved ? JSON.parse(saved) : 0;
-  } catch (e) { return 0; }
-});
+  const [totalMinutes, setTotalMinutes] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceTotalMinutes');
+      return saved ? JSON.parse(saved) : 0;
+    } catch (e) { return 0; }
+  });
 
   const [isTimerActive, setIsTimerActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -596,84 +596,85 @@ const [totalMinutes, setTotalMinutes] = useState(() => {
   const [showSettings, setShowSettings] = useState(false);
   const [colorPickerState, setColorPickerState] = useState({ isOpen: false, activityId: "", currentColor: "" });
   const [favoriteColors, setFavoriteColors] = useState(() => {
-  const defaultValue = [
-    "hsl(220, 70%, 50%)", "hsl(120, 60%, 50%)", "hsl(0, 70%, 50%)", "hsl(280, 60%, 50%)", "hsl(40, 80%, 50%)",
-  ];
-  try {
-    const saved = localStorage.getItem('timeSliceFavColors');
-    return saved ? JSON.parse(saved) : defaultValue;
-  } catch (e) {
-    return defaultValue;
-  }
-});
+    const defaultValue = [
+      "hsl(220, 70%, 50%)", "hsl(120, 60%, 50%)", "hsl(0, 70%, 50%)", "hsl(280, 60%, 50%)", "hsl(40, 80%, 50%)",
+    ];
+    try {
+      const saved = localStorage.getItem('timeSliceFavColors');
+      return saved ? JSON.parse(saved) : defaultValue;
+    } catch (e) {
+      return defaultValue;
+    }
+  });
 
-const [settings, setSettings] = useState(() => {
-  const defaultValue = {
-    showMainProgress: true,
-    showOverallTime: true,
-    showEndTime: true,
-    showActivityTimer: true,
-    showActivityProgress: false,
-    activityProgressType: 'drain',
-    keepScreenAwake: false,
-    overtimeType: 'none',
-    showAllocationPercentage: true,
-    progressBarStyle: 'default',
-    progressView: 'linear',
-  };
-  try {
-    const saved = localStorage.getItem('timeSliceSettings');
-    return saved ? { ...defaultValue, ...JSON.parse(saved) } : defaultValue;
-  } catch (e) {
-    return defaultValue;
-  }
-});
+  const [settings, setSettings] = useState(() => {
+    const defaultValue = {
+      showMainProgress: true,
+      showOverallTime: true,
+      showEndTime: true,
+      showActivityTimer: true,
+      showActivityProgress: false,
+      activityProgressType: 'drain',
+      keepScreenAwake: false,
+      overtimeType: 'none',
+      showAllocationPercentage: true,
+      progressBarStyle: 'default',
+      progressView: 'linear',
+      showActivityTime: true, // NEW: toggle for activity time next to bar
+    };
+    try {
+      const saved = localStorage.getItem('timeSliceSettings');
+      return saved ? { ...defaultValue, ...JSON.parse(saved) } : defaultValue;
+    } catch (e) {
+      return defaultValue;
+    }
+  });
   const [durationType, setDurationType] = useState('duration');
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
   const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
 
-// --- Start of State Saving Logic ---
-useEffect(() => {
-  try {
-    localStorage.setItem('timeSliceActivities', JSON.stringify(activities));
-  } catch (e) {
-    console.error("Failed to save activities", e);
-  }
-}, [activities]);
+  // --- Start of State Saving Logic ---
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceActivities', JSON.stringify(activities));
+    } catch (e) {
+      console.error("Failed to save activities", e);
+    }
+  }, [activities]);
 
-useEffect(() => {
-  try {
-    localStorage.setItem('timeSliceSettings', JSON.stringify(settings));
-  } catch (e) {
-    console.error("Failed to save settings", e);
-  }
-}, [settings]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceSettings', JSON.stringify(settings));
+    } catch (e) {
+      console.error("Failed to save settings", e);
+    }
+  }, [settings]);
 
-useEffect(() => {
-  try {
-    localStorage.setItem('timeSliceFavColors', JSON.stringify(favoriteColors));
-  } catch (e) {
-    console.error("Failed to save favorite colors", e);
-  }
-}, [favoriteColors]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceFavColors', JSON.stringify(favoriteColors));
+    } catch (e) {
+      console.error("Failed to save favorite colors", e);
+    }
+  }, [favoriteColors]);
 
-useEffect(() => {
-  try {
-    localStorage.setItem('timeSliceTotalHours', JSON.stringify(totalHours));
-  } catch (e) {
-    console.error("Failed to save total hours", e);
-  }
-}, [totalHours]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceTotalHours', JSON.stringify(totalHours));
+    } catch (e) {
+      console.error("Failed to save total hours", e);
+    }
+  }, [totalHours]);
 
-useEffect(() => {
-  try {
-    localStorage.setItem('timeSliceTotalMinutes', JSON.stringify(totalMinutes));
-  } catch (e) {
-    console.error("Failed to save total minutes", e);
-  }
-}, [totalMinutes]);
-// --- End of State Saving Logic ---
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceTotalMinutes', JSON.stringify(totalMinutes));
+    } catch (e) {
+      console.error("Failed to save total minutes", e);
+    }
+  }, [totalMinutes]);
+  // --- End of State Saving Logic ---
 
   const lastTickTimestampRef = useRef(0);
   const lastDrainedIndex = useRef(-1);
@@ -681,14 +682,14 @@ useEffect(() => {
 
   const calculateTotalSessionMinutes = useCallback(() => {
     if (durationType === 'endTime') {
-        const now = new Date();
-        const [endHour, endMinute] = endTime.split(':').map(Number);
-        const endDate = new Date();
-        endDate.setHours(endHour, endMinute, 0, 0);
-        if (endDate < now) {
-            endDate.setDate(endDate.getDate() + 1);
-        }
-        return Math.max(0, Math.round((endDate.getTime() - now.getTime()) / 60000));
+      const now = new Date();
+      const [endHour, endMinute] = endTime.split(':').map(Number);
+      const endDate = new Date();
+      endDate.setHours(endHour, endMinute, 0, 0);
+      if (endDate < now) {
+        endDate.setDate(endDate.getDate() + 1);
+      }
+      return Math.max(0, Math.round((endDate.getTime() - now.getTime()) / 60000));
     }
     return totalHours * 60 + totalMinutes;
   }, [durationType, endTime, totalHours, totalMinutes]);
@@ -702,139 +703,139 @@ useEffect(() => {
     if (isTimerActive) return;
     const totalMins = calculateTotalSessionMinutes();
     setActivities(prev => prev.map(activity => {
-        const newDuration = Math.round((activity.percentage / 100) * totalMins);
-        return {
-            ...activity,
-            duration: newDuration,
-            timeRemaining: newDuration * 60,
-            isCompleted: false,
-        };
+      const newDuration = Math.round((activity.percentage / 100) * totalMins);
+      return {
+        ...activity,
+        duration: newDuration,
+        timeRemaining: newDuration * 60,
+        isCompleted: false,
+      };
     }));
   }, [activityPercentages, totalSessionMinutes, isTimerActive]);
 
   const handleTimerTick = useCallback(() => {
     setActivities(prev => {
-        const now = Date.now();
-        const elapsedSeconds = Math.round((now - lastTickTimestampRef.current) / 1000);
-        lastTickTimestampRef.current = now;
+      const now = Date.now();
+      const elapsedSeconds = Math.round((now - lastTickTimestampRef.current) / 1000);
+      lastTickTimestampRef.current = now;
 
-        if (elapsedSeconds <= 0) return prev;
+      if (elapsedSeconds <= 0) return prev;
 
-        let newActivities = [...prev];
-        let secondsToProcess = elapsedSeconds;
+      let newActivities = [...prev];
+      let secondsToProcess = elapsedSeconds;
 
-        while (secondsToProcess > 0) {
-            const current = newActivities[currentActivityIndex];
-            if (!current) break;
+      while (secondsToProcess > 0) {
+        const current = newActivities[currentActivityIndex];
+        if (!current) break;
 
-            if (current.timeRemaining > 0) {
-                const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
-                current.timeRemaining -= timeToTake;
-                secondsToProcess -= timeToTake;
-            }
-
-            if (current.timeRemaining <= 0) {
-                if (settings.overtimeType === 'drain') {
-                    const donors = newActivities.map((act, index) => ({...act, originalIndex: index}))
-                        .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
-                    
-                    if (donors.length > 0) {
-                        const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
-                        const donorToDrain = donors[donorIndex];
-                        newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
-                    }
-                    current.timeRemaining -= 1;
-                    secondsToProcess -= 1;
-
-                } else if (settings.overtimeType === 'postpone') {
-                    current.timeRemaining -= secondsToProcess;
-                    secondsToProcess = 0;
-                } else { // 'none'
-                    if (!current.isCompleted) {
-                        current.isCompleted = true;
-                        
-                        const nextIndex = newActivities.findIndex(act => !act.isCompleted);
-                        if (nextIndex !== -1) {
-                            setCurrentActivityIndex(nextIndex);
-                        } else {
-                            setIsTimerActive(false);
-                        }
-                    }
-                    secondsToProcess = 0; // Stop processing after completion
-                }
-            }
+        if (current.timeRemaining > 0) {
+          const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
+          current.timeRemaining -= timeToTake;
+          secondsToProcess -= timeToTake;
         }
-        return newActivities;
+
+        if (current.timeRemaining <= 0) {
+          if (settings.overtimeType === 'drain') {
+            const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
+              .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
+
+            if (donors.length > 0) {
+              const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
+              const donorToDrain = donors[donorIndex];
+              newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
+            }
+            current.timeRemaining -= 1;
+            secondsToProcess -= 1;
+
+          } else if (settings.overtimeType === 'postpone') {
+            current.timeRemaining -= secondsToProcess;
+            secondsToProcess = 0;
+          } else { // 'none'
+            if (!current.isCompleted) {
+              current.isCompleted = true;
+
+              const nextIndex = newActivities.findIndex(act => !act.isCompleted);
+              if (nextIndex !== -1) {
+                setCurrentActivityIndex(nextIndex);
+              } else {
+                setIsTimerActive(false);
+              }
+            }
+            secondsToProcess = 0; // Stop processing after completion
+          }
+        }
+      }
+      return newActivities;
     });
   }, [currentActivityIndex, settings.overtimeType]);
 
   // Main timer loop
   useEffect(() => {
     if (isTimerActive && !isPaused) {
-        lastTickTimestampRef.current = Date.now();
-        const interval = setInterval(handleTimerTick, 1000);
-        return () => clearInterval(interval);
+      lastTickTimestampRef.current = Date.now();
+      const interval = setInterval(handleTimerTick, 1000);
+      return () => clearInterval(interval);
     }
   }, [isTimerActive, isPaused, handleTimerTick]);
 
   // Handle returning to the tab
   useEffect(() => {
     const handleVisibilityChange = () => {
-        if (document.visibilityState === 'visible' && isTimerActive && !isPaused) {
-            handleTimerTick();
-        }
+      if (document.visibilityState === 'visible' && isTimerActive && !isPaused) {
+        handleTimerTick();
+      }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isTimerActive, isPaused, handleTimerTick]);
-  
+
   // Screen Wake Lock
   useEffect(() => {
     const acquireWakeLock = async () => {
-        if ('wakeLock' in navigator && settings.keepScreenAwake) {
-            try {
-                wakeLockRef.current = await navigator.wakeLock.request('screen');
-                console.log('Screen Wake Lock is active.');
-            } catch (err) {
-                console.error(`${err.name}, ${err.message}`);
-            }
+      if ('wakeLock' in navigator && settings.keepScreenAwake) {
+        try {
+          wakeLockRef.current = await navigator.wakeLock.request('screen');
+          console.log('Screen Wake Lock is active.');
+        } catch (err) {
+          console.error(`${err.name}, ${err.message}`);
         }
+      }
     };
 
     const releaseWakeLock = () => {
-        if (wakeLockRef.current) {
-            wakeLockRef.current.release();
-            wakeLockRef.current = null;
-            console.log('Screen Wake Lock released.');
-        }
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release();
+        wakeLockRef.current = null;
+        console.log('Screen Wake Lock released.');
+      }
     };
 
     if (isTimerActive && !isPaused) {
-        acquireWakeLock();
+      acquireWakeLock();
     } else {
-        releaseWakeLock();
+      releaseWakeLock();
     }
 
     return () => {
-        releaseWakeLock();
+      releaseWakeLock();
     };
   }, [isTimerActive, isPaused, settings.keepScreenAwake]);
 
   const formatTime = (seconds) => {
     if (seconds >= 0) {
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const secs = seconds % 60;
-        if (hours > 0) {
-          return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-        }
-        return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = seconds % 60;
+      if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+      }
+      return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
     } else {
-        // Overtime formatting
-        const positiveSeconds = Math.abs(seconds);
-        const minutes = Math.floor(positiveSeconds / 60);
-        const secs = positiveSeconds % 60;
-        return `+${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+      // Overtime formatting
+      const positiveSeconds = Math.abs(seconds);
+      const minutes = Math.floor(positiveSeconds / 60);
+      const secs = positiveSeconds % 60;
+      return `+${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
     }
   };
 
@@ -870,50 +871,50 @@ useEffect(() => {
     const unlockedActivities = activities.filter(a => !a.isLocked);
     const remainingPercentage = 100 - lockedTotal;
     const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
-    
+
     setActivities(prev => prev.map(act => {
-        if (act.isLocked) return act;
-        return { ...act, percentage: equalPercentage };
+      if (act.isLocked) return act;
+      return { ...act, percentage: equalPercentage };
     }));
   };
 
   const updateAndScalePercentages = (idOfChangedActivity, newPercentage) => {
     setActivities(prev => {
-        const lockedTotal = prev.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
-        const maxAllowed = 100 - lockedTotal;
-        const safeNewPercentage = Math.min(newPercentage, maxAllowed);
+      const lockedTotal = prev.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+      const maxAllowed = 100 - lockedTotal;
+      const safeNewPercentage = Math.min(newPercentage, maxAllowed);
 
-        const otherUnlockedActivities = prev.filter(a => !a.isLocked && a.id !== idOfChangedActivity);
-        const otherUnlockedTotal = otherUnlockedActivities.reduce((sum, a) => sum + a.percentage, 0);
-        
-        const remainingForOthers = maxAllowed - safeNewPercentage;
-        const scaleFactor = otherUnlockedTotal > 0 ? remainingForOthers / otherUnlockedTotal : 0;
+      const otherUnlockedActivities = prev.filter(a => !a.isLocked && a.id !== idOfChangedActivity);
+      const otherUnlockedTotal = otherUnlockedActivities.reduce((sum, a) => sum + a.percentage, 0);
 
-        const updatedActivities = prev.map(act => {
-            if (act.id === idOfChangedActivity) {
-                return { ...act, percentage: safeNewPercentage };
-            }
-            if (act.isLocked) {
-                return act;
-            }
-            // It's another unlocked activity, scale it
-            return { ...act, percentage: act.percentage * scaleFactor };
-        });
+      const remainingForOthers = maxAllowed - safeNewPercentage;
+      const scaleFactor = otherUnlockedTotal > 0 ? remainingForOthers / otherUnlockedTotal : 0;
 
-        // Correct for rounding errors to ensure total is exactly 100
-        const finalTotal = updatedActivities.reduce((sum, p) => sum + p.percentage, 0);
-        const diff = 100 - finalTotal;
-        if (Math.abs(diff) > 0.001) {
-            const firstUnlocked = updatedActivities.find(a => !a.isLocked && a.id !== idOfChangedActivity);
-            if (firstUnlocked) {
-                firstUnlocked.percentage += diff;
-            } else {
-                 const changedActivity = updatedActivities.find(a => a.id === idOfChangedActivity);
-                 if(changedActivity) changedActivity.percentage += diff;
-            }
+      const updatedActivities = prev.map(act => {
+        if (act.id === idOfChangedActivity) {
+          return { ...act, percentage: safeNewPercentage };
         }
+        if (act.isLocked) {
+          return act;
+        }
+        // It's another unlocked activity, scale it
+        return { ...act, percentage: act.percentage * scaleFactor };
+      });
 
-        return updatedActivities;
+      // Correct for rounding errors to ensure total is exactly 100
+      const finalTotal = updatedActivities.reduce((sum, p) => sum + p.percentage, 0);
+      const diff = 100 - finalTotal;
+      if (Math.abs(diff) > 0.001) {
+        const firstUnlocked = updatedActivities.find(a => !a.isLocked && a.id !== idOfChangedActivity);
+        if (firstUnlocked) {
+          firstUnlocked.percentage += diff;
+        } else {
+          const changedActivity = updatedActivities.find(a => a.id === idOfChangedActivity);
+          if (changedActivity) changedActivity.percentage += diff;
+        }
+      }
+
+      return updatedActivities;
     });
   };
 
@@ -938,7 +939,7 @@ useEffect(() => {
   };
 
   const pauseResumeTimer = () => {
-      setIsPaused(prev => !prev);
+    setIsPaused(prev => !prev);
   };
 
   const resetSession = useCallback(() => {
@@ -958,7 +959,7 @@ useEffect(() => {
 
   const switchToActivity = (index) => {
     if (!activities[index].isCompleted) {
-        setCurrentActivityIndex(index);
+      setCurrentActivityIndex(index);
     }
   };
 
@@ -969,7 +970,7 @@ useEffect(() => {
       }
       return acc;
     }, []);
-  
+
     if (availableIndices.length > 0) {
       const randomIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
       setCurrentActivityIndex(randomIndex);
@@ -979,42 +980,42 @@ useEffect(() => {
   const handleCompleteActivity = (activityId) => {
     let timeToVault = 0;
     const updatedActivities = activities.map(act => {
-        if (act.id === activityId && !act.isCompleted) {
-            timeToVault = act.timeRemaining;
-            return { ...act, timeRemaining: 0, isCompleted: true };
-        }
-        return act;
+      if (act.id === activityId && !act.isCompleted) {
+        timeToVault = act.timeRemaining;
+        return { ...act, timeRemaining: 0, isCompleted: true };
+      }
+      return act;
     });
 
     if (timeToVault > 0) {
-        setVaultTime(prev => prev + timeToVault);
+      setVaultTime(prev => prev + timeToVault);
     }
-    
+
     setActivities(updatedActivities);
 
     const allCompleted = updatedActivities.every(a => a.isCompleted);
     if (allCompleted) {
-        setIsTimerActive(false);
-        return;
+      setIsTimerActive(false);
+      return;
     }
 
     if (updatedActivities[currentActivityIndex].isCompleted) {
-        const nextIndex = updatedActivities.findIndex((act) => !act.isCompleted);
-        if (nextIndex !== -1) {
-            setCurrentActivityIndex(nextIndex);
-        } else {
-            setIsTimerActive(false);
-        }
+      const nextIndex = updatedActivities.findIndex((act) => !act.isCompleted);
+      if (nextIndex !== -1) {
+        setCurrentActivityIndex(nextIndex);
+      } else {
+        setIsTimerActive(false);
+      }
     }
   };
 
   const handleBorrowTime = (amountInSeconds) => {
     setVaultTime(prev => prev - amountInSeconds);
     setActivities(prev => prev.map(act => {
-        if (act.id === borrowModalState.activityId) {
-            return { ...act, timeRemaining: act.timeRemaining + amountInSeconds };
-        }
-        return act;
+      if (act.id === borrowModalState.activityId) {
+        return { ...act, timeRemaining: act.timeRemaining + amountInSeconds };
+      }
+      return act;
     }));
     setBorrowModalState({ isOpen: false, activityId: '' });
   };
@@ -1038,20 +1039,20 @@ useEffect(() => {
       setFavoriteColors([...favoriteColors, color]);
     }
   };
-  
+
   const handleBarDrag = useCallback((e) => {
     const bar = e.currentTarget;
     const rect = bar.getBoundingClientRect();
-    
+
     let segmentIndex = -1;
     let cumulativePercentage = 0;
     for (let i = 0; i < activities.length - 1; i++) {
-        cumulativePercentage += activities[i].percentage;
-        const handlePosition = rect.left + (cumulativePercentage / 100) * rect.width;
-        if (Math.abs(e.clientX - handlePosition) < 8) {
-            segmentIndex = i;
-            break;
-        }
+      cumulativePercentage += activities[i].percentage;
+      const handlePosition = rect.left + (cumulativePercentage / 100) * rect.width;
+      if (Math.abs(e.clientX - handlePosition) < 8) {
+        segmentIndex = i;
+        break;
+      }
     }
 
     if (segmentIndex === -1) return;
@@ -1060,70 +1061,70 @@ useEffect(() => {
     const rightActivity = activities[segmentIndex + 1];
 
     if (leftActivity.isLocked && rightActivity.isLocked) {
-        return; 
+      return;
     }
 
     const handleMouseMove = (moveEvent) => {
-        moveEvent.preventDefault();
-        
-        const mousePercentage = ((moveEvent.clientX - rect.left) / rect.width) * 100;
-        const prefixPercentage = activities.slice(0, segmentIndex).reduce((sum, act) => sum + act.percentage, 0);
+      moveEvent.preventDefault();
 
-        if (!leftActivity.isLocked && !rightActivity.isLocked) {
-            const newLeftPercentage = mousePercentage - prefixPercentage;
-            const combinedOriginal = leftActivity.percentage + rightActivity.percentage;
-            const newRightPercentage = combinedOriginal - newLeftPercentage;
+      const mousePercentage = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+      const prefixPercentage = activities.slice(0, segmentIndex).reduce((sum, act) => sum + act.percentage, 0);
 
-            if (newLeftPercentage >= 0 && newRightPercentage >= 0) {
-                setActivities(prev => prev.map(act => {
-                    if (act.id === leftActivity.id) return { ...act, percentage: newLeftPercentage };
-                    if (act.id === rightActivity.id) return { ...act, percentage: newRightPercentage };
-                    return act;
-                }));
-            }
-        } else if (!leftActivity.isLocked) {
-            const newLeftPercentage = mousePercentage - prefixPercentage;
-            if (newLeftPercentage >= 0) {
-                updateAndScalePercentages(leftActivity.id, newLeftPercentage);
-            }
-        } else { // !rightActivity.isLocked
-            const newRightPercentage = prefixPercentage + leftActivity.percentage + rightActivity.percentage - mousePercentage;
-             if (newRightPercentage >= 0) {
-                updateAndScalePercentages(rightActivity.id, newRightPercentage);
-            }
+      if (!leftActivity.isLocked && !rightActivity.isLocked) {
+        const newLeftPercentage = mousePercentage - prefixPercentage;
+        const combinedOriginal = leftActivity.percentage + rightActivity.percentage;
+        const newRightPercentage = combinedOriginal - newLeftPercentage;
+
+        if (newLeftPercentage >= 0 && newRightPercentage >= 0) {
+          setActivities(prev => prev.map(act => {
+            if (act.id === leftActivity.id) return { ...act, percentage: newLeftPercentage };
+            if (act.id === rightActivity.id) return { ...act, percentage: newRightPercentage };
+            return act;
+          }));
         }
+      } else if (!leftActivity.isLocked) {
+        const newLeftPercentage = mousePercentage - prefixPercentage;
+        if (newLeftPercentage >= 0) {
+          updateAndScalePercentages(leftActivity.id, newLeftPercentage);
+        }
+      } else { // !rightActivity.isLocked
+        const newRightPercentage = prefixPercentage + leftActivity.percentage + rightActivity.percentage - mousePercentage;
+        if (newRightPercentage >= 0) {
+          updateAndScalePercentages(rightActivity.id, newRightPercentage);
+        }
+      }
     };
 
     const handleMouseUp = () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
     };
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
   }, [activities]);
-  
+
   const getTotalRemainingTime = () => {
     return activities.reduce((sum, activity) => {
-        if (activity.isCompleted) return sum;
-        return sum + Math.max(0, activity.timeRemaining);
+      if (activity.isCompleted) return sum;
+      return sum + Math.max(0, activity.timeRemaining);
     }, 0) + vaultTime;
   };
 
   const getOverallProgress = () => {
     const totalDurationSeconds = activities.reduce((sum, act) => sum + (act.duration * 60), 0);
     if (totalDurationSeconds === 0) return 0;
-    
+
     const totalElapsedSeconds = activities.reduce((sum, act) => {
-        const elapsed = (act.duration * 60) - Math.max(0, act.timeRemaining);
-        return sum + elapsed;
+      const elapsed = (act.duration * 60) - Math.max(0, act.timeRemaining);
+      return sum + elapsed;
     }, 0);
 
     return (totalElapsedSeconds / totalDurationSeconds) * 100;
   };
 
   const currentActivity = activities[currentActivityIndex];
-  
+
   const activityProgress = currentActivity?.duration > 0 ? ((currentActivity.duration * 60 - Math.max(0, currentActivity.timeRemaining)) / (currentActivity.duration * 60)) * 100 : 0;
 
   const mainContent = isTimerActive ? (
@@ -1156,29 +1157,29 @@ useEffect(() => {
         </CardHeader>
         <CardContent className="space-y-6">
           {settings.showMainProgress && (
-             settings.progressView === 'circular' ? (
-                <CircularProgress 
-                    activities={activities}
-                    style={settings.progressBarStyle}
-                    totalProgress={getOverallProgress()}
-                    activityProgress={activityProgress}
-                    activityColor={currentActivity?.color}
-                />
-             ) : (
-                <div className="space-y-2">
-                    <div className="flex justify-between text-sm text-gray-600">
-                        <span>Overall Progress</span>
-                        <span>{Math.round(getOverallProgress())}%</span>
-                    </div>
-                    <VisualProgress
-                        activities={activities}
-                        style={settings.progressBarStyle}
-                        className="h-4"
-                        overallProgress={getOverallProgress()}
-                        currentActivityColor={currentActivity?.color}
-                    />
+            settings.progressView === 'circular' ? (
+              <CircularProgress
+                activities={activities}
+                style={settings.progressBarStyle}
+                totalProgress={getOverallProgress()}
+                activityProgress={activityProgress}
+                activityColor={currentActivity?.color}
+              />
+            ) : (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm text-gray-600">
+                  <span>Overall Progress</span>
+                  <span>{Math.round(getOverallProgress())}%</span>
                 </div>
-             )
+                <VisualProgress
+                  activities={activities}
+                  style={settings.progressBarStyle}
+                  className="h-4"
+                  overallProgress={getOverallProgress()}
+                  currentActivityColor={currentActivity?.color}
+                />
+              </div>
+            )
           )}
           <div className="text-center space-y-4">
             <div className="flex items-center justify-center space-x-3">
@@ -1186,19 +1187,21 @@ useEffect(() => {
               <h2 className="text-3xl font-bold">{currentActivity?.name}</h2>
             </div>
             {settings.showActivityTimer && (
-                <div className="text-6xl font-mono font-bold text-slate-800">{currentActivity?.isCompleted ? "COMPLETED" : formatTime(currentActivity?.timeRemaining || 0)}</div>
+              <div className="text-6xl font-mono font-bold text-slate-800">{currentActivity?.isCompleted ? "COMPLETED" : formatTime(currentActivity?.timeRemaining || 0)}</div>
             )}
             {isPaused && <Badge variant="secondary" className="text-lg px-4 py-2">PAUSED</Badge>}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
             <div className="space-y-1">
-                <div className="text-sm text-gray-600">Time Vault</div>
-                <div className="text-xl font-semibold text-green-600">{formatTime(vaultTime)}</div>
+              <div className="text-sm text-gray-600">Time Vault</div>
+              <div className="text-xl font-semibold text-green-600">{formatTime(vaultTime)}</div>
             </div>
-            <div className="space-y-1">
+            {settings.showEndTime && (
+              <div className="space-y-1">
                 <div className="text-sm text-gray-600">Predicted End</div>
                 <div className="text-xl font-semibold">{getPredictedEndTime()}</div>
-            </div>
+              </div>
+            )}
           </div>
           <Separator />
           <div className="space-y-2">
@@ -1207,30 +1210,25 @@ useEffect(() => {
               {activities.map((activity, index) => {
                 const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - Math.max(0, activity.timeRemaining)) / (activity.duration * 60)) * 100 : 0;
                 const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
-                
                 return (
-                    <div
-                      key={activity.id}
-                      className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border transition-colors ${
-                        index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
+                  <div
+                    key={activity.id}
+                    className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
                       } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}`}
-                      onClick={() => !activity.isCompleted && switchToActivity(index)}
-                    >
-                      {settings.showActivityProgress && (
-                          <div className="absolute top-0 left-0 h-full opacity-20" style={{width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear'}}></div>
-                      )}
-                      <div className="flex items-center space-x-4 z-10">
-                        <input type="checkbox" className="h-5 w-5 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
-                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
-                        <span className={`font-medium ${activity.isCompleted ? 'line-through' : ''}`}>{activity.name}</span>
-                      </div>
-                      <div className="flex items-center gap-2 z-10">
-                        <span className="text-sm text-gray-600">{formatTime(activity.timeRemaining)}</span>
-                        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setBorrowModalState({ isOpen: true, activityId: activity.id })}} disabled={vaultTime <= 0}>
-                            <Icon name="plusCircle" className="h-5 w-5" />
-                        </Button>
-                      </div>
+                    onClick={() => !activity.isCompleted && switchToActivity(index)}
+                  >
+                    {settings.showActivityProgress && (
+                      <div className="absolute top-0 left-0 h-full opacity-20" style={{ width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear' }}></div>
+                    )}
+                    <div className="flex items-center space-x-4 z-10">
+                      <input type="checkbox" className="h-5 w-5 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
+                      <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
+                      <span className="font-semibold">{activity.name}</span>
                     </div>
+                    {settings.showActivityTime && (
+                      <span className="text-sm font-mono z-10">{formatTime(activity.timeRemaining)}</span>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -1240,227 +1238,238 @@ useEffect(() => {
     </div>
   ) : (
     <div className="max-w-4xl mx-auto">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-3xl font-bold">TimeSlice</CardTitle>
-              <Button variant="outline" size="sm" onClick={() => {
-                console.log("showSettings before toggle:", showSettings);
-                setShowSettings(!showSettings);
-              }}>
-                <Icon name="settings" className="h-4 w-4 mr-2" />
-                Settings
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-8">
-            {showSettings && (
-              <Card className="bg-gray-50">
-                <CardHeader>
-                  <CardTitle className="text-lg">Timer Settings</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Overtime Behavior</Label>
-                    <div className="flex items-center gap-2">
-                        <Button size="sm" variant={settings.overtimeType === 'none' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'none'}))}>Off</Button>
-                        <Button size="sm" variant={settings.overtimeType === 'postpone' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'postpone'}))}>Postpone</Button>
-                        <Button size="sm" variant={settings.overtimeType === 'drain' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, overtimeType: 'drain'}))}>Drain</Button>
-                    </div>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-3xl font-bold">TimeSlice</CardTitle>
+            <Button variant="outline" size="sm" onClick={() => {
+              console.log("showSettings before toggle:", showSettings);
+              setShowSettings(!showSettings);
+            }}>
+              <Icon name="settings" className="h-4 w-4 mr-2" />
+              Settings
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-8">
+          {showSettings && (
+            <Card className="bg-gray-50">
+              <CardHeader>
+                <CardTitle className="text-lg">Timer Settings</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Overtime Behavior</Label>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant={settings.overtimeType === 'none' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, overtimeType: 'none' }))}>Off</Button>
+                    <Button size="sm" variant={settings.overtimeType === 'postpone' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, overtimeType: 'postpone' }))}>Postpone</Button>
+                    <Button size="sm" variant={settings.overtimeType === 'drain' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, overtimeType: 'drain' }))}>Drain</Button>
                   </div>
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label>Progress View</Label>
-                    <div className="flex items-center gap-2">
-                        <Button size="sm" variant={settings.progressView === 'linear' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressView: 'linear'}))}>Linear</Button>
-                        <Button size="sm" variant={settings.progressView === 'circular' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressView: 'circular'}))}>Circular</Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Progress Bar Style</Label>
-                    <div className="flex items-center gap-2">
-                        <Button size="sm" variant={settings.progressBarStyle === 'default' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'default'}))}>Default</Button>
-                        <Button size="sm" variant={settings.progressBarStyle === 'dynamicColor' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'dynamicColor'}))}>Dynamic</Button>
-                        <Button size="sm" variant={settings.progressBarStyle === 'segmented' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'segmented'}))}>Segmented</Button>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-allocation-percentage">Show allocation %</Label>
-                    <Switch id="show-allocation-percentage" checked={settings.showAllocationPercentage} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showAllocationPercentage: checked }))} />
-                  </div>
-                  <Separator />
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-progress">Show main progress bar</Label>
-                    <Switch id="show-progress" checked={settings.showMainProgress} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showMainProgress: checked }))} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-overall">Show overall remaining time</Label>
-                    <Switch id="show-overall" checked={settings.showOverallTime} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showOverallTime: checked }))} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-end">Show predicted end time</Label>
-                    <Switch id="show-end" checked={settings.showEndTime} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showEndTime: checked }))} />
-                  </div>
-                   <div className="flex items-center justify-between">
-                    <Label htmlFor="show-activity-timer">Show activity timer display</Label>
-                    <Switch id="show-activity-timer" checked={settings.showActivityTimer} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showActivityTimer: checked }))} />
-                  </div>
-                   <div className="flex items-center justify-between">
-                    <Label htmlFor="show-activity-progress">Show individual activity progress</Label>
-                    <Switch id="show-activity-progress" checked={settings.showActivityProgress} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showActivityProgress: checked }))} />
-                  </div>
-                  {settings.showActivityProgress && (
-                    <div className="flex items-center justify-between pl-4">
-                        <Label>Progress bar style</Label>
-                        <div className="flex items-center gap-4">
-                            <Button size="sm" variant={settings.activityProgressType === 'fill' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, activityProgressType: 'fill'}))}>Fill Up</Button>
-                            <Button size="sm" variant={settings.activityProgressType === 'drain' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, activityProgressType: 'drain'}))}>Drain Down</Button>
-                        </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-
-            <div className="space-y-4">
-              <h2 className="text-xl font-semibold">Session Duration</h2>
-               <div className="flex items-center gap-4 mb-2">
-                    <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')}>Set Duration</Button>
-                    <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')}>Set End Time</Button>
                 </div>
-              {durationType === 'duration' ? (
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex items-center space-x-2">
-                      <Label htmlFor="hours">Hours:</Label>
-                      <Input id="hours" type="number" min="0" max="12" value={totalHours} onChange={(e) => setTotalHours(Number.parseInt(e.target.value) || 0)} className="w-20" />
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <Label htmlFor="minutes">Minutes:</Label>
-                      <Input id="minutes" type="number" min="0" max="59" value={totalMinutes} onChange={(e) => setTotalMinutes(Number.parseInt(e.target.value) || 0)} className="w-20" />
-                    </div>
+                <Separator />
+                <div className="space-y-2">
+                  <Label>Progress View</Label>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant={settings.progressView === 'linear' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressView: 'linear' }))}>Linear</Button>
+                    <Button size="sm" variant={settings.progressView === 'circular' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressView: 'circular' }))}>Circular</Button>
                   </div>
-              ) : (
-                  <div className="flex flex-wrap items-center gap-4">
-                       <div className="flex items-center space-x-2">
-                           <Label htmlFor="end-time">End Time:</Label>
-                           <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-32" />
-                    </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Progress Bar Style</Label>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant={settings.progressBarStyle === 'default' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressBarStyle: 'default' }))}>Default</Button>
+                    <Button size="sm" variant={settings.progressBarStyle === 'dynamicColor' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressBarStyle: 'dynamicColor' }))}>Dynamic</Button>
+                    <Button size="sm" variant={settings.progressBarStyle === 'segmented' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressBarStyle: 'segmented' }))}>Segmented</Button>
                   </div>
-              )}
-               <div className="text-sm text-gray-600">Total session will be {totalSessionMinutes} minutes.</div>
-            </div>
-
-            <div className="space-y-4">
-              <h2 className="text-xl font-semibold">Time Allocation</h2>
-              <div 
-                className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex"
-                onMouseDown={handleBarDrag}
-              >
-                  {activities.map((activity) => (
-                    <div
-                      key={activity.id}
-                      className="h-full flex items-center justify-center text-white font-medium text-sm transition-all duration-200 pointer-events-none"
-                      style={{ width: `${activity.percentage}%`, backgroundColor: activity.color }}
-                    >
-                      {settings.showAllocationPercentage && activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
-                    </div>
-                  ))}
-                {activities.slice(0, -1).map((_, index) => {
-                  const position = activities.slice(0, index + 1).reduce((sum, a) => sum + a.percentage, 0);
-                  const isDividerLocked = activities[index].isLocked && (activities[index + 1] && activities[index + 1].isLocked);
-                  return (
-                    <div 
-                        key={index} 
-                        className={`absolute top-0 w-2 h-full transform -translate-x-1/2  
-                            ${isDividerLocked 
-                                ? 'bg-slate-600/75 cursor-not-allowed' 
-                                : 'bg-white/50 border-x border-slate-400/50 cursor-col-resize'
-                            }`}
-                        style={{ left: `${position}%` }} 
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-allocation-percentage">Show allocation %</Label>
+                  <Switch id="show-allocation-percentage" checked={settings.showAllocationPercentage} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showAllocationPercentage: checked }))} />
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-progress">Show main progress bar</Label>
+                  <Switch id="show-progress" checked={settings.showMainProgress} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showMainProgress: checked }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-overall">Show overall remaining time</Label>
+                  <Switch id="show-overall" checked={settings.showOverallTime} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showOverallTime: checked }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-end">Show predicted end time</Label>
+                  <Switch id="show-end" checked={settings.showEndTime} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showEndTime: checked }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-activity-timer">Show activity timer display</Label>
+                  <Switch id="show-activity-timer" checked={settings.showActivityTimer} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showActivityTimer: checked }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-activity-progress">Show individual activity progress</Label>
+                  <Switch id="show-activity-progress" checked={settings.showActivityProgress} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showActivityProgress: checked }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Show Activity Time</Label>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={settings.showActivityTime}
+                      onCheckedChange={checked => setSettings(s => ({ ...s, showActivityTime: checked }))}
+                      id="show-activity-time-toggle"
                     />
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold">Activities</h2>
-                <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" onClick={handleDistributeEqually}>Distribute</Button>
-                    <Badge variant={Math.abs(totalPercentage - 100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
-                      Total: {Math.round(totalPercentage)}%
-                    </Badge>
+                    <span className="text-sm">Show time remaining for each activity</span>
+                  </div>
                 </div>
-              </div>
-              <div className="space-y-3">
-                {activities.map((activity) => (
-                  <div key={activity.id} className="grid grid-cols-1 sm:grid-cols-12 items-center gap-x-4 gap-y-2 p-3 border rounded-lg">
-                    <button className="sm:col-span-1 w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
-                    
-                    <Input value={activity.name} onChange={(e) => updateActivityName(activity.id, e.target.value)} className="sm:col-span-4" placeholder="Activity name" />
-                    
-                    <div className="sm:col-span-2 flex items-center space-x-2">
-                      <Input 
-                          type="number" 
-                          min="0" max="100" step="1" 
-                          value={Math.round(activity.percentage)} 
-                          onChange={(e) => updateAndScalePercentages(activity.id, Number.parseFloat(e.target.value) || 0)} 
-                          className="w-full"
-                          disabled={activity.isLocked}
-                      />
-                      <span className="text-sm text-gray-600">%</span>
-                    </div>
-
-                    <div className="sm:col-span-2 flex items-center space-x-2">
-                      <Input 
-                          type="number" 
-                          min="0" step="1" 
-                          value={activity.duration} 
-                          onChange={(e) => {
-                              const totalMins = calculateTotalSessionMinutes();
-                              if (totalMins > 0) {
-                                  const newDur = Number.parseInt(e.target.value) || 0;
-                                  const cappedDur = Math.min(newDur, totalMins);
-                                  const newPerc = (cappedDur / totalMins) * 100;
-                                  updateAndScalePercentages(activity.id, newPerc);
-                              }
-                          }}
-                          className="w-full"
-                          disabled={activity.isLocked}
-                      />
-                      <span className="text-sm text-gray-600">min</span>
-                    </div>
-                    
-                    <div className="sm:col-span-1 flex justify-center">
-                        <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)}>
-                          <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
-                        </Button>
-                    </div>
-
-                    <div className="sm:col-span-1 flex justify-end">
-                        <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1}>
-                          <Icon name="trash2" className="h-4 w-4" />
-                        </Button>
+                {settings.showActivityProgress && (
+                  <div className="flex items-center justify-between pl-4">
+                    <Label>Progress bar style</Label>
+                    <div className="flex items-center gap-4">
+                      <Button size="sm" variant={settings.activityProgressType === 'fill' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, activityProgressType: 'fill' }))}>Fill Up</Button>
+                      <Button size="sm" variant={settings.activityProgressType === 'drain' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, activityProgressType: 'drain' }))}>Drain Down</Button>
                     </div>
                   </div>
-                ))}
-              </div>
-              <Button variant="outline" onClick={addActivity} className="w-full bg-transparent">
-                <Icon name="plus" className="h-4 w-4 mr-2" />
-                Add Activity
-              </Button>
-            </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
-            <div className="flex justify-center pt-4">
-              <Button size="lg" onClick={startSession} disabled={Math.abs(totalPercentage - 100) > 0.1} className="px-8 py-3 text-lg">
-                <Icon name="play" className="h-5 w-5 mr-2" />
-                Start Session
-              </Button>
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold">Session Duration</h2>
+            <div className="flex items-center gap-4 mb-2">
+              <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')}>Set Duration</Button>
+              <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')}>Set End Time</Button>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+            {durationType === 'duration' ? (
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center space-x-2">
+                  <Label htmlFor="hours">Hours:</Label>
+                  <Input id="hours" type="number" min="0" max="12" value={totalHours} onChange={(e) => setTotalHours(Number.parseInt(e.target.value) || 0)} className="w-20" />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Label htmlFor="minutes">Minutes:</Label>
+                  <Input id="minutes" type="number" min="0" max="59" value={totalMinutes} onChange={(e) => setTotalMinutes(Number.parseInt(e.target.value) || 0)} className="w-20" />
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center space-x-2">
+                  <Label htmlFor="end-time">End Time:</Label>
+                  <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-32" />
+                </div>
+              </div>
+            )}
+            <div className="text-sm text-gray-600">Total session will be {totalSessionMinutes} minutes.</div>
+          </div>
+
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold">Time Allocation</h2>
+            <div
+              className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex"
+              onMouseDown={handleBarDrag}
+            >
+              {activities.map((activity) => (
+                <div
+                  key={activity.id}
+                  className="h-full flex items-center justify-center text-white font-medium text-sm transition-all duration-200 pointer-events-none"
+                  style={{ width: `${activity.percentage}%`, backgroundColor: activity.color }}
+                >
+                  {settings.showAllocationPercentage && activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
+                </div>
+              ))}
+              {activities.slice(0, -1).map((_, index) => {
+                const position = activities.slice(0, index + 1).reduce((sum, a) => sum + a.percentage, 0);
+                const isDividerLocked = activities[index].isLocked && (activities[index + 1] && activities[index + 1].isLocked);
+                return (
+                  <div
+                    key={index}
+                    className={`absolute top-0 w-2 h-full transform -translate-x-1/2  
+                            ${isDividerLocked
+                        ? 'bg-slate-600/75 cursor-not-allowed'
+                        : 'bg-white/50 border-x border-slate-400/50 cursor-col-resize'
+                      }`}
+                    style={{ left: `${position}%` }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Activities</h2>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={handleDistributeEqually}>Distribute</Button>
+                <Badge variant={Math.abs(totalPercentage - 100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
+                  Total: {Math.round(totalPercentage)}%
+                </Badge>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {activities.map((activity) => (
+                <div key={activity.id} className="grid grid-cols-1 sm:grid-cols-12 items-center gap-x-4 gap-y-2 p-3 border rounded-lg">
+                  <button className="sm:col-span-1 w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
+
+                  <Input value={activity.name} onChange={(e) => updateActivityName(activity.id, e.target.value)} className="sm:col-span-4" placeholder="Activity name" />
+
+                  <div className="sm:col-span-2 flex items-center space-x-2">
+                    <Input
+                      type="number"
+                      min="0" max="100" step="1"
+                      value={Math.round(activity.percentage)}
+                      onChange={(e) => updateAndScalePercentages(activity.id, Number.parseFloat(e.target.value) || 0)}
+                      className="w-full"
+                      disabled={activity.isLocked}
+                    />
+                    <span className="text-sm text-gray-600">%</span>
+                  </div>
+
+                  <div className="sm:col-span-2 flex items-center space-x-2">
+                    <Input
+                      type="number"
+                      min="0" step="1"
+                      value={activity.duration}
+                      onChange={(e) => {
+                        const totalMins = calculateTotalSessionMinutes();
+                        if (totalMins > 0) {
+                          const newDur = Number.parseInt(e.target.value) || 0;
+                          const cappedDur = Math.min(newDur, totalMins);
+                          const newPerc = (cappedDur / totalMins) * 100;
+                          updateAndScalePercentages(activity.id, newPerc);
+                        }
+                      }}
+                      className="w-full"
+                      disabled={activity.isLocked}
+                    />
+                    <span className="text-sm text-gray-600">min</span>
+                  </div>
+
+                  <div className="sm:col-span-1 flex justify-center">
+                    <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)}>
+                      <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
+                    </Button>
+                  </div>
+
+                  <div className="sm:col-span-1 flex justify-end">
+                    <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1}>
+                      <Icon name="trash2" className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Button variant="outline" onClick={addActivity} className="w-full bg-transparent">
+              <Icon name="plus" className="h-4 w-4 mr-2" />
+              Add Activity
+            </Button>
+          </div>
+
+          <div className="flex justify-center pt-4">
+            <Button size="lg" onClick={startSession} disabled={Math.abs(totalPercentage - 100) > 0.1} className="px-8 py-3 text-lg">
+              <Icon name="play" className="h-5 w-5 mr-2" />
+              Start Session
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 
   return (
@@ -1468,12 +1477,12 @@ useEffect(() => {
       {mainContent}
       <ColorPicker isOpen={colorPickerState.isOpen} onClose={closeColorPicker} currentColor={colorPickerState.currentColor} onColorChange={handleColorChange} favorites={favoriteColors} onAddFavorite={addFavoriteColor} />
       {borrowModalState.isOpen && (
-        <BorrowTimeModal 
-            isOpen={borrowModalState.isOpen}
-            onClose={() => setBorrowModalState({ isOpen: false, activityId: ''})}
-            onBorrow={handleBorrowTime}
-            maxTime={vaultTime}
-            activityName={activities.find(a => a.id === borrowModalState.activityId)?.name || ''}
+        <BorrowTimeModal
+          isOpen={borrowModalState.isOpen}
+          onClose={() => setBorrowModalState({ isOpen: false, activityId: '' })}
+          onBorrow={handleBorrowTime}
+          maxTime={vaultTime}
+          activityName={activities.find(a => a.id === borrowModalState.activityId)?.name || ''}
         />
       )}
     </div>
