@@ -156,12 +156,41 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     const strokeWidth = 12;
     const center = size / 2;
     const radius = center - strokeWidth;
-    const circumference = 2 * Math.PI * radius;
     const activityRadius = radius - strokeWidth - 4;
+    const circumference = 2 * Math.PI * radius;
     const activityCircumference = 2 * Math.PI * activityRadius;
     const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
 
     const activityOffset = activityCircumference - (activityProgress / 100) * activityCircumference;
+
+    // --- Divider lines for segmented style ---
+    const renderSegmentDividers = () => {
+        if (style !== 'segmented' || activities.length <= 1 || totalDuration === 0) return null;
+        let accAngle = 0;
+        const lines: React.ReactNode[] = [];
+        for (let i = 0; i < activities.length - 1; i++) {
+            const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
+            accAngle += segmentAngle;
+            const angleRad = ((accAngle - 90) * Math.PI) / 180;
+            const r0 = radius - strokeWidth / 2;
+            const r1 = radius + strokeWidth / 2;
+            const x0 = center + r0 * Math.cos(angleRad);
+            const y0 = center + r0 * Math.sin(angleRad);
+            const x1 = center + r1 * Math.cos(angleRad);
+            const y1 = center + r1 * Math.sin(angleRad);
+            lines.push(
+                <path
+                    key={`divider-${i}`}
+                    d={`M${x0},${y0} L${x1},${y1}`}
+                    stroke="#64748b"
+                    strokeWidth={2}
+                    opacity={0.85}
+                    shapeRendering="crispEdges"
+                />
+            );
+        }
+        return <g id="segment-dividers">{lines}</g>;
+    };
 
     const renderOuterRing = () => {
         if (totalDuration === 0) return null;
@@ -277,34 +306,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                 />
 
                 {/* Segment divider lines for segmented style */}
-                <g id="segment-dividers">
-                  {style === 'segmented' && activities.length > 1 && (() => {
-                    let accAngle = 0;
-                    const lines: React.ReactNode[] = [];
-                    for (let i = 0; i < activities.length - 1; i++) {
-                      const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
-                      accAngle += segmentAngle;
-                      const angleRad = ((accAngle - 90) * Math.PI) / 180;
-                      const r0 = radius - strokeWidth / 2;
-                      const r1 = radius + strokeWidth / 2;
-                      const x0 = center + r0 * Math.cos(angleRad);
-                      const y0 = center + r0 * Math.sin(angleRad);
-                      const x1 = center + r1 * Math.cos(angleRad);
-                      const y1 = center + r1 * Math.sin(angleRad);
-                      lines.push(
-                        <path
-                          key={`divider-${i}`}
-                          d={`M${x0},${y0} L${x1},${y1}`}
-                          stroke="#64748b"
-                          strokeWidth={2}
-                          opacity={0.85}
-                          shapeRendering="crispEdges"
-                        />
-                      );
-                    }
-                    return lines;
-                  })()}
-                </g>
+                {renderSegmentDividers()}
 
                 {/* Outer Progress Ring(s) */}
                 {renderOuterRing()}
