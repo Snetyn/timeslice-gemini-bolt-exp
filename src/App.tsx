@@ -2,8 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // --- Self-Contained UI Components ---
 
-const Icon = ({ name, className }) => {
-  const icons = {
+interface IconProps {
+  name: string;
+  className?: string;
+}
+
+const Icon = ({ name, className }: IconProps) => {
+  const icons: Record<string, React.ReactNode> = {
     plus: <path d="M5 12h14m-7-7v14" />,
     plusCircle: <><circle cx="12" cy="12" r="10" /><path d="M12 8v8m-4-4h8" /></>,
     trash2: <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 8v-4m4 4v-4" />,
