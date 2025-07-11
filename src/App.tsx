@@ -275,6 +275,38 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                     cx={center}
                     cy={center}
                 />
+
+                {/* Segment divider lines for segmented style */}
+                {style === 'segmented' && activities.length > 1 && (() => {
+                    let accAngle = 0;
+                    const lines: React.ReactNode[] = [];
+                    for (let i = 0; i < activities.length - 1; i++) {
+                        const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
+                        accAngle += segmentAngle;
+                        const angleRad = ((accAngle - 90) * Math.PI) / 180;
+                        // Only span the outer ring (not the inner activity ring)
+                        const r0 = radius - strokeWidth / 2; // start at inner edge of outer ring
+                        const r1 = radius + strokeWidth / 2; // end at outer edge of outer ring
+                        const x0 = center + r0 * Math.cos(angleRad);
+                        const y0 = center + r0 * Math.sin(angleRad);
+                        const x1 = center + r1 * Math.cos(angleRad);
+                        const y1 = center + r1 * Math.sin(angleRad);
+                        lines.push(
+                            <line
+                                key={`divider-${i}`}
+                                x1={x0}
+                                y1={y0}
+                                x2={x1}
+                                y2={y1}
+                                stroke="#64748b"
+                                strokeWidth={2}
+                                opacity={0.85}
+                            />
+                        );
+                    }
+                    return lines;
+                })()}
+
                 {/* Outer Progress Ring(s) */}
                 {renderOuterRing()}
 
