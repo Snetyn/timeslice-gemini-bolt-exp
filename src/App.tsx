@@ -23,13 +23,6 @@ const Icon = ({ name, className }) => {
     ),
     x: <path d="M18 6 6 18M6 6l12 12" />,
     heart: <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />,
-    bell: <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M13.73 21a2 2 0 0 1-3.46 0" />,
-    volume2: (
-      <>
-        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-      </>
-    ),
     lock: (
       <>
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -100,11 +93,243 @@ const Badge = ({ variant = 'default', className = '', children }) => {
     return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
-const Progress = ({ value, className = '' }) => (
-  <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
-    <div className="h-full w-full flex-1 bg-slate-900 transition-all" style={{ transform: `translateX(-${100 - (value || 0)}%)` }} />
-  </div>
-);
+const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor }) => {
+    const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
+    if (totalDuration === 0) {
+        return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
+    }
+
+    if (style === 'segmented') {
+        return (
+            <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
+                {activities.map((activity) => {
+                    const segmentWidth = (activity.duration * 60 / totalDuration) * 100;
+                    let fillWidth = 0;
+                    if (activity.isCompleted) {
+                        fillWidth = 100;
+                    } else {
+                        const elapsed = (activity.duration * 60) - activity.timeRemaining;
+                        fillWidth = (elapsed / (activity.duration * 60)) * 100;
+                    }
+
+                    return (
+                        <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full bg-slate-200 border-r-2 border-slate-500 last:border-r-0">
+                            <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full" />
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    }
+    
+    if (style === 'dynamicColor') {
+        return (
+            <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
+                {activities.map(activity => {
+                    const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+                    const widthPercentage = (elapsed / totalDuration) * 100;
+                    
+                    if (widthPercentage === 0) return null;
+
+                    return (
+                        <div
+                            key={activity.id}
+                            style={{ width: `${widthPercentage}%`, backgroundColor: activity.color }}
+                            className="h-full"
+                        />
+                    );
+                })}
+            </div>
+        );
+    }
+
+    // Default style
+    return (
+        <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
+            <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
+        </div>
+    );
+};
+
+const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor }) => {
+    const size = 200;
+    const strokeWidth = 12;
+    const center = size / 2;
+    const radius = center - strokeWidth;
+    const circumference = 2 * Math.PI * radius;
+    const activityRadius = radius - strokeWidth - 4;
+    const activityCircumference = 2 * Math.PI * activityRadius;
+    const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
+
+    const activityOffset = activityCircumference - (activityProgress / 100) * activityCircumference;
+
+    const renderOuterRing = () => {
+        if (totalDuration === 0) return null;
+
+        if (style === 'dynamicColor') {
+            let cumulativeRotation = -90;
+            return activities.map(activity => {
+                const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+                if (elapsed <= 0) return null;
+
+                const progressAngle = (elapsed / totalDuration) * 360;
+                const arcLength = (progressAngle / 360) * circumference;
+                
+                const rotation = cumulativeRotation;
+                cumulativeRotation += progressAngle;
+
+                return (
+                    <circle
+                        key={`progress-${activity.id}`}
+                        stroke={activity.color}
+                        fill="transparent"
+                        strokeWidth={strokeWidth}
+                        strokeDasharray={`${arcLength} ${circumference}`}
+                        r={radius}
+                        cx={center}
+                        cy={center}
+                        transform={`rotate(${rotation} ${center} ${center})`}
+                        strokeLinecap="butt"
+                    />
+                );
+            });
+        }
+
+        if (style === 'segmented') {
+            let cumulativeRotation = -90;
+            return activities.map(activity => {
+                const segmentAngle = (activity.duration * 60 / totalDuration) * 360;
+                const segmentArcLength = (segmentAngle / 360) * circumference;
+                
+                const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+                const progressWithinSegment = activity.duration > 0 ? (elapsed / (activity.duration * 60)) : 0;
+                const fillAngle = segmentAngle * progressWithinSegment;
+                const fillArcLength = (fillAngle / 360) * circumference;
+
+                const rotation = cumulativeRotation;
+                cumulativeRotation += segmentAngle;
+
+                return (
+                    <g key={`segment-${activity.id}`} transform={`rotate(${rotation} ${center} ${center})`}>
+                        <circle
+                            stroke="#e2e8f0"
+                            fill="transparent"
+                            strokeWidth={strokeWidth}
+                            strokeDasharray={`${segmentArcLength} ${circumference}`}
+                            r={radius}
+                            cx={center}
+                            cy={center}
+                            strokeLinecap="butt"
+                        />
+                        {fillArcLength > 0 && (
+                             <circle
+                                stroke={activity.color}
+                                fill="transparent"
+                                strokeWidth={strokeWidth}
+                                strokeDasharray={`${fillArcLength} ${circumference}`}
+                                r={radius}
+                                cx={center}
+                                cy={center}
+                                strokeLinecap="butt"
+                            />
+                        )}
+                    </g>
+                );
+            });
+        }
+
+        // Default style
+        return (
+             <circle
+                stroke="#0f172a"
+                fill="transparent"
+                strokeWidth={strokeWidth}
+                strokeDasharray={circumference}
+                strokeDashoffset={circumference - (totalProgress / 100) * circumference}
+                strokeLinecap="round"
+                r={radius}
+                cx={center}
+                cy={center}
+                transform={`rotate(-90 ${center} ${center})`}
+            />
+        );
+    };
+
+    return (
+        <div className="flex items-center justify-center py-4">
+            <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+                {/* Background circles */}
+                <circle
+                    stroke="#e2e8f0"
+                    fill="transparent"
+                    strokeWidth={strokeWidth}
+                    r={radius}
+                    cx={center}
+                    cy={center}
+                />
+                <circle
+                    stroke="#e2e8f0"
+                    fill="transparent"
+                    strokeWidth={strokeWidth}
+                    r={activityRadius}
+                    cx={center}
+                    cy={center}
+                />
+
+                {/* Segment divider lines for segmented style */}
+                <g id="segment-dividers">
+                  {style === 'segmented' && activities.length > 1 && (() => {
+                    let accAngle = 0;
+                    const lines: React.ReactNode[] = [];
+                    for (let i = 0; i < activities.length - 1; i++) {
+                      const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
+                      accAngle += segmentAngle;
+                      const angleRad = ((accAngle - 90) * Math.PI) / 180;
+                      const r0 = radius - strokeWidth / 2;
+                      const r1 = radius + strokeWidth / 2;
+                      const x0 = center + r0 * Math.cos(angleRad);
+                      const y0 = center + r0 * Math.sin(angleRad);
+                      const x1 = center + r1 * Math.cos(angleRad);
+                      const y1 = center + r1 * Math.sin(angleRad);
+                      lines.push(
+                        <path
+                          key={`divider-${i}`}
+                          d={`M${x0},${y0} L${x1},${y1}`}
+                          stroke="#64748b"
+                          strokeWidth={2}
+                          opacity={0.85}
+                          shapeRendering="crispEdges"
+                        />
+                      );
+                    }
+                    return lines;
+                  })()}
+                </g>
+
+                {/* Outer Progress Ring(s) */}
+                {renderOuterRing()}
+
+                {/* Inner Activity Ring */}
+                <circle
+                    stroke={activityColor}
+                    fill="transparent"
+                    strokeWidth={strokeWidth}
+                    strokeDasharray={activityCircumference}
+                    strokeDashoffset={activityOffset}
+                    strokeLinecap="round"
+                    r={activityRadius}
+                    cx={center}
+                    cy={center}
+                    transform={`rotate(-90 ${center} ${center})`}
+                />
+                <text x="50%" y="50%" textAnchor="middle" dy=".3em" className="text-3xl font-bold fill-current text-slate-700">
+                    {Math.round(totalProgress)}%
+                </text>
+            </svg>
+        </div>
+    );
+};
+
 
 const Switch = ({ checked, onCheckedChange, id }) => (
     <button
@@ -124,46 +349,8 @@ const Switch = ({ checked, onCheckedChange, id }) => (
 
 const Label = ({ className = '', children, ...props }) => <label className={`text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 ${className}`} {...props}>{children}</label>;
 
-// --- Interfaces ---
-interface Activity {
-  id: string;
-  name: string;
-  percentage: number;
-  color: string;
-  duration: number; // in minutes
-  timeRemaining: number; // in seconds
-  isCompleted: boolean;
-  isLocked: boolean;
-}
-
-interface TimerSettings {
-  showMainProgress: boolean;
-  showOverallTime: boolean;
-  showEndTime: boolean;
-  showActivityTimer: boolean;
-  showActivityProgress: boolean;
-  activityProgressType: 'fill' | 'drain';
-  enableNotifications: boolean;
-  playSoundOnEnd: boolean;
-  vibrateOnEnd: boolean;
-  keepScreenAwake: boolean;
-  overtimeType: 'none' | 'postpone' | 'drain';
-}
-
-interface ColorPickerProps {
-  isOpen: boolean;
-  onClose: () => void;
-  currentColor: string;
-  onColorChange: (color: string) => void;
-  favorites: string[];
-  onAddFavorite: (color: string) => void;
-}
-
-// Notification sound - using a data URL for a simple beep sound
-const notificationSound = "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT";
-
 // --- Modals ---
-const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, onAddFavorite }: ColorPickerProps) => {
+const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, onAddFavorite }) => {
   const [hue, setHue] = useState(0);
   const [saturation, setSaturation] = useState(100);
   const [lightness, setLightness] = useState(50);
@@ -188,7 +375,7 @@ const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, 
   }, [hue, saturation, lightness, onColorChange]);
 
   const handleCanvasInteraction = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    (e) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
@@ -357,112 +544,136 @@ const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) =
 
 // --- Main Application Component ---
 export default function App() {
-  const [activities, setActivities] = useState<Activity[]>([
-    { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
-    { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
-  ]);
+  const [activities, setActivities] = useState(() => {
+    try {
+      const savedActivities = localStorage.getItem('timeSliceActivities');
+      if (savedActivities) {
+        return JSON.parse(savedActivities);
+      }
+    } catch (e) {
+      console.error("Failed to load activities from localStorage", e);
+    }
+    return [
+      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
+      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
+    ];
+  });
 
-  const [totalHours, setTotalHours] = useState(2);
-  const [totalMinutes, setTotalMinutes] = useState(0);
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      const swUrl = '/service-worker.js'; // Use absolute path
+      navigator.serviceWorker.register(swUrl)
+        .then(registration => {
+          console.log('ServiceWorker registration successful with scope: ', registration.scope);
+        })
+        .catch(err => {
+          console.log('ServiceWorker registration failed: ', err);
+        });
+    }
+  }, []);
+
+  const [totalHours, setTotalHours] = useState(() => {
+  try {
+    const saved = localStorage.getItem('timeSliceTotalHours');
+    return saved ? JSON.parse(saved) : 2;
+  } catch (e) { return 2; }
+});
+
+const [totalMinutes, setTotalMinutes] = useState(() => {
+  try {
+    const saved = localStorage.getItem('timeSliceTotalMinutes');
+    return saved ? JSON.parse(saved) : 0;
+  } catch (e) { return 0; }
+});
+
   const [isTimerActive, setIsTimerActive] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [currentActivityIndex, setCurrentActivityIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [colorPickerState, setColorPickerState] = useState({ isOpen: false, activityId: "", currentColor: "" });
-  const [favoriteColors, setFavoriteColors] = useState<string[]>([
+  const [favoriteColors, setFavoriteColors] = useState(() => {
+  const defaultValue = [
     "hsl(220, 70%, 50%)", "hsl(120, 60%, 50%)", "hsl(0, 70%, 50%)", "hsl(280, 60%, 50%)", "hsl(40, 80%, 50%)",
-  ]);
-  const [settings, setSettings] = useState<TimerSettings>({
-    showMainProgress: true, 
-    showOverallTime: true, 
-    showEndTime: true, 
+  ];
+  try {
+    const saved = localStorage.getItem('timeSliceFavColors');
+    return saved ? JSON.parse(saved) : defaultValue;
+  } catch (e) {
+    return defaultValue;
+  }
+});
+
+const [settings, setSettings] = useState(() => {
+  const defaultValue = {
+    showMainProgress: true,
+    showOverallTime: true,
+    showEndTime: true,
     showActivityTimer: true,
-    showActivityProgress: false, 
+    showActivityProgress: false,
     activityProgressType: 'drain',
-    enableNotifications: false,
-    playSoundOnEnd: false,
-    vibrateOnEnd: false,
     keepScreenAwake: false,
     overtimeType: 'none',
-  });
-  const [durationType, setDurationType] = useState<'duration' | 'endTime'>('duration');
+    showAllocationPercentage: true,
+    progressBarStyle: 'default',
+    progressView: 'linear',
+  };
+  try {
+    const saved = localStorage.getItem('timeSliceSettings');
+    return saved ? { ...defaultValue, ...JSON.parse(saved) } : defaultValue;
+  } catch (e) {
+    return defaultValue;
+  }
+});
+  const [durationType, setDurationType] = useState('duration');
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
   const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
-  
-  const lastTickTimestampRef = useRef<number>(0);
+
+// --- Start of State Saving Logic ---
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceActivities', JSON.stringify(activities));
+  } catch (e) {
+    console.error("Failed to save activities", e);
+  }
+}, [activities]);
+
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceSettings', JSON.stringify(settings));
+  } catch (e) {
+    console.error("Failed to save settings", e);
+  }
+}, [settings]);
+
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceFavColors', JSON.stringify(favoriteColors));
+  } catch (e) {
+    console.error("Failed to save favorite colors", e);
+  }
+}, [favoriteColors]);
+
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceTotalHours', JSON.stringify(totalHours));
+  } catch (e) {
+    console.error("Failed to save total hours", e);
+  }
+}, [totalHours]);
+
+useEffect(() => {
+  try {
+    localStorage.setItem('timeSliceTotalMinutes', JSON.stringify(totalMinutes));
+  } catch (e) {
+    console.error("Failed to save total minutes", e);
+  }
+}, [totalMinutes]);
+// --- End of State Saving Logic ---
+
+  const lastTickTimestampRef = useRef(0);
   const lastDrainedIndex = useRef(-1);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const wakeLockRef = useRef<any>(null);
-
-  // Request notification permission
-  const requestNotificationPermission = async () => {
-    if (!("Notification" in window)) {
-      alert("This browser does not support notifications");
-      setSettings(prev => ({ ...prev, enableNotifications: false }));
-      return;
-    }
-
-    if (Notification.permission === "default") {
-      const permission = await Notification.requestPermission();
-      if (permission === "denied") {
-        setSettings(prev => ({ ...prev, enableNotifications: false }));
-      }
-    } else if (Notification.permission === "denied") {
-      alert("Notifications are blocked. Please enable them in your browser settings.");
-      setSettings(prev => ({ ...prev, enableNotifications: false }));
-    }
-  };
-
-  const playVibration = () => {
-    if (settings.vibrateOnEnd && 'vibrate' in navigator) {
-      navigator.vibrate([200, 100, 200]);
-    }
-  };
-
-  // Play notification sound
-  const playNotificationSound = () => {
-    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-        audioContextRef.current.resume();
-    }
-    try {
-      const audio = new Audio(notificationSound);
-      audio.play().catch(error => {
-        console.warn("Could not play notification sound:", error);
-      });
-    } catch (error) {
-      console.warn("Error creating audio:", error);
-    }
-  };
-
-  // Send notification
-  const sendNotification = (title: string, body: string) => {
-    if (settings.enableNotifications && Notification.permission === "granted") {
-      try {
-        const notification = new Notification(title, {
-          body,
-          icon: "/vite.svg",
-          badge: "/vite.svg",
-          tag: "timeslice-timer",
-          requireInteraction: true,
-          silent: !settings.playSoundOnEnd
-        });
-
-        // Auto-close notification after 10 seconds
-        setTimeout(() => {
-          notification.close();
-        }, 10000);
-
-        // Handle notification click
-        notification.onclick = () => {
-          window.focus();
-          notification.close();
-        };
-      } catch (error) {
-        console.warn("Could not send notification:", error);
-      }
-    }
-  };
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   const calculateTotalSessionMinutes = useCallback(() => {
     if (durationType === 'endTime') {
@@ -537,9 +748,6 @@ export default function App() {
                 } else { // 'none'
                     if (!current.isCompleted) {
                         current.isCompleted = true;
-                        sendNotification("Activity Completed!", `${current.name} has finished.`);
-                        if (settings.playSoundOnEnd) playNotificationSound();
-                        playVibration();
                         
                         const nextIndex = newActivities.findIndex(act => !act.isCompleted);
                         if (nextIndex !== -1) {
@@ -554,7 +762,7 @@ export default function App() {
         }
         return newActivities;
     });
-  }, [currentActivityIndex, settings.overtimeType, settings.playSoundOnEnd, settings.vibrateOnEnd]);
+  }, [currentActivityIndex, settings.overtimeType]);
 
   // Main timer loop
   useEffect(() => {
@@ -581,9 +789,9 @@ export default function App() {
     const acquireWakeLock = async () => {
         if ('wakeLock' in navigator && settings.keepScreenAwake) {
             try {
-                wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+                wakeLockRef.current = await navigator.wakeLock.request('screen');
                 console.log('Screen Wake Lock is active.');
-            } catch (err: any) {
+            } catch (err) {
                 console.error(`${err.name}, ${err.message}`);
             }
         }
@@ -608,7 +816,7 @@ export default function App() {
     };
   }, [isTimerActive, isPaused, settings.keepScreenAwake]);
 
-  const formatTime = (seconds: number) => {
+  const formatTime = (seconds) => {
     if (seconds >= 0) {
         const hours = Math.floor(seconds / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
@@ -634,7 +842,7 @@ export default function App() {
   };
 
   const addActivity = () => {
-    const newActivity: Activity = {
+    const newActivity = {
       id: Date.now().toString(),
       name: "New Activity",
       percentage: 0,
@@ -644,16 +852,28 @@ export default function App() {
       isCompleted: false,
       isLocked: false,
     };
-    setActivities([...activities, newActivity]);
+    setActivities(prev => [...prev, newActivity]);
   };
 
-  const removeActivity = (id: string) => {
+  const removeActivity = (id) => {
     if (activities.length > 1) {
       setActivities(activities.filter((activity) => activity.id !== id));
     }
   };
 
-  const updateAndScalePercentages = (idOfChangedActivity: string, newPercentage: number) => {
+  const handleDistributeEqually = () => {
+    const lockedTotal = activities.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+    const unlockedActivities = activities.filter(a => !a.isLocked);
+    const remainingPercentage = 100 - lockedTotal;
+    const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
+    
+    setActivities(prev => prev.map(act => {
+        if (act.isLocked) return act;
+        return { ...act, percentage: equalPercentage };
+    }));
+  };
+
+  const updateAndScalePercentages = (idOfChangedActivity, newPercentage) => {
     setActivities(prev => {
         const lockedTotal = prev.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
         const maxAllowed = 100 - lockedTotal;
@@ -693,37 +913,23 @@ export default function App() {
     });
   };
 
-  const toggleLockActivity = (id: string) => {
+  const toggleLockActivity = (id) => {
     setActivities(prev => prev.map(act => act.id === id ? { ...act, isLocked: !act.isLocked } : act));
   };
 
-  const updateActivityName = (id: string, name: string) => {
+  const updateActivityName = (id, name) => {
     setActivities((prev) => prev.map((activity) => (activity.id === id ? { ...activity, name } : activity)));
   };
 
-  const updateActivityColor = (id: string, color: string) => {
+  const updateActivityColor = (id, color) => {
     setActivities((prev) => prev.map((activity) => (activity.id === id ? { ...activity, color } : activity)));
   };
 
   const startSession = () => {
-    // Unlock audio context on user gesture
-    if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    }
-    if (audioContextRef.current.state === 'suspended') {
-        audioContextRef.current.resume();
-    }
-
     if (Math.abs(totalPercentage - 100) < 0.1) {
       setIsTimerActive(true);
       setIsPaused(false);
       setCurrentActivityIndex(activities.findIndex(a => !a.isCompleted) ?? 0);
-      
-      // Send session start notification
-      sendNotification(
-        "Session Started!",
-        `Starting with ${activities[0]?.name}. Focus time begins now!`
-      );
     }
   };
 
@@ -746,14 +952,14 @@ export default function App() {
     setCurrentActivityIndex(0);
   }, [calculateTotalSessionMinutes]);
 
-  const switchToActivity = (index: number) => {
+  const switchToActivity = (index) => {
     if (!activities[index].isCompleted) {
         setCurrentActivityIndex(index);
     }
   };
 
   const selectRandomActivity = useCallback(() => {
-    const availableIndices = activities.reduce((acc: number[], activity, index) => {
+    const availableIndices = activities.reduce((acc, activity, index) => {
       if (!activity.isCompleted && index !== currentActivityIndex) {
         acc.push(index);
       }
@@ -766,7 +972,7 @@ export default function App() {
     }
   }, [activities, currentActivityIndex]);
 
-  const handleCompleteActivity = (activityId: string) => {
+  const handleCompleteActivity = (activityId) => {
     let timeToVault = 0;
     const updatedActivities = activities.map(act => {
         if (act.id === activityId && !act.isCompleted) {
@@ -798,7 +1004,7 @@ export default function App() {
     }
   };
 
-  const handleBorrowTime = (amountInSeconds: number) => {
+  const handleBorrowTime = (amountInSeconds) => {
     setVaultTime(prev => prev - amountInSeconds);
     setActivities(prev => prev.map(act => {
         if (act.id === borrowModalState.activityId) {
@@ -809,7 +1015,7 @@ export default function App() {
     setBorrowModalState({ isOpen: false, activityId: '' });
   };
 
-  const openColorPicker = (activityId: string, currentColor: string) => {
+  const openColorPicker = (activityId, currentColor) => {
     setColorPickerState({ isOpen: true, activityId, currentColor });
   };
 
@@ -817,19 +1023,19 @@ export default function App() {
     setColorPickerState({ isOpen: false, activityId: "", currentColor: "" });
   };
 
-  const handleColorChange = React.useCallback((color: string) => {
+  const handleColorChange = React.useCallback((color) => {
     if (colorPickerState.activityId) {
       updateActivityColor(colorPickerState.activityId, color);
     }
   }, [colorPickerState.activityId]);
 
-  const addFavoriteColor = (color: string) => {
+  const addFavoriteColor = (color) => {
     if (!favoriteColors.includes(color)) {
       setFavoriteColors([...favoriteColors, color]);
     }
   };
   
-  const handleBarDrag = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handleBarDrag = useCallback((e) => {
     const bar = e.currentTarget;
     const rect = bar.getBoundingClientRect();
     
@@ -853,7 +1059,7 @@ export default function App() {
         return; 
     }
 
-    const handleMouseMove = (moveEvent: MouseEvent) => {
+    const handleMouseMove = (moveEvent) => {
         moveEvent.preventDefault();
         
         const mousePercentage = ((moveEvent.clientX - rect.left) / rect.width) * 100;
@@ -912,29 +1118,9 @@ export default function App() {
     return (totalElapsedSeconds / totalDurationSeconds) * 100;
   };
 
-  const handleNotificationToggle = async (checked: boolean) => {
-    if (checked) {
-      await requestNotificationPermission();
-      // Only update if permission was granted or already granted
-      if (Notification.permission === "granted") {
-        setSettings(prev => ({ ...prev, enableNotifications: true }));
-      }
-    } else {
-      setSettings(prev => ({ ...prev, enableNotifications: false }));
-    }
-  };
-
-  const testNotification = () => {
-    sendNotification("Test Notification", "This is a test notification from TimeSlice!");
-    if (settings.playSoundOnEnd) {
-      playNotificationSound();
-    }
-    if (settings.vibrateOnEnd) {
-      playVibration();
-    }
-  };
-  
   const currentActivity = activities[currentActivityIndex];
+  
+  const activityProgress = currentActivity?.duration > 0 ? ((currentActivity.duration * 60 - Math.max(0, currentActivity.timeRemaining)) / (currentActivity.duration * 60)) * 100 : 0;
 
   const mainContent = isTimerActive ? (
     <div className="max-w-2xl mx-auto">
@@ -966,13 +1152,29 @@ export default function App() {
         </CardHeader>
         <CardContent className="space-y-6">
           {settings.showMainProgress && (
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm text-gray-600">
-                <span>Overall Progress</span>
-                <span>{Math.round(getOverallProgress())}%</span>
-              </div>
-              <Progress value={getOverallProgress()} className="h-2" />
-            </div>
+             settings.progressView === 'circular' ? (
+                <CircularProgress 
+                    activities={activities}
+                    style={settings.progressBarStyle}
+                    totalProgress={getOverallProgress()}
+                    activityProgress={activityProgress}
+                    activityColor={currentActivity?.color}
+                />
+             ) : (
+                <div className="space-y-2">
+                    <div className="flex justify-between text-sm text-gray-600">
+                        <span>Overall Progress</span>
+                        <span>{Math.round(getOverallProgress())}%</span>
+                    </div>
+                    <VisualProgress
+                        activities={activities}
+                        style={settings.progressBarStyle}
+                        className="h-4"
+                        overallProgress={getOverallProgress()}
+                        currentActivityColor={currentActivity?.color}
+                    />
+                </div>
+             )
           )}
           <div className="text-center space-y-4">
             <div className="flex items-center justify-center space-x-3">
@@ -992,7 +1194,7 @@ export default function App() {
             <div className="space-y-1">
                 <div className="text-sm text-gray-600">Predicted End</div>
                 <div className="text-xl font-semibold">{getPredictedEndTime()}</div>
-              </div>
+            </div>
           </div>
           <Separator />
           <div className="space-y-2">
@@ -1063,6 +1265,26 @@ export default function App() {
                     </div>
                   </div>
                   <Separator />
+                  <div className="space-y-2">
+                    <Label>Progress View</Label>
+                    <div className="flex items-center gap-2">
+                        <Button size="sm" variant={settings.progressView === 'linear' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressView: 'linear'}))}>Linear</Button>
+                        <Button size="sm" variant={settings.progressView === 'circular' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressView: 'circular'}))}>Circular</Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Progress Bar Style</Label>
+                    <div className="flex items-center gap-2">
+                        <Button size="sm" variant={settings.progressBarStyle === 'default' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'default'}))}>Default</Button>
+                        <Button size="sm" variant={settings.progressBarStyle === 'dynamicColor' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'dynamicColor'}))}>Dynamic</Button>
+                        <Button size="sm" variant={settings.progressBarStyle === 'segmented' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({...prev, progressBarStyle: 'segmented'}))}>Segmented</Button>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="show-allocation-percentage">Show allocation %</Label>
+                    <Switch id="show-allocation-percentage" checked={settings.showAllocationPercentage} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showAllocationPercentage: checked }))} />
+                  </div>
+                  <Separator />
                   <div className="flex items-center justify-between">
                     <Label htmlFor="show-progress">Show main progress bar</Label>
                     <Switch id="show-progress" checked={settings.showMainProgress} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showMainProgress: checked }))} />
@@ -1092,77 +1314,6 @@ export default function App() {
                         </div>
                     </div>
                   )}
-                  
-                  <Separator />
-                  
-                  <div className="space-y-4">
-                    <h3 className="font-semibold flex items-center gap-2">
-                      <Icon name="bell" className="h-4 w-4" />
-                      Notification Settings
-                    </h3>
-                    
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <Label htmlFor="enable-notifications">Enable browser notifications</Label>
-                        <p className="text-xs text-gray-500">Get notified when activities complete</p>
-                      </div>
-                      <Switch 
-                        id="enable-notifications" 
-                        checked={settings.enableNotifications} 
-                        onCheckedChange={handleNotificationToggle} 
-                      />
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <Label htmlFor="play-sound">Play sound on timer end</Label>
-                        <p className="text-xs text-gray-500">Audio alert when activities finish</p>
-                      </div>
-                      <Switch 
-                        id="play-sound" 
-                        checked={settings.playSoundOnEnd} 
-                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, playSoundOnEnd: checked }))} 
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <Label htmlFor="vibrate-on-end">Vibrate on timer end</Label>
-                        <p className="text-xs text-gray-500">Vibrate device when activities finish</p>
-                      </div>
-                      <Switch 
-                        id="vibrate-on-end" 
-                        checked={settings.vibrateOnEnd} 
-                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, vibrateOnEnd: checked }))} 
-                      />
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <Label htmlFor="keep-screen-awake">Keep screen awake</Label>
-                        <p className="text-xs text-gray-500">Prevent screen from sleeping during session</p>
-                      </div>
-                      <Switch 
-                        id="keep-screen-awake" 
-                        checked={settings.keepScreenAwake} 
-                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, keepScreenAwake: checked }))} 
-                      />
-                    </div>
-                    
-                    {(settings.enableNotifications || settings.playSoundOnEnd || settings.vibrateOnEnd) && (
-                      <div className="pt-2">
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          onClick={testNotification}
-                          className="w-full"
-                        >
-                          <Icon name="volume2" className="h-4 w-4 mr-2" />
-                          Test Alerts
-                        </Button>
-                      </div>
-                    )}
-                  </div>
                 </CardContent>
               </Card>
             )}
@@ -1207,7 +1358,7 @@ export default function App() {
                       className="h-full flex items-center justify-center text-white font-medium text-sm transition-all duration-200 pointer-events-none"
                       style={{ width: `${activity.percentage}%`, backgroundColor: activity.color }}
                     >
-                      {activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
+                      {settings.showAllocationPercentage && activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
                     </div>
                   ))}
                 {activities.slice(0, -1).map((_, index) => {
@@ -1231,9 +1382,12 @@ export default function App() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold">Activities</h2>
-                <Badge variant={Math.abs(totalPercentage - 100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
-                  Total: {Math.round(totalPercentage)}%
-                </Badge>
+                <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={handleDistributeEqually}>Distribute</Button>
+                    <Badge variant={Math.abs(totalPercentage - 100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
+                      Total: {Math.round(totalPercentage)}%
+                    </Badge>
+                </div>
               </div>
               <div className="space-y-3">
                 {activities.map((activity) => (
@@ -1276,7 +1430,7 @@ export default function App() {
                     
                     <div className="sm:col-span-1 flex justify-center">
                         <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)}>
-                          <Icon name={activity.isLocked ? 'lock' : 'unlock'} className="h-4 w-4" />
+                          <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
                         </Button>
                     </div>
 
