@@ -45,6 +45,7 @@ const Icon = ({ name, className }) => {
         <path d="M16 16h.01" />
       </>
     ),
+    arrowUpDown: <path d="M7 15l5 5 5-5M7 9l5-5 5 5" />,
   };
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -513,6 +514,12 @@ const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) =
     }
   };
 
+  const handleBorrowAll = () => {
+    if (maxTime > 0) {
+      onBorrow(maxTime);
+    }
+  };
+
   const maxMinutes = Math.floor(maxTime / 60);
   const maxSeconds = maxTime % 60;
 
@@ -537,6 +544,9 @@ const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) =
           </div>
           <div className="flex justify-end space-x-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button variant="outline" onClick={handleBorrowAll} disabled={maxTime <= 0}>
+              Borrow All
+            </Button>
             <Button onClick={handleBorrow}>Borrow</Button>
           </div>
         </CardContent>
@@ -545,6 +555,194 @@ const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) =
   );
 };
 
+// Rest Time Counter Component (NEW)
+const RestTimeCounter = ({ restTime, onSpendTime, className = "" }) => {
+  const [showSpendModal, setShowSpendModal] = useState(false);
+  const [spendAmount, setSpendAmount] = useState(60);
+
+  const formatTime = (seconds) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    }
+    return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const handleSpend = () => {
+    if (spendAmount > 0 && spendAmount <= restTime) {
+      onSpendTime(spendAmount);
+      setShowSpendModal(false);
+    }
+  };
+
+  return (
+    <div className={`bg-green-50 border border-green-200 rounded-lg p-4 ${className}`}>
+      <div className="text-center space-y-1">
+        <div className="text-sm font-medium text-green-700">Rest Time Available</div>
+        <div className="text-2xl font-bold text-green-600">{formatTime(restTime)}</div>
+        <div className="text-xs text-green-600">Free time for recreation</div>
+        {restTime > 0 && (
+          <Button 
+            size="sm" 
+            variant="outline" 
+            className="mt-2" 
+            onClick={() => setShowSpendModal(true)}
+          >
+            Use Rest Time
+          </Button>
+        )}
+      </div>
+      
+      {/* Spend Rest Time Modal */}
+      {showSpendModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-xs">
+            <CardHeader>
+              <CardTitle className="text-sm">Use Rest Time</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm">Amount (seconds)</label>
+                <Input 
+                  type="number" 
+                  min="1" 
+                  max={restTime} 
+                  value={spendAmount} 
+                  onChange={e => setSpendAmount(Math.min(restTime, Math.max(1, Number(e.target.value) || 1)))} 
+                />
+              </div>
+              <div className="flex justify-end space-x-2">
+                <Button variant="outline" onClick={() => setShowSpendModal(false)}>Cancel</Button>
+                <Button onClick={handleSpend}>Use Time</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Siphon Time Modal Component (NEW)
+const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sourceActivityId, targetActivityId, targetIsVault }) => {
+  const [minutes, setMinutes] = useState(1);
+  const [seconds, setSeconds] = useState(0);
+
+  if (!isOpen) return null;
+
+  const sourceActivity = activities.find(a => a.id === sourceActivityId);
+  const targetActivity = targetIsVault ? null : activities.find(a => a.id === targetActivityId);
+  
+  const maxAmount = sourceActivityId === 'vault' ? vaultTime : (sourceActivity?.timeRemaining || 0);
+  const maxMinutes = Math.floor(maxAmount / 60);
+  const maxSecondsTotal = maxAmount % 60;
+
+  const handleSiphon = () => {
+    const totalSeconds = minutes * 60 + seconds;
+    if (totalSeconds > 0 && totalSeconds <= maxAmount) {
+      onSiphon(sourceActivityId, targetActivityId, totalSeconds, targetIsVault);
+      onClose();
+    }
+  };
+
+  const handleTransferAll = () => {
+    if (maxAmount > 0) {
+      onSiphon(sourceActivityId, targetActivityId, maxAmount, targetIsVault);
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="text-sm">Transfer Time</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p>Available: <span className="font-semibold">{maxMinutes}m {maxSecondsTotal}s</span></p>
+          <div className="flex items-center gap-4">
+            <div className="space-y-1">
+              <label>Minutes</label>
+              <Input 
+                type="number" 
+                min="0" 
+                max={maxMinutes} 
+                value={minutes} 
+                onChange={e => setMinutes(Math.min(maxMinutes, Math.max(0, Number(e.target.value) || 0)))} 
+              />
+            </div>
+            <div className="space-y-1">
+              <label>Seconds</label>
+              <Input 
+                type="number" 
+                min="0" 
+                max="59" 
+                value={seconds} 
+                onChange={e => setSeconds(Math.min(59, Math.max(0, Number(e.target.value) || 0)))} 
+              />
+            </div>
+          </div>
+          <div className="flex justify-end space-x-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button variant="outline" onClick={handleTransferAll} disabled={maxAmount <= 0}>
+              Transfer All
+            </Button>
+            <Button onClick={handleSiphon}>Transfer</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+// Add Activity Modal Component (NEW)
+const AddActivityModal = ({ isOpen, onClose, onAdd }) => {
+  const [activityName, setActivityName] = React.useState("");
+
+  if (!isOpen) return null;
+
+  const handleAdd = () => {
+    const name = activityName.trim() || "New Activity";
+    onAdd(name);
+    setActivityName("");
+    onClose();
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      handleAdd();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="text-sm">Add New Activity</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Activity Name</Label>
+            <Input 
+              type="text" 
+              placeholder="Enter activity name..."
+              value={activityName} 
+              onChange={e => setActivityName(e.target.value)}
+              onKeyPress={handleKeyPress}
+              autoFocus
+            />
+          </div>
+          <div className="flex justify-end space-x-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={handleAdd}>Add Activity</Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
 
 // --- Main Application Component ---
 export default function App() {
@@ -552,7 +750,21 @@ export default function App() {
     try {
       const savedActivities = localStorage.getItem('timeSliceActivities');
       if (savedActivities) {
-        return JSON.parse(savedActivities);
+        const parsed = JSON.parse(savedActivities);
+        // Validate and sanitize loaded activities
+        if (Array.isArray(parsed)) {
+          return parsed.map(activity => ({
+            ...activity,
+            name: String(activity.name || "New Activity"), // Ensure name is always a string
+            id: String(activity.id || Date.now()),
+            percentage: Number(activity.percentage || 0),
+            color: String(activity.color || "hsl(220, 70%, 50%)"),
+            duration: Number(activity.duration || 0),
+            timeRemaining: Number(activity.timeRemaining || 0),
+            isCompleted: Boolean(activity.isCompleted),
+            isLocked: Boolean(activity.isLocked)
+          }));
+        }
       }
     } catch (e) {
       console.error("Failed to load activities from localStorage", e);
@@ -632,7 +844,69 @@ export default function App() {
   const [durationType, setDurationType] = useState('duration');
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
+  
+  // Rest Time functionality (NEW)
+  const [restTime, setRestTime] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceRestTime');
+      return saved ? JSON.parse(saved) : 300; // Default 5 minutes
+    } catch (e) { return 300; }
+  });
+  
   const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
+  
+  // Siphon Modal State (NEW)
+  const [siphonModalState, setSiphonModalState] = useState({ 
+    isOpen: false, 
+    sourceActivityId: '', 
+    targetActivityId: '', 
+    targetIsVault: false 
+  });
+
+  // Add Activity Modal State (NEW)
+  const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
+
+  // Function to earn rest time (NEW)
+  const earnRestTime = (amount) => {
+    setRestTime(prev => prev + amount);
+  };
+
+  // Function to spend rest time (NEW)
+  const spendRestTime = (amount) => {
+    setRestTime(prev => Math.max(0, prev - amount));
+  };
+
+  // Siphon Time functionality (NEW)
+  const siphonTime = (sourceActivityId, targetActivityId, amount, targetIsVault = false) => {
+    if (targetIsVault) {
+      setActivities(prev => prev.map(act => {
+        if (act.id === sourceActivityId) {
+          return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
+        }
+        return act;
+      }));
+      setVaultTime(prev => prev + amount);
+    } else if (sourceActivityId === 'vault') {
+      const actualAmount = Math.min(amount, vaultTime);
+      setVaultTime(prev => prev - actualAmount);
+      setActivities(prev => prev.map(act => {
+        if (act.id === targetActivityId) {
+          return { ...act, timeRemaining: act.timeRemaining + actualAmount };
+        }
+        return act;
+      }));
+    } else {
+      setActivities(prev => prev.map(act => {
+        if (act.id === sourceActivityId) {
+          return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
+        }
+        if (act.id === targetActivityId) {
+          return { ...act, timeRemaining: act.timeRemaining + amount };
+        }
+        return act;
+      }));
+    }
+  };
 
   // --- Start of State Saving Logic ---
   useEffect(() => {
@@ -674,6 +948,15 @@ export default function App() {
       console.error("Failed to save total minutes", e);
     }
   }, [totalMinutes]);
+  
+  // Save rest time to localStorage (NEW)
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceRestTime', JSON.stringify(restTime));
+    } catch (e) {
+      console.error("Failed to save rest time", e);
+    }
+  }, [restTime]);
   // --- End of State Saving Logic ---
 
   const lastTickTimestampRef = useRef(0);
@@ -846,23 +1129,80 @@ export default function App() {
     return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  const addActivity = () => {
+  const addActivity = (customName = null) => {
+    // If timer is active and no custom name provided, open modal
+    if (isTimerActive && customName === null) {
+      setAddActivityModalState({ isOpen: true });
+      return;
+    }
+
+    // Ensure the name is always a string
+    let activityName = "New Activity";
+    if (customName !== null && customName !== undefined) {
+      // Convert to string and trim
+      const nameStr = String(customName);
+      if (nameStr && nameStr.trim()) {
+        activityName = nameStr.trim();
+      }
+    }
+
+    console.log('Creating activity with name:', activityName);
+
     const newActivity = {
       id: Date.now().toString(),
-      name: "New Activity",
+      name: activityName,
       percentage: 0,
       color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`,
       duration: 0,
-      timeRemaining: 0,
+      timeRemaining: isTimerActive ? 0 : 0, // Start with 0 time during session
       isCompleted: false,
       isLocked: false,
     };
-    setActivities(prev => [...prev, newActivity]);
+    
+    setActivities(prev => {
+      const updatedActivities = [...prev, newActivity];
+      
+      // If timer is not active, redistribute percentages equally
+      if (!isTimerActive) {
+        const lockedTotal = updatedActivities.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+        const unlockedActivities = updatedActivities.filter(a => !a.isLocked);
+        const remainingPercentage = 100 - lockedTotal;
+        const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
+
+        return updatedActivities.map(act => {
+          if (act.isLocked) return act;
+          return { ...act, percentage: equalPercentage };
+        });
+      }
+      
+      return updatedActivities;
+    });
+  };
+
+  const handleAddActivityWithName = (name) => {
+    addActivity(name);
   };
 
   const removeActivity = (id) => {
     if (activities.length > 1) {
-      setActivities(activities.filter((activity) => activity.id !== id));
+      setActivities(prev => {
+        const filteredActivities = prev.filter((activity) => activity.id !== id);
+        
+        // If timer is not active, redistribute percentages equally
+        if (!isTimerActive) {
+          const lockedTotal = filteredActivities.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+          const unlockedActivities = filteredActivities.filter(a => !a.isLocked);
+          const remainingPercentage = 100 - lockedTotal;
+          const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
+
+          return filteredActivities.map(act => {
+            if (act.isLocked) return act;
+            return { ...act, percentage: equalPercentage };
+          });
+        }
+        
+        return filteredActivities;
+      });
     }
   };
 
@@ -923,7 +1263,10 @@ export default function App() {
   };
 
   const updateActivityName = (id, name) => {
-    setActivities((prev) => prev.map((activity) => (activity.id === id ? { ...activity, name } : activity)));
+    // Ensure name is always a string
+    const safeName = String(name || "New Activity");
+    console.log('Updating activity name:', id, 'to:', safeName);
+    setActivities((prev) => prev.map((activity) => (activity.id === id ? { ...activity, name: safeName } : activity)));
   };
 
   const updateActivityColor = (id, color) => {
@@ -931,10 +1274,16 @@ export default function App() {
   };
 
   const startSession = () => {
-    if (Math.abs(totalPercentage - 100) < 0.1) {
+    if (Math.abs(totalPercentage - 100) < 0.1 && activities.length > 0) {
+      console.log('Starting session with activities:', activities);
       setIsTimerActive(true);
       setIsPaused(false);
-      setCurrentActivityIndex(activities.findIndex(a => !a.isCompleted) ?? 0);
+      const firstIncompleteIndex = activities.findIndex(a => !a.isCompleted);
+      const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
+      console.log('Setting current activity index to:', newIndex, 'activity:', activities[newIndex]);
+      setCurrentActivityIndex(newIndex);
+    } else {
+      console.error('Cannot start session - invalid state:', { totalPercentage, activitiesLength: activities.length });
     }
   };
 
@@ -1123,7 +1472,25 @@ export default function App() {
     return (totalElapsedSeconds / totalDurationSeconds) * 100;
   };
 
-  const currentActivity = activities[currentActivityIndex];
+  // Ensure currentActivityIndex is valid and currentActivity exists
+  const validCurrentActivityIndex = Math.max(0, Math.min(currentActivityIndex, activities.length - 1));
+  const currentActivity = activities[validCurrentActivityIndex] || null;
+
+  // If no current activity exists, this indicates a serious state issue
+  if (isTimerActive && !currentActivity) {
+    console.error('Timer is active but no current activity found. Activities:', activities, 'currentActivityIndex:', currentActivityIndex);
+    // Reset to first incomplete activity or first activity
+    const firstIncompleteIndex = activities.findIndex(a => !a.isCompleted);
+    if (firstIncompleteIndex !== -1) {
+      setCurrentActivityIndex(firstIncompleteIndex);
+    } else if (activities.length > 0) {
+      setCurrentActivityIndex(0);
+    } else {
+      // No activities at all - this should never happen
+      setIsTimerActive(false);
+    }
+    return <div className="text-center text-red-500">Loading...</div>;
+  }
 
   const activityProgress = currentActivity?.duration > 0 ? ((currentActivity.duration * 60 - Math.max(0, currentActivity.timeRemaining)) / (currentActivity.duration * 60)) * 100 : 0;
 
@@ -1191,11 +1558,28 @@ export default function App() {
             )}
             {isPaused && <Badge variant="secondary" className="text-lg px-4 py-2">PAUSED</Badge>}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
             <div className="space-y-1">
               <div className="text-sm text-gray-600">Time Vault</div>
               <div className="text-xl font-semibold text-green-600">{formatTime(vaultTime)}</div>
+              {vaultTime > 0 && (
+                <Button 
+                  size="sm" 
+                  variant="outline" 
+                  className="mt-2" 
+                  onClick={() => setBorrowModalState({ isOpen: true, activityId: currentActivity?.id || '' })}
+                  title="Borrow time from vault"
+                >
+                  <Icon name="arrowUpDown" className="h-4 w-4 mr-1" />
+                  Borrow
+                </Button>
+              )}
             </div>
+            <RestTimeCounter 
+              restTime={restTime} 
+              onSpendTime={spendRestTime} 
+              className=""
+            />
             {settings.showEndTime && (
               <div className="space-y-1">
                 <div className="text-sm text-gray-600">Predicted End</div>
@@ -1225,13 +1609,36 @@ export default function App() {
                       <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
                       <span className="font-semibold">{activity.name}</span>
                     </div>
-                    {settings.showActivityTime && (
-                      <span className="text-sm font-mono z-10">{formatTime(activity.timeRemaining)}</span>
-                    )}
+                    <div className="flex items-center space-x-2">
+                      {settings.showActivityTime && (
+                        <span className="text-sm font-mono z-10">{formatTime(activity.timeRemaining)}</span>
+                      )}
+                      <Button 
+                        size="sm" 
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSiphonModalState({
+                            isOpen: true,
+                            sourceActivityId: activity.id,
+                            targetActivityId: 'vault',
+                            targetIsVault: true
+                          });
+                        }}
+                        disabled={activity.timeRemaining <= 0}
+                        title="Transfer time to vault"
+                      >
+                        <Icon name="arrowUpDown" className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 );
               })}
             </div>
+            <Button variant="outline" onClick={addActivity} className="w-full mt-2 bg-blue-50 border-blue-200 hover:bg-blue-100">
+              <Icon name="plus" className="h-4 w-4 mr-2" />
+              Add Activity
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -1359,6 +1766,13 @@ export default function App() {
             <div className="text-sm text-gray-600">Total session will be {totalSessionMinutes} minutes.</div>
           </div>
 
+          {/* Rest Time Counter - moved to prominent position */}
+          <RestTimeCounter 
+            restTime={restTime} 
+            onSpendTime={spendRestTime} 
+            className="max-w-sm mx-auto"
+          />
+
           <div className="space-y-4">
             <h2 className="text-xl font-semibold">Time Allocation</h2>
             <div
@@ -1397,7 +1811,7 @@ export default function App() {
               <h2 className="text-xl font-semibold">Activities</h2>
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="outline" onClick={handleDistributeEqually}>Distribute</Button>
-                <Badge variant={Math.abs(totalPercentage - 100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
+                <Badge variant={Math.abs(totalPercentage -  100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
                   Total: {Math.round(totalPercentage)}%
                 </Badge>
               </div>
@@ -1483,6 +1897,25 @@ export default function App() {
           onBorrow={handleBorrowTime}
           maxTime={vaultTime}
           activityName={activities.find(a => a.id === borrowModalState.activityId)?.name || ''}
+        />
+      )}
+      {siphonModalState.isOpen && (
+        <SiphonTimeModal
+          isOpen={siphonModalState.isOpen}
+          onClose={() => setSiphonModalState({ isOpen: false, sourceActivityId: '', targetActivityId: '', targetIsVault: false })}
+          onSiphon={siphonTime}
+          activities={activities}
+          vaultTime={vaultTime}
+          sourceActivityId={siphonModalState.sourceActivityId}
+          targetActivityId={siphonModalState.targetActivityId}
+          targetIsVault={siphonModalState.targetIsVault}
+        />
+      )}
+      {addActivityModalState.isOpen && (
+        <AddActivityModal
+          isOpen={addActivityModalState.isOpen}
+          onClose={() => setAddActivityModalState({ isOpen: false })}
+          onAdd={handleAddActivityWithName}
         />
       )}
     </div>
