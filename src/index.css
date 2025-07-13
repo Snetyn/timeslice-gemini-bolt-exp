@@ -12,4 +12,29 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  /* PWA touch optimizations */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* PWA button optimizations */
+button {
+  touch-action: manipulation;
+  -webkit-appearance: none;
+}
+
+/* Prevent zoom on focus for PWA */
+input[type="number"], input[type="text"] {
+  font-size: 16px;
+}
+
+/* Better touch targets for PWA */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
 }

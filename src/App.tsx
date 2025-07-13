@@ -573,6 +573,7 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
 
   const handleSiphon = () => {
     const totalSeconds = minutes * 60 + seconds;
+    console.log('handleSiphon called with:', { totalSeconds, maxAmount });
     if (totalSeconds > 0 && totalSeconds <= maxAmount) {
       onSiphon(sourceActivityId, targetActivityId, totalSeconds, targetIsVault);
       onClose();
@@ -580,18 +581,31 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
   };
 
   const handleTransferAll = () => {
+    console.log('handleTransferAll called with maxAmount:', maxAmount);
     if (maxAmount > 0) {
       onSiphon(sourceActivityId, targetActivityId, maxAmount, targetIsVault);
       onClose();
     }
   };
 
+  const handleCloseModal = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('Modal close triggered');
+    onClose();
+  };
+
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-sm">Transfer Time</CardTitle>
-        </CardHeader>
+    <div 
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      onClick={handleCloseModal}
+      style={{ touchAction: 'manipulation' }}
+    >
+      <div onClick={(e) => e.stopPropagation()}>
+        <Card className="w-full max-w-sm">
+          <CardHeader>
+            <CardTitle className="text-sm">Transfer Time</CardTitle>
+          </CardHeader>
         <CardContent className="space-y-4">
           <p>Available: <span className="font-semibold">{maxMinutes}m {maxSecondsTotal}s</span></p>
           <div className="flex items-center gap-4">
@@ -617,14 +631,31 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
             </div>
           </div>
           <div className="flex justify-end space-x-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button variant="outline" onClick={handleTransferAll} disabled={maxAmount <= 0}>
+            <Button 
+              variant="outline" 
+              onClick={handleCloseModal}
+              style={{ touchAction: 'manipulation' }}
+            >
+              Cancel
+            </Button>
+            <Button 
+              variant="outline" 
+              onClick={handleTransferAll} 
+              disabled={maxAmount <= 0}
+              style={{ touchAction: 'manipulation' }}
+            >
               Transfer All
             </Button>
-            <Button onClick={handleSiphon}>Transfer</Button>
+            <Button 
+              onClick={handleSiphon}
+              style={{ touchAction: 'manipulation' }}
+            >
+              Transfer
+            </Button>
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 };
@@ -788,6 +819,14 @@ export default function App() {
     targetIsVault: false 
   });
 
+  // Debug modal state changes
+  useEffect(() => {
+    console.log('Siphon modal state changed:', siphonModalState);
+    if (siphonModalState.isOpen) {
+      console.log('Modal should be visible now!');
+    }
+  }, [siphonModalState]);
+
   // Add Activity Modal State (NEW)
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
 
@@ -890,18 +929,22 @@ export default function App() {
   // This effect keeps durations in sync with percentages and total time
   const activityPercentages = activities.map(a => a.percentage).join(',');
   useEffect(() => {
+    console.log('Duration sync effect triggered:', { isTimerActive, totalSessionMinutes, activityPercentages });
     if (isTimerActive) return;
     const totalMins = calculateTotalSessionMinutes();
+    console.log('Calculated total minutes:', totalMins);
     setActivities(prev => prev.map(activity => {
       const newDuration = Math.round((activity.percentage / 100) * totalMins);
+      const newTimeRemaining = newDuration * 60;
+      console.log(`Activity ${activity.name}: ${activity.percentage}% = ${newDuration}min = ${newTimeRemaining}sec`);
       return {
         ...activity,
         duration: newDuration,
-        timeRemaining: newDuration * 60,
+        timeRemaining: newTimeRemaining,
         isCompleted: false,
       };
     }));
-  }, [activityPercentages, totalSessionMinutes, isTimerActive]);
+  }, [activityPercentages, totalSessionMinutes, isTimerActive, calculateTotalSessionMinutes]);
 
   const handleTimerTick = useCallback(() => {
     setActivities(prev => {
@@ -1511,7 +1554,7 @@ export default function App() {
                       <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
                       <span className="font-semibold">{activity.name}</span>
                     </div>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
                       {settings.showActivityTime && (
                         <span className="text-sm font-mono z-10">{formatTime(activity.timeRemaining)}</span>
                       )}
@@ -1519,16 +1562,28 @@ export default function App() {
                         size="sm" 
                         variant="ghost"
                         onClick={(e) => {
+                          console.log('Transfer button clicked - preventing all propagation');
+                          e.preventDefault();
                           e.stopPropagation();
+                          e.nativeEvent.stopImmediatePropagation();
+                          console.log('Activity:', activity.id, 'timeRemaining:', activity.timeRemaining);
+                          
+                          console.log('Setting siphon modal state...');
                           setSiphonModalState({
                             isOpen: true,
                             sourceActivityId: activity.id,
                             targetActivityId: 'vault',
                             targetIsVault: true
                           });
+                          console.log('Siphon modal state set');
+                          return false;
                         }}
-                        disabled={activity.timeRemaining <= 0}
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                        }}
+                        disabled={false} // TEMPORARILY DISABLED THE DISABLE CONDITION
                         title="Transfer time to vault"
+                        className="bg-blue-100 hover:bg-blue-200 z-20 relative"
                       >
                         <Icon name="arrowUpDown" className="h-4 w-4" />
                       </Button>
