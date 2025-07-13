@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 
 // --- Self-Contained UI Components ---
 
@@ -555,75 +555,7 @@ const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) =
   );
 };
 
-// Rest Time Counter Component (NEW)
-const RestTimeCounter = ({ restTime, onSpendTime, className = "" }) => {
-  const [showSpendModal, setShowSpendModal] = useState(false);
-  const [spendAmount, setSpendAmount] = useState(60);
 
-  const formatTime = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-    }
-    return `${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  const handleSpend = () => {
-    if (spendAmount > 0 && spendAmount <= restTime) {
-      onSpendTime(spendAmount);
-      setShowSpendModal(false);
-    }
-  };
-
-  return (
-    <div className={`bg-green-50 border border-green-200 rounded-lg p-4 ${className}`}>
-      <div className="text-center space-y-1">
-        <div className="text-sm font-medium text-green-700">Rest Time Available</div>
-        <div className="text-2xl font-bold text-green-600">{formatTime(restTime)}</div>
-        <div className="text-xs text-green-600">Free time for recreation</div>
-        {restTime > 0 && (
-          <Button 
-            size="sm" 
-            variant="outline" 
-            className="mt-2" 
-            onClick={() => setShowSpendModal(true)}
-          >
-            Use Rest Time
-          </Button>
-        )}
-      </div>
-      
-      {/* Spend Rest Time Modal */}
-      {showSpendModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-xs">
-            <CardHeader>
-              <CardTitle className="text-sm">Use Rest Time</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm">Amount (seconds)</label>
-                <Input 
-                  type="number" 
-                  min="1" 
-                  max={restTime} 
-                  value={spendAmount} 
-                  onChange={e => setSpendAmount(Math.min(restTime, Math.max(1, Number(e.target.value) || 1)))} 
-                />
-              </div>
-              <div className="flex justify-end space-x-2">
-                <Button variant="outline" onClick={() => setShowSpendModal(false)}>Cancel</Button>
-                <Button onClick={handleSpend}>Use Time</Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-    </div>
-  );
-};
 
 // Siphon Time Modal Component (NEW)
 const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sourceActivityId, targetActivityId, targetIsVault }) => {
@@ -845,13 +777,6 @@ export default function App() {
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
   
-  // Rest Time functionality (NEW)
-  const [restTime, setRestTime] = useState(() => {
-    try {
-      const saved = localStorage.getItem('timeSliceRestTime');
-      return saved ? JSON.parse(saved) : 300; // Default 5 minutes
-    } catch (e) { return 300; }
-  });
   
   const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
   
@@ -865,16 +790,6 @@ export default function App() {
 
   // Add Activity Modal State (NEW)
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
-
-  // Function to earn rest time (NEW)
-  const earnRestTime = (amount) => {
-    setRestTime(prev => prev + amount);
-  };
-
-  // Function to spend rest time (NEW)
-  const spendRestTime = (amount) => {
-    setRestTime(prev => Math.max(0, prev - amount));
-  };
 
   // Siphon Time functionality (NEW)
   const siphonTime = (sourceActivityId, targetActivityId, amount, targetIsVault = false) => {
@@ -949,14 +864,6 @@ export default function App() {
     }
   }, [totalMinutes]);
   
-  // Save rest time to localStorage (NEW)
-  useEffect(() => {
-    try {
-      localStorage.setItem('timeSliceRestTime', JSON.stringify(restTime));
-    } catch (e) {
-      console.error("Failed to save rest time", e);
-    }
-  }, [restTime]);
   // --- End of State Saving Logic ---
 
   const lastTickTimestampRef = useRef(0);
@@ -1575,11 +1482,6 @@ export default function App() {
                 </Button>
               )}
             </div>
-            <RestTimeCounter 
-              restTime={restTime} 
-              onSpendTime={spendRestTime} 
-              className=""
-            />
             {settings.showEndTime && (
               <div className="space-y-1">
                 <div className="text-sm text-gray-600">Predicted End</div>
@@ -1765,14 +1667,6 @@ export default function App() {
             )}
             <div className="text-sm text-gray-600">Total session will be {totalSessionMinutes} minutes.</div>
           </div>
-
-          {/* Rest Time Counter - moved to prominent position */}
-          <RestTimeCounter 
-            restTime={restTime} 
-            onSpendTime={spendRestTime} 
-            className="max-w-sm mx-auto"
-          />
-
           <div className="space-y-4">
             <h2 className="text-xl font-semibold">Time Allocation</h2>
             <div
