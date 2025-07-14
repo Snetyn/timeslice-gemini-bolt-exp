@@ -535,11 +535,47 @@ const BorrowTimeModal = ({ isOpen, onClose, onBorrow, maxTime, activityName }) =
           <div className="flex items-center gap-4">
             <div className="space-y-1">
               <Label htmlFor="borrow-minutes">Minutes</Label>
-              <Input id="borrow-minutes" type="number" min="0" max={maxMinutes} value={minutes} onChange={e => setMinutes(Number(e.target.value))} />
+              <Input 
+                id="borrow-minutes" 
+                type="number" 
+                min="0" 
+                max={maxMinutes} 
+                value={minutes} 
+                onChange={e => {
+                  const value = e.target.value;
+                  if (value === '') {
+                    setMinutes(0);
+                  } else {
+                    setMinutes(Math.max(0, Math.min(maxMinutes, Number(value) || 0)));
+                  }
+                }}
+                onBlur={e => {
+                  const value = Number(e.target.value) || 0;
+                  setMinutes(Math.max(0, Math.min(maxMinutes, value)));
+                }}
+              />
             </div>
             <div className="space-y-1">
               <Label htmlFor="borrow-seconds">Seconds</Label>
-              <Input id="borrow-seconds" type="number" min="0" max="59" value={seconds} onChange={e => setSeconds(Number(e.target.value))} />
+              <Input 
+                id="borrow-seconds" 
+                type="number" 
+                min="0" 
+                max="59" 
+                value={seconds} 
+                onChange={e => {
+                  const value = e.target.value;
+                  if (value === '') {
+                    setSeconds(0);
+                  } else {
+                    setSeconds(Math.max(0, Math.min(59, Number(value) || 0)));
+                  }
+                }}
+                onBlur={e => {
+                  const value = Number(e.target.value) || 0;
+                  setSeconds(Math.max(0, Math.min(59, value)));
+                }}
+              />
             </div>
           </div>
           <div className="flex justify-end space-x-2">
@@ -616,7 +652,18 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
                 min="0" 
                 max={maxMinutes} 
                 value={minutes} 
-                onChange={e => setMinutes(Math.min(maxMinutes, Math.max(0, Number(e.target.value) || 0)))} 
+                onChange={e => {
+                  const value = e.target.value;
+                  if (value === '') {
+                    setMinutes(0);
+                  } else {
+                    setMinutes(Math.min(maxMinutes, Math.max(0, Number(value) || 0)));
+                  }
+                }}
+                onBlur={e => {
+                  const value = Number(e.target.value) || 0;
+                  setMinutes(Math.min(maxMinutes, Math.max(0, value)));
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -626,7 +673,18 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
                 min="0" 
                 max="59" 
                 value={seconds} 
-                onChange={e => setSeconds(Math.min(59, Math.max(0, Number(e.target.value) || 0)))} 
+                onChange={e => {
+                  const value = e.target.value;
+                  if (value === '') {
+                    setSeconds(0);
+                  } else {
+                    setSeconds(Math.min(59, Math.max(0, Number(value) || 0)));
+                  }
+                }}
+                onBlur={e => {
+                  const value = Number(e.target.value) || 0;
+                  setSeconds(Math.min(59, Math.max(0, value)));
+                }}
               />
             </div>
           </div>
@@ -667,8 +725,12 @@ const AddActivityModal = ({ isOpen, onClose, onAdd }) => {
   if (!isOpen) return null;
 
   const handleAdd = () => {
-    const name = activityName.trim() || "New Activity";
-    onAdd(name);
+    const name = activityName.trim();
+    if (name) {
+      onAdd(name);
+    } else {
+      onAdd("New Activity");
+    }
     setActivityName("");
     onClose();
   };
@@ -679,27 +741,42 @@ const AddActivityModal = ({ isOpen, onClose, onAdd }) => {
     }
   };
 
+  const handleClose = () => {
+    setActivityName("");
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-sm">
+      <Card className="w-full max-w-sm mx-4">
         <CardHeader>
-          <CardTitle className="text-sm">Add New Activity</CardTitle>
+          <CardTitle className="text-lg text-center">Name Your Activity</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label>Activity Name</Label>
+          <div className="space-y-3">
+            <Label className="text-base">What would you like to call this activity?</Label>
             <Input 
               type="text" 
-              placeholder="Enter activity name..."
+              placeholder="e.g., Study Math, Exercise, Reading..."
               value={activityName} 
               onChange={e => setActivityName(e.target.value)}
               onKeyPress={handleKeyPress}
               autoFocus
+              className="text-base py-3"
             />
+            {!activityName.trim() && (
+              <p className="text-sm text-gray-500 text-center">
+                Leave empty to use "New Activity"
+              </p>
+            )}
           </div>
-          <div className="flex justify-end space-x-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button onClick={handleAdd}>Add Activity</Button>
+          <div className="flex justify-end space-x-3 pt-2">
+            <Button variant="outline" onClick={handleClose} className="px-6">
+              Cancel
+            </Button>
+            <Button onClick={handleAdd} className="px-6">
+              Add {activityName.trim() ? `"${activityName.trim()}"` : '"New Activity"'}
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -1340,18 +1417,19 @@ export default function App() {
   };
 
   const addActivity = (customName = null) => {
-    // If timer is active and no custom name provided, open modal
-    if (isTimerActive && customName === null) {
+    // Always open modal if no custom name provided - this ensures all activity creation goes through naming dialog
+    // This is especially important for mobile users who shouldn't need to click into input fields to rename
+    if (customName === null || customName === undefined || customName === '') {
       setAddActivityModalState({ isOpen: true });
       return;
     }
 
-    // Ensure the name is always a string
+    // Ensure the name is always a string and not an object
     let activityName = "New Activity";
     if (customName !== null && customName !== undefined) {
-      // Convert to string and trim
-      const nameStr = String(customName);
-      if (nameStr && nameStr.trim()) {
+      // Convert to string and trim, handle any unexpected object types
+      const nameStr = typeof customName === 'string' ? customName : String(customName);
+      if (nameStr && nameStr.trim() && nameStr !== '[object Object]') {
         activityName = nameStr.trim();
       }
     }
@@ -1473,10 +1551,9 @@ export default function App() {
   };
 
   const updateActivityName = (id, name) => {
-    // Ensure name is always a string
-    const safeName = String(name || "New Activity");
-    console.log('Updating activity name:', id, 'to:', safeName);
-    setActivities((prev) => prev.map((activity) => (activity.id === id ? { ...activity, name: safeName } : activity)));
+    // Allow empty string during editing, only default when saving/blur
+    console.log('Updating activity name:', id, 'to:', name);
+    setActivities((prev) => prev.map((activity) => (activity.id === id ? { ...activity, name: name } : activity)));
   };
 
   const updateActivityColor = (id, color) => {
@@ -1989,7 +2066,18 @@ export default function App() {
                               min="2" 
                               max="10" 
                               value={settings.flowmodoroRatio}
-                              onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroRatio: Number(e.target.value) || 5 }))}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                if (value === '') {
+                                  setSettings(prev => ({ ...prev, flowmodoroRatio: 5 }));
+                                } else {
+                                  setSettings(prev => ({ ...prev, flowmodoroRatio: Math.max(2, Math.min(10, Number(value) || 5)) }));
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const value = Number(e.target.value) || 5;
+                                setSettings(prev => ({ ...prev, flowmodoroRatio: Math.max(2, Math.min(10, value)) }));
+                              }}
                               className="w-16"
                             />
                             <span className="text-sm text-gray-600">:1 (work:rest)</span>
@@ -2084,11 +2172,53 @@ export default function App() {
               <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center space-x-2">
                   <Label htmlFor="hours">Hours:</Label>
-                  <Input id="hours" type="number" min="0" max="12" value={totalHours} onChange={(e) => setTotalHours(Number.parseInt(e.target.value) || 0)} className="w-20" />
+                  <Input 
+                    id="hours" 
+                    type="number" 
+                    min="0" 
+                    max="12" 
+                    value={totalHours} 
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      // Allow empty string during editing
+                      if (value === '') {
+                        setTotalHours(0);
+                      } else {
+                        setTotalHours(Number.parseInt(value) || 0);
+                      }
+                    }}
+                    onBlur={(e) => {
+                      // Ensure valid value on blur
+                      const value = Number.parseInt(e.target.value) || 0;
+                      setTotalHours(Math.max(0, Math.min(12, value)));
+                    }}
+                    className="w-20" 
+                  />
                 </div>
                 <div className="flex items-center space-x-2">
                   <Label htmlFor="minutes">Minutes:</Label>
-                  <Input id="minutes" type="number" min="0" max="59" value={totalMinutes} onChange={(e) => setTotalMinutes(Number.parseInt(e.target.value) || 0)} className="w-20" />
+                  <Input 
+                    id="minutes" 
+                    type="number" 
+                    min="0" 
+                    max="59" 
+                    value={totalMinutes} 
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      // Allow empty string during editing
+                      if (value === '') {
+                        setTotalMinutes(0);
+                      } else {
+                        setTotalMinutes(Number.parseInt(value) || 0);
+                      }
+                    }}
+                    onBlur={(e) => {
+                      // Ensure valid value on blur
+                      const value = Number.parseInt(e.target.value) || 0;
+                      setTotalMinutes(Math.max(0, Math.min(59, value)));
+                    }}
+                    className="w-20" 
+                  />
                 </div>
               </div>
             ) : (
@@ -2149,14 +2279,38 @@ export default function App() {
                 <div key={activity.id} className="grid grid-cols-1 sm:grid-cols-12 items-center gap-x-4 gap-y-2 p-3 border rounded-lg">
                   <button className="sm:col-span-1 w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
 
-                  <Input value={activity.name} onChange={(e) => updateActivityName(activity.id, e.target.value)} className="sm:col-span-4" placeholder="Activity name" />
+                  <Input 
+                    value={activity.name} 
+                    onChange={(e) => updateActivityName(activity.id, e.target.value)} 
+                    onBlur={(e) => {
+                      // If name is empty on blur, set default
+                      if (!e.target.value.trim()) {
+                        updateActivityName(activity.id, "New Activity");
+                      }
+                    }}
+                    className="sm:col-span-4" 
+                    placeholder="Activity name" 
+                  />
 
                   <div className="sm:col-span-2 flex items-center space-x-2">
                     <Input
                       type="number"
                       min="0" max="100" step="1"
                       value={Math.round(activity.percentage)}
-                      onChange={(e) => updateAndScalePercentages(activity.id, Number.parseFloat(e.target.value) || 0)}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        // Allow empty string during editing
+                        if (value === '') {
+                          updateAndScalePercentages(activity.id, 0);
+                        } else {
+                          updateAndScalePercentages(activity.id, Number.parseFloat(value) || 0);
+                        }
+                      }}
+                      onBlur={(e) => {
+                        // Ensure valid value on blur
+                        const value = Number.parseFloat(e.target.value) || 0;
+                        updateAndScalePercentages(activity.id, Math.max(0, Math.min(100, value)));
+                      }}
                       className="w-full"
                       disabled={activity.isLocked}
                     />
