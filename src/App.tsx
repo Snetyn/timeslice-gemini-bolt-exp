@@ -722,10 +722,15 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
 const AddActivityModal = ({ isOpen, onClose, onAdd }) => {
   const [activityName, setActivityName] = React.useState("");
 
+  console.log('AddActivityModal render, isOpen:', isOpen);
+
   if (!isOpen) return null;
+
+  console.log('AddActivityModal is open, rendering modal');
 
   const handleAdd = () => {
     const name = activityName.trim();
+    console.log('AddActivityModal handleAdd called with name:', name);
     if (name) {
       onAdd(name);
     } else {
@@ -987,6 +992,11 @@ export default function App() {
 
   // Add Activity Modal State (NEW)
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
+
+  // Debug modal state changes
+  useEffect(() => {
+    console.log('Add activity modal state changed:', addActivityModalState);
+  }, [addActivityModalState]);
 
   // Helper function to check if flowmodoro should reset
   const checkIfShouldReset = (currentTime, lastResetTime) => {
@@ -1419,10 +1429,16 @@ export default function App() {
   const addActivity = (customName = null) => {
     // Always open modal if no custom name provided - this ensures all activity creation goes through naming dialog
     // This is especially important for mobile users who shouldn't need to click into input fields to rename
+    console.log('addActivity called with customName:', customName, 'type:', typeof customName);
+    console.log('Current addActivityModalState:', addActivityModalState);
     if (customName === null || customName === undefined || customName === '') {
+      console.log('Opening add activity modal');
       setAddActivityModalState({ isOpen: true });
+      console.log('Modal state set to open, returning early');
       return;
     }
+
+    console.log('Creating activity with custom name (bypassing modal)');
 
     // Ensure the name is always a string and not an object
     let activityName = "New Activity";
@@ -1942,7 +1958,7 @@ export default function App() {
                 );
               })}
             </div>
-            <Button variant="outline" onClick={addActivity} className="w-full mt-2 bg-blue-50 border-blue-200 hover:bg-blue-100">
+            <Button variant="outline" onClick={() => addActivity()} className="w-full mt-2 bg-blue-50 border-blue-200 hover:bg-blue-100">
               <Icon name="plus" className="h-4 w-4 mr-2" />
               Add Activity
             </Button>
@@ -2351,7 +2367,7 @@ export default function App() {
                 </div>
               ))}
             </div>
-            <Button variant="outline" onClick={addActivity} className="w-full bg-transparent">
+            <Button variant="outline" onClick={() => addActivity()} className="w-full bg-transparent">
               <Icon name="plus" className="h-4 w-4 mr-2" />
               Add Activity
             </Button>
