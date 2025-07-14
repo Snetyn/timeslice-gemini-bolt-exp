@@ -707,6 +707,80 @@ const AddActivityModal = ({ isOpen, onClose, onAdd }) => {
   );
 };
 
+// FlowmodoroActivity component that behaves like other activities
+const FlowmodoroActivity = ({ flowState, settings, onTakeBreak, onSkipBreak, onReset, isTimerActive, formatTime }) => {
+  if (!settings.flowmodoroEnabled) return null;
+  
+  const availableMinutes = Math.floor(flowState.availableRestTime / 60);
+  const availableSeconds = flowState.availableRestTime % 60;
+  const breakMinutes = Math.floor(flowState.breakTimeRemaining / 60);
+  const breakSeconds = flowState.breakTimeRemaining % 60;
+  
+  const totalEarnedMinutes = Math.floor(flowState.totalEarnedToday / 60);
+  const totalEarnedSeconds = flowState.totalEarnedToday % 60;
+  
+  // Calculate progress for visual display - always show full bar that fills/drains
+  const progressPercentage = flowState.isOnBreak 
+    ? flowState.initialBreakDuration > 0 
+      ? (flowState.breakTimeRemaining / flowState.initialBreakDuration) * 100
+      : 0 // If no initial duration, show empty
+    : 100; // Always full when not on break
+  const displayProgress = settings.flowmodoroProgressType === 'fill' ? progressPercentage : 100 - progressPercentage;
+  
+  const handleFlowmodoroClick = () => {
+    if (flowState.isOnBreak) {
+      // Stop the break and return unused time to available rest time
+      onSkipBreak();
+    } else if (flowState.availableRestTime > 0) {
+      // Start a break using all available time
+      onTakeBreak(flowState.availableRestTime);
+    }
+    // If no rest time available, do nothing (can't be selected)
+  };
+  
+  return (
+    <div 
+      className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border-2 transition-colors mb-2 ${
+        flowState.isOnBreak 
+          ? "bg-purple-100 border-purple-300" 
+          : flowState.availableRestTime > 0 
+            ? "hover:bg-purple-50 border-purple-200 cursor-pointer" 
+            : "bg-purple-25 border-purple-100 cursor-not-allowed opacity-70"
+      }`}
+      onClick={handleFlowmodoroClick}
+    >
+      {/* Background progress bar like other activities */}
+      {settings.flowmodoroShowProgress && (
+        <div 
+          className="absolute top-0 left-0 h-full opacity-20 transition-all duration-500" 
+          style={{ 
+            width: `${Math.max(0, Math.min(100, displayProgress))}%`, 
+            backgroundColor: '#8b5cf6' // purple-500
+          }}
+        />
+      )}
+      
+      <div className="flex items-center space-x-4 z-10">
+        <div className="w-4 h-4 rounded-full bg-purple-500" />
+        <span className="font-semibold text-purple-800">
+          {flowState.isOnBreak ? 'Flowmodoro Break' : 'Flowmodoro Rest'}
+        </span>
+      </div>
+      
+      <div className="flex items-center space-x-2 z-10">
+        {settings.showActivityTime && (
+          <span className="text-sm font-mono">
+            {flowState.isOnBreak 
+              ? formatTime(flowState.breakTimeRemaining)
+              : formatTime(flowState.availableRestTime)
+            }
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // --- Main Application Component ---
 export default function App() {
   const [activities, setActivities] = useState(() => {
@@ -796,12 +870,13 @@ export default function App() {
       progressBarStyle: 'default',
       progressView: 'linear',
       showActivityTime: true, // NEW: toggle for activity time next to bar
-      // NEW: Flowmodoro settings
+      // Simplified Flowmodoro settings
       flowmodoroEnabled: true,
       flowmodoroRatio: 5, // 5:1 ratio (5 minutes work = 1 minute rest)
-      flowmodoroShortBreak: 5, // 5 minute short breaks
-      flowmodoroLongBreak: 15, // 15 minute long breaks
-      flowmodoroLongBreakInterval: 4, // Every 4 cycles
+      flowmodoroShowProgress: true, // Toggle for flowmodoro progress bar
+      flowmodoroProgressType: 'fill', // 'fill' or 'drain' like other activities
+      flowmodoroResetStartTime: '06:00', // Daily reset at 6 AM
+      flowmodoroResetEndTime: '23:59', // Daily reset at 11:59 PM
     };
     try {
       const saved = localStorage.getItem('timeSliceSettings');
@@ -836,22 +911,74 @@ export default function App() {
   // Add Activity Modal State (NEW)
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
 
+  // Helper function to check if flowmodoro should reset
+  const checkIfShouldReset = (currentTime, lastResetTime) => {
+    const startTime = settings.flowmodoroResetStartTime.split(':').map(Number);
+    const endTime = settings.flowmodoroResetEndTime.split(':').map(Number);
+    
+    const currentHour = currentTime.getHours();
+    const currentMinute = currentTime.getMinutes();
+    const currentTotalMinutes = currentHour * 60 + currentMinute;
+    
+    const startTotalMinutes = startTime[0] * 60 + startTime[1];
+    const endTotalMinutes = endTime[0] * 60 + endTime[1];
+    
+    // Different day = reset
+    if (currentTime.toDateString() !== lastResetTime.toDateString()) {
+      return true;
+    }
+    
+    // Check if current time is at reset boundaries
+    if (currentTotalMinutes === startTotalMinutes || currentTotalMinutes === endTotalMinutes) {
+      return true;
+    }
+    
+    return false;
+  };
+
   // Add flowmodoro state
   const [flowmodoroState, setFlowmodoroState] = useState(() => {
     try {
       const saved = localStorage.getItem('timeSliceFlowmodoro');
-      return saved ? JSON.parse(saved) : {
+      const defaultState = {
         availableRestTime: 0, // in seconds
+        totalEarnedToday: 0, // Total earned rest time today
         cycleCount: 0,
         isOnBreak: false,
         breakTimeRemaining: 0,
+        initialBreakDuration: 0, // Track original break duration for progress calculation
+        lastResetDate: new Date().toDateString(), // Track when last reset occurred
+        accumulatedFractionalTime: 0, // Track fractional seconds for accurate ratio calculation
       };
+      
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Check if we need to reset based on time
+        const now = new Date();
+        const lastReset = new Date(parsed.lastResetDate || now.toDateString());
+        const shouldReset = checkIfShouldReset(now, lastReset);
+        
+        if (shouldReset) {
+          return {
+            ...defaultState,
+            lastResetDate: now.toDateString()
+          };
+        }
+        
+        return { ...defaultState, ...parsed };
+      }
+      
+      return defaultState;
     } catch (e) {
       return {
         availableRestTime: 0,
+        totalEarnedToday: 0,
         cycleCount: 0,
         isOnBreak: false,
         breakTimeRemaining: 0,
+        initialBreakDuration: 0,
+        lastResetDate: new Date().toDateString(),
+        accumulatedFractionalTime: 0,
       };
     }
   });
@@ -888,47 +1015,44 @@ export default function App() {
     }
   };
 
-  // Flowmodoro functions
-  const startFlowmodoroBreak = (breakDuration) => {
-    if (!settings.flowmodoroEnabled) return;
+  // Simplified flowmodoro functions
+  const takeFlowmodoroBreak = (duration) => {
+    if (!settings.flowmodoroEnabled || flowmodoroState.availableRestTime <= 0) return;
+    
+    const breakDuration = Math.min(duration, flowmodoroState.availableRestTime);
     
     setFlowmodoroState(prev => ({
       ...prev,
       isOnBreak: true,
       breakTimeRemaining: breakDuration,
-      availableRestTime: Math.max(0, prev.availableRestTime - breakDuration)
+      initialBreakDuration: breakDuration, // Store initial duration for progress calculation
+      availableRestTime: prev.availableRestTime - breakDuration
     }));
     
-    setIsTimerActive(false);
-    setIsPaused(false);
-  };
-
-  const takeFlowmodoroBreak = () => {
-    if (!settings.flowmodoroEnabled || flowmodoroState.availableRestTime <= 0) return;
-    
-    const breakDuration = Math.min(
-      flowmodoroState.availableRestTime,
-      settings.flowmodoroShortBreak * 60
-    );
-    
-    startFlowmodoroBreak(breakDuration);
+    // Don't stop the main timer - flowmodoro break runs alongside the session
+    // The break timer is handled separately in handleTimerTick
   };
 
   const skipFlowmodoroBreak = () => {
     setFlowmodoroState(prev => ({
       ...prev,
       isOnBreak: false,
-      breakTimeRemaining: 0
+      availableRestTime: prev.availableRestTime + prev.breakTimeRemaining, // Return unused time
+      breakTimeRemaining: 0,
+      initialBreakDuration: 0
     }));
   };
 
   const resetFlowmodoroState = () => {
-    setFlowmodoroState({
+    setFlowmodoroState(prev => ({
+      ...prev,
       availableRestTime: 0,
       cycleCount: 0,
       isOnBreak: false,
-      breakTimeRemaining: 0
-    });
+      breakTimeRemaining: 0,
+      initialBreakDuration: 0,
+      accumulatedFractionalTime: 0
+    }));
   };
 
   // --- Start of State Saving Logic ---
@@ -1025,6 +1149,21 @@ export default function App() {
   }, [activityPercentages, totalSessionMinutes, isTimerActive, calculateTotalSessionMinutes]);
 
   const handleTimerTick = useCallback(() => {
+    // Check for daily flowmodoro reset
+    const now = new Date();
+    const shouldReset = checkIfShouldReset(now, new Date(flowmodoroState.lastResetDate));
+    if (shouldReset) {
+      setFlowmodoroState(prev => ({
+        availableRestTime: 0,
+        totalEarnedToday: 0,
+        cycleCount: 0,
+        isOnBreak: false,
+        breakTimeRemaining: 0,
+        initialBreakDuration: 0,
+        lastResetDate: now.toDateString(),
+      }));
+    }
+
     // Handle flowmodoro break countdown first
     if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
       setFlowmodoroState(prev => {
@@ -1033,7 +1172,8 @@ export default function App() {
           return {
             ...prev,
             isOnBreak: false,
-            breakTimeRemaining: 0
+            breakTimeRemaining: 0,
+            initialBreakDuration: 0
           };
         }
         return {
@@ -1051,13 +1191,25 @@ export default function App() {
 
       if (elapsedSeconds <= 0) return prev;
 
-      // Accumulate flowmodoro rest time if enabled and timer is active
+      // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
       if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
-        const restTimeToAdd = Math.floor(elapsedSeconds / settings.flowmodoroRatio);
+        // Add elapsed seconds to fractional accumulator and calculate how much rest time to award
+        const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
+        const restTimeToAdd = Math.floor(newAccumulated / settings.flowmodoroRatio);
+        const remainingFractional = newAccumulated % settings.flowmodoroRatio;
+        
         if (restTimeToAdd > 0) {
           setFlowmodoroState(prevFlow => ({
             ...prevFlow,
-            availableRestTime: prevFlow.availableRestTime + restTimeToAdd
+            availableRestTime: prevFlow.availableRestTime + restTimeToAdd,
+            totalEarnedToday: prevFlow.totalEarnedToday + restTimeToAdd,
+            accumulatedFractionalTime: remainingFractional
+          }));
+        } else {
+          // Just update the fractional accumulator
+          setFlowmodoroState(prevFlow => ({
+            ...prevFlow,
+            accumulatedFractionalTime: remainingFractional
           }));
         }
       }
@@ -1108,7 +1260,7 @@ export default function App() {
       }
       return newActivities;
     });
-  }, [currentActivityIndex, settings.overtimeType, settings.flowmodoroEnabled, settings.flowmodoroRatio, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining]);
+  }, [currentActivityIndex, settings.overtimeType, settings.flowmodoroEnabled, settings.flowmodoroRatio, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining, flowmodoroState.lastResetDate, checkIfShouldReset]);
 
   // Main timer loop
   useEffect(() => {
@@ -1576,6 +1728,7 @@ export default function App() {
               >
                 <Icon name="dice" className="h-4 w-4 mr-2" />
                 Random
+
               </Button>
             </div>
           </div>
@@ -1642,83 +1795,16 @@ export default function App() {
           </div>
           <Separator />
           
-          {/* Flowmodoro Rest Timer */}
-          {settings.flowmodoroEnabled && (
-            <>
-              <div className="space-y-3">
-                <h3 className="font-semibold text-purple-700">Flowmodoro Rest Timer</h3>
-                <div className="p-4 rounded-lg border-2 border-purple-200 bg-gradient-to-r from-purple-50 to-indigo-50">
-                  {flowmodoroState.isOnBreak ? (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-lg font-semibold text-purple-800">Break Time</span>
-                        <span className="text-2xl font-mono font-bold text-purple-900">
-                          {formatTime(flowmodoroState.breakTimeRemaining)}
-                        </span>
-                      </div>
-                      <div className="w-full bg-purple-200 rounded-full h-3">
-                        <div 
-                          className="bg-gradient-to-r from-purple-500 to-indigo-500 h-3 rounded-full transition-all duration-1000"
-                          style={{ 
-                            width: `${Math.max(0, (flowmodoroState.breakTimeRemaining / (settings.flowmodoroShortBreak * 60)) * 100)}%` 
-                          }}
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <Button 
-                          size="sm" 
-                          variant="outline" 
-                          onClick={skipFlowmodoroBreak}
-                          className="flex-1 border-purple-300 text-purple-700 hover:bg-purple-100"
-                        >
-                          Skip Break
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-lg font-semibold text-purple-800">Available Rest Time</span>
-                        <span className="text-2xl font-mono font-bold text-purple-900">
-                          {formatTime(flowmodoroState.availableRestTime)}
-                        </span>
-                      </div>
-                      <div className="w-full bg-purple-200 rounded-full h-3">
-                        <div 
-                          className="bg-gradient-to-r from-purple-500 to-indigo-500 h-3 rounded-full transition-all duration-500"
-                          style={{ 
-                            width: `${Math.min(100, (flowmodoroState.availableRestTime / (settings.flowmodoroShortBreak * 60)) * 100)}%` 
-                          }}
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <Button 
-                          size="sm" 
-                          onClick={takeFlowmodoroBreak}
-                          disabled={flowmodoroState.availableRestTime <= 0}
-                          className="flex-1 bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-50"
-                        >
-                          Take Break ({Math.min(Math.floor(flowmodoroState.availableRestTime / 60), settings.flowmodoroShortBreak)}m)
-                        </Button>
-                        <Button 
-                          size="sm" 
-                          variant="outline" 
-                          onClick={resetFlowmodoroState}
-                          className="border-purple-300 text-purple-700 hover:bg-purple-100"
-                        >
-                          Reset
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                  <div className="mt-2 text-xs text-purple-600 text-center">
-                    Ratio: {settings.flowmodoroRatio}:1 work:rest
-                  </div>
-                </div>
-              </div>
-              <Separator />
-            </>
-          )}
+          {/* Flowmodoro Rest Timer - now behaves like other activities */}
+          <FlowmodoroActivity 
+            flowState={flowmodoroState}
+            settings={settings}
+            onTakeBreak={takeFlowmodoroBreak}
+            onSkipBreak={skipFlowmodoroBreak}
+            onReset={resetFlowmodoroState}
+            isTimerActive={isTimerActive}
+            formatTime={formatTime}
+          />
           
           <div className="space-y-2">
             <h3 className="font-semibold">Activities</h3>
@@ -1880,69 +1966,108 @@ export default function App() {
                 )}
                 <Separator />
                 <div className="space-y-4">
-                  <Label className="text-base font-semibold text-purple-700">Flowmodoro Settings</Label>
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="flowmodoro-enabled">Enable Flowmodoro Timer</Label>
+                    <div>
+                      <Label className="text-base font-semibold text-purple-700">Flowmodoro Rest Timer</Label>
+                      <p className="text-sm text-gray-600">Automatically earn rest time while working</p>
+                    </div>
                     <Switch 
-                      id="flowmodoro-enabled" 
+                      id="flowmodoro-enabled"
                       checked={settings.flowmodoroEnabled} 
-                      onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, flowmodoroEnabled: checked }))} 
+                      onCheckedChange={(checked) => setSettings(prev => ({ ...prev, flowmodoroEnabled: checked }))}
                     />
                   </div>
+                  
                   {settings.flowmodoroEnabled && (
-                    <>
-                      <div className="space-y-2">
-                        <Label htmlFor="flowmodoro-ratio">Work:Rest Ratio (work minutes : 1 rest minute)</Label>
-                        <div className="flex items-center gap-2">
-                          <Input 
-                            id="flowmodoro-ratio" 
-                            type="number" 
-                            min="1" 
-                            max="10" 
-                            value={settings.flowmodoroRatio} 
-                            onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroRatio: Number(e.target.value) || 5 }))} 
-                            className="w-20" 
+                    <div className="pl-4 space-y-3 border-l-2 border-purple-200">
+                      <div className="grid grid-cols-1 gap-4">
+                        <div className="space-y-1">
+                          <Label>Work:Rest Ratio</Label>
+                          <div className="flex items-center space-x-2">
+                            <Input 
+                              type="number" 
+                              min="2" 
+                              max="10" 
+                              value={settings.flowmodoroRatio}
+                              onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroRatio: Number(e.target.value) || 5 }))}
+                              className="w-16"
+                            />
+                            <span className="text-sm text-gray-600">:1 (work:rest)</span>
+                          </div>
+                        </div>
+                        
+                        <div className="flex items-center justify-between">
+                          <Label>Show Progress Bar</Label>
+                          <Switch 
+                            id="flowmodoro-show-progress"
+                            checked={settings.flowmodoroShowProgress} 
+                            onCheckedChange={(checked) => setSettings(prev => ({ ...prev, flowmodoroShowProgress: checked }))}
                           />
-                          <span className="text-sm text-gray-600">:1</span>
+                        </div>
+                        
+                        {settings.flowmodoroShowProgress && (
+                          <div className="space-y-2">
+                            <Label>Progress Bar Style</Label>
+                            <div className="flex items-center gap-2">
+                              <Button 
+                                size="sm" 
+                                variant={settings.flowmodoroProgressType === 'fill' ? 'default' : 'outline'} 
+                                onClick={() => setSettings(prev => ({ ...prev, flowmodoroProgressType: 'fill' }))}
+                              >
+                                Fill Up
+                              </Button>
+                              <Button 
+                                size="sm" 
+                                variant={settings.flowmodoroProgressType === 'drain' ? 'default' : 'outline'} 
+                                onClick={() => setSettings(prev => ({ ...prev, flowmodoroProgressType: 'drain' }))}
+                              >
+                                Drain Down
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        
+                        <Separator />
+                        
+                        <div className="space-y-2">
+                          <Label>Daily Reset Times</Label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1">
+                              <Label className="text-xs">Start Time</Label>
+                              <Input 
+                                type="time" 
+                                value={settings.flowmodoroResetStartTime}
+                                onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroResetStartTime: e.target.value }))}
+                                className="text-sm"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">End Time</Label>
+                              <Input 
+                                type="time" 
+                                value={settings.flowmodoroResetEndTime}
+                                onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroResetEndTime: e.target.value }))}
+                                className="text-sm"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            Rest time resets at these times each day
+                          </p>
+                        </div>
+                        
+                        <div className="pt-2">
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={resetFlowmodoroState}
+                            className="text-red-600 border-red-200 hover:bg-red-50"
+                          >
+                            Reset Today's Rest Time
+                          </Button>
                         </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="flowmodoro-short">Short Break Duration (minutes)</Label>
-                        <Input 
-                          id="flowmodoro-short" 
-                          type="number" 
-                          min="1" 
-                          max="15" 
-                          value={settings.flowmodoroShortBreak} 
-                          onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroShortBreak: Number(e.target.value) || 5 }))} 
-                          className="w-20" 
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="flowmodoro-long">Long Break Duration (minutes)</Label>
-                        <Input 
-                          id="flowmodoro-long" 
-                          type="number" 
-                          min="5" 
-                          max="30" 
-                          value={settings.flowmodoroLongBreak} 
-                          onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroLongBreak: Number(e.target.value) || 15 }))} 
-                          className="w-20" 
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="flowmodoro-interval">Long Break Interval (cycles)</Label>
-                        <Input 
-                          id="flowmodoro-interval" 
-                          type="number" 
-                          min="2" 
-                          max="8" 
-                          value={settings.flowmodoroLongBreakInterval} 
-                          onChange={(e) => setSettings(prev => ({ ...prev, flowmodoroLongBreakInterval: Number(e.target.value) || 4 }))} 
-                          className="w-20" 
-                        />
-                      </div>
-                    </>
+                    </div>
                   )}
                 </div>
               </CardContent>
