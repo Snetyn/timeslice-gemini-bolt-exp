@@ -1,5 +1,11 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 
+interface ActivityTemplate {
+  id: string;
+  name: string;
+  color: string;
+}
+
 // --- Self-Contained UI Components ---
 
 const Icon = ({ name, className }) => {
@@ -94,9 +100,19 @@ const Badge = ({ variant = 'default', className = '', children }) => {
   return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
-const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor }) => {
-  const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
-  if (totalDuration === 0) {
+const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0 }) => {
+  // Calculate total time considering both allocated and added activities
+  const totalSessionSeconds = totalSessionMinutes * 60;
+  const totalTime = activities.reduce((sum, act) => {
+    if (act.percentage > 0) {
+      return sum + (act.percentage / 100) * totalSessionSeconds;
+    } else if (act.duration > 0) {
+      return sum + (act.duration * 60);
+    }
+    return sum;
+  }, 0);
+
+  if (totalTime === 0) {
     return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
   }
 
@@ -104,14 +120,25 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     return (
       <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
         {activities.map((activity) => {
-          const segmentWidth = (activity.duration * 60 / totalDuration) * 100;
+          // Calculate segment width based on allocated or actual duration
+          let activityTime = 0;
+          if (activity.percentage > 0) {
+            activityTime = (activity.percentage / 100) * totalSessionSeconds;
+          } else if (activity.duration > 0) {
+            activityTime = activity.duration * 60;
+          }
+          
+          const segmentWidth = (activityTime / totalTime) * 100;
           let fillWidth = 0;
+          
           if (activity.isCompleted) {
             fillWidth = 100;
-          } else {
-            const elapsed = (activity.duration * 60) - activity.timeRemaining;
-            fillWidth = (elapsed / (activity.duration * 60)) * 100;
+          } else if (activityTime > 0) {
+            const elapsed = activityTime - Math.max(0, activity.timeRemaining);
+            fillWidth = (elapsed / activityTime) * 100;
           }
+
+          if (segmentWidth === 0) return null;
 
           return (
             <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full bg-slate-200 border-r-2 border-slate-500 last:border-r-0">
@@ -127,8 +154,15 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     return (
       <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
         {activities.map(activity => {
-          const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
-          const widthPercentage = (elapsed / totalDuration) * 100;
+          let activityTime = 0;
+          if (activity.percentage > 0) {
+            activityTime = (activity.percentage / 100) * totalSessionSeconds;
+          } else if (activity.duration > 0) {
+            activityTime = activity.duration * 60;
+          }
+          
+          const elapsed = activityTime - Math.max(0, activity.timeRemaining);
+          const widthPercentage = (elapsed / totalTime) * 100;
 
           if (widthPercentage === 0) return null;
 
@@ -148,11 +182,12 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   return (
     <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
       <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
+      <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
     </div>
   );
 };
 
-const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor }) => {
+const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0 }) => {
   const size = 200;
   const strokeWidth = 12;
   const center = size / 2;
@@ -160,17 +195,27 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   const activityRadius = radius - strokeWidth - 4;
   const circumference = 2 * Math.PI * radius;
   const activityCircumference = 2 * Math.PI * activityRadius;
-  const totalDuration = activities.reduce((sum, act) => sum + act.duration * 60, 0);
+  
+  // Calculate total time considering both allocated and added activities
+  const totalSessionSeconds = totalSessionMinutes * 60;
+  const totalTime = activities.reduce((sum, act) => {
+    if (act.percentage > 0) {
+      return sum + (act.percentage / 100) * totalSessionSeconds;
+    } else if (act.duration > 0) {
+      return sum + (act.duration * 60);
+    }
+    return sum;
+  }, 0);
 
   const activityOffset = activityCircumference - (activityProgress / 100) * activityCircumference;
 
   // --- Divider lines for segmented style ---
   const renderSegmentDividers = () => {
-    if (style !== 'segmented' || activities.length <= 1 || totalDuration === 0) return null;
+    if (style !== 'segmented' || activities.length <= 1 || totalTime === 0) return null;
     let accAngle = 0;
     const lines: React.ReactNode[] = [];
     for (let i = 0; i < activities.length - 1; i++) {
-      const segmentAngle = (activities[i].duration * 60 / totalDuration) * 360;
+      const segmentAngle = ((activities[i].percentage > 0 ? (activities[i].percentage / 100) * totalSessionSeconds : activities[i].duration * 60) / totalTime) * 360;
       accAngle += segmentAngle;
       const angleRad = ((accAngle - 90) * Math.PI) / 180;
       // Draw from inner edge to outer edge of the ring for maximum visibility
@@ -196,15 +241,16 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   };
 
   const renderOuterRing = () => {
-    if (totalDuration === 0) return null;
+    if (totalTime === 0) return null;
 
     if (style === 'dynamicColor') {
       let cumulativeRotation = -90;
       return activities.map(activity => {
-        const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
+        const activityDuration = activity.percentage > 0 ? (activity.percentage / 100) * totalSessionSeconds : activity.duration * 60;
+        const elapsed = activityDuration - Math.max(0, activity.timeRemaining);
         if (elapsed <= 0) return null;
 
-        const progressAngle = (elapsed / totalDuration) * 360;
+        const progressAngle = (elapsed / totalTime) * 360;
         const arcLength = (progressAngle / 360) * circumference;
 
         const rotation = cumulativeRotation;
@@ -230,11 +276,12 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     if (style === 'segmented') {
       let cumulativeRotation = -90;
       return activities.map(activity => {
-        const segmentAngle = (activity.duration * 60 / totalDuration) * 360;
+        const activityDuration = activity.percentage > 0 ? (activity.percentage / 100) * totalSessionSeconds : activity.duration * 60;
+        const segmentAngle = (activityDuration / totalTime) * 360;
         const segmentArcLength = (segmentAngle / 360) * circumference;
 
-        const elapsed = (activity.duration * 60) - Math.max(0, activity.timeRemaining);
-        const progressWithinSegment = activity.duration > 0 ? (elapsed / (activity.duration * 60)) : 0;
+        const elapsed = activityDuration - Math.max(0, activity.timeRemaining);
+        const progressWithinSegment = activityDuration > 0 ? (elapsed / activityDuration) : 0;
         const fillAngle = segmentAngle * progressWithinSegment;
         const fillArcLength = (fillAngle / 360) * circumference;
 
@@ -719,25 +766,56 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
 };
 
 // Add Activity Modal Component (NEW)
-const AddActivityModal = ({ isOpen, onClose, onAdd }) => {
-  const [activityName, setActivityName] = React.useState("");
+interface AddActivityModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onAdd: (name: string, color: string, presetTime?: number) => void;
+  templates: ActivityTemplate[];
+  onSaveTemplate: (name: string) => void;
+}
 
-  console.log('AddActivityModal render, isOpen:', isOpen);
+const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTemplate }: AddActivityModalProps) => {
+  const [activityName, setActivityName] = React.useState("");
+  const [selectedTemplate, setSelectedTemplate] = React.useState<ActivityTemplate | null>(null);
+  const [showTemplates, setShowTemplates] = React.useState(false);
+  const [presetMinutes, setPresetMinutes] = React.useState(0);
+  const [presetSeconds, setPresetSeconds] = React.useState(0);
+  const [usePresetTime, setUsePresetTime] = React.useState(false);
 
   if (!isOpen) return null;
 
-  console.log('AddActivityModal is open, rendering modal');
-
   const handleAdd = () => {
-    const name = activityName.trim();
-    console.log('AddActivityModal handleAdd called with name:', name);
-    if (name) {
-      onAdd(name);
-    } else {
-      onAdd("New Activity");
+    let name = activityName.trim();
+    let color = `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`;
+    let timeInSeconds = 0;
+    
+    if (selectedTemplate) {
+      name = selectedTemplate.name;
+      color = selectedTemplate.color;
+    } else if (!name) {
+      name = "New Activity";
     }
+
+    if (usePresetTime) {
+      timeInSeconds = (presetMinutes * 60) + presetSeconds;
+    }
+    
+    onAdd(name, color, timeInSeconds);
     setActivityName("");
+    setSelectedTemplate(null);
+    setShowTemplates(false);
+    setPresetMinutes(0);
+    setPresetSeconds(0);
+    setUsePresetTime(false);
     onClose();
+  };
+
+  const handleSaveAsTemplate = () => {
+    const name = activityName.trim();
+    if (name && onSaveTemplate) {
+      onSaveTemplate(name);
+      setActivityName("");
+    }
   };
 
   const handleKeyPress = (e) => {
@@ -748,39 +826,151 @@ const AddActivityModal = ({ isOpen, onClose, onAdd }) => {
 
   const handleClose = () => {
     setActivityName("");
+    setSelectedTemplate(null);
+    setShowTemplates(false);
+    setPresetMinutes(0);
+    setPresetSeconds(0);
+    setUsePresetTime(false);
     onClose();
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-sm mx-4">
+      <Card className="w-full max-w-md mx-4">
         <CardHeader>
-          <CardTitle className="text-lg text-center">Name Your Activity</CardTitle>
+          <CardTitle className="text-lg text-center">Add New Activity</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-3">
-            <Label className="text-base">What would you like to call this activity?</Label>
-            <Input 
-              type="text" 
-              placeholder="e.g., Study Math, Exercise, Reading..."
-              value={activityName} 
-              onChange={e => setActivityName(e.target.value)}
-              onKeyPress={handleKeyPress}
-              autoFocus
-              className="text-base py-3"
-            />
-            {!activityName.trim() && (
+            {/* Template Selection */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Quick Templates</Label>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setShowTemplates(!showTemplates)}
+                  className="h-6 px-2 text-xs"
+                >
+                  {showTemplates ? 'Hide' : 'Show'} ({templates.length})
+                </Button>
+              </div>
+              
+              {showTemplates && (
+                <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto">
+                  {templates.map(template => (
+                    <Button
+                      key={template.id}
+                      variant={selectedTemplate?.id === template.id ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => {
+                        setSelectedTemplate(template);
+                        setActivityName(template.name);
+                      }}
+                      className="h-8 text-xs justify-start"
+                    >
+                      <div 
+                        className="w-3 h-3 rounded-full mr-2" 
+                        style={{ backgroundColor: template.color }}
+                      />
+                      {template.name}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Custom Name Input */}
+            <div className="space-y-2">
+              <Label className="text-base">Or enter custom name:</Label>
+              <Input 
+                type="text" 
+                placeholder="e.g., Study Math, Exercise, Reading..."
+                value={activityName} 
+                onChange={e => {
+                  setActivityName(e.target.value);
+                  setSelectedTemplate(null); // Clear template selection when typing
+                }}
+                onKeyPress={handleKeyPress}
+                autoFocus
+                className="text-base py-3"
+              />
+            </div>
+
+            {/* Save as Template Option */}
+            {activityName.trim() && !selectedTemplate && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Save this as a template?</span>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={handleSaveAsTemplate}
+                  className="h-6 px-2 text-xs"
+                >
+                  Save to List
+                </Button>
+              </div>
+            )}
+
+            {/* Preset Time Option */}
+            <div className="space-y-2 border-t pt-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Set preset time?</Label>
+                <Switch
+                  checked={usePresetTime}
+                  onCheckedChange={setUsePresetTime}
+                  id="use-preset-time"
+                />
+              </div>
+              
+              {usePresetTime && (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center space-x-1">
+                    <Input
+                      type="number"
+                      min="0"
+                      max="999"
+                      value={presetMinutes}
+                      onChange={(e) => setPresetMinutes(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-16 text-center"
+                      placeholder="0"
+                    />
+                    <span className="text-xs text-gray-500">min</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <Input
+                      type="number"
+                      min="0"
+                      max="59"
+                      value={presetSeconds}
+                      onChange={(e) => setPresetSeconds(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
+                      className="w-16 text-center"
+                      placeholder="0"
+                    />
+                    <span className="text-xs text-gray-500">sec</span>
+                  </div>
+                  {(presetMinutes > 0 || presetSeconds > 0) && (
+                    <span className="text-xs text-blue-600">
+                      Total: {presetMinutes}:{presetSeconds.toString().padStart(2, '0')}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {!activityName.trim() && !selectedTemplate && (
               <p className="text-sm text-gray-500 text-center">
-                Leave empty to use "New Activity"
+                Choose a template or leave empty to use "New Activity"
               </p>
             )}
           </div>
+          
           <div className="flex justify-end space-x-3 pt-2">
             <Button variant="outline" onClick={handleClose} className="px-6">
               Cancel
             </Button>
             <Button onClick={handleAdd} className="px-6">
-              Add {activityName.trim() ? `"${activityName.trim()}"` : '"New Activity"'}
+              Add {selectedTemplate ? `"${selectedTemplate.name}"` : activityName.trim() ? `"${activityName.trim()}"` : '"New Activity"'}
             </Button>
           </div>
         </CardContent>
@@ -993,10 +1183,32 @@ export default function App() {
   // Add Activity Modal State (NEW)
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
 
-  // Debug modal state changes
+  // Activity Templates State (NEW)
+  const [activityTemplates, setActivityTemplates] = useState<ActivityTemplate[]>(() => {
+    const defaultTemplates: ActivityTemplate[] = [
+      { id: '1', name: 'Focus Work', color: 'hsl(220, 70%, 50%)' },
+      { id: '2', name: 'Break', color: 'hsl(120, 60%, 50%)' },
+      { id: '3', name: 'Exercise', color: 'hsl(0, 70%, 50%)' },
+      { id: '4', name: 'Reading', color: 'hsl(280, 60%, 50%)' },
+      { id: '5', name: 'Meeting', color: 'hsl(40, 80%, 50%)' }
+    ];
+    
+    try {
+      const saved = localStorage.getItem('timeSliceActivityTemplates');
+      return saved ? JSON.parse(saved) : defaultTemplates;
+    } catch (e) {
+      return defaultTemplates;
+    }
+  });
+
+  // Save activity templates to localStorage
   useEffect(() => {
-    console.log('Add activity modal state changed:', addActivityModalState);
-  }, [addActivityModalState]);
+    try {
+      localStorage.setItem('timeSliceActivityTemplates', JSON.stringify(activityTemplates));
+    } catch (e) {
+      console.error('Failed to save activity templates to localStorage:', e);
+    }
+  }, [activityTemplates]);
 
   // Helper function to check if flowmodoro should reset
   const checkIfShouldReset = (currentTime, lastResetTime) => {
@@ -1426,19 +1638,13 @@ export default function App() {
     return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  const addActivity = (customName = null) => {
+  const addActivity = (customName = null, customColor = null, presetTime = 0) => {
     // Always open modal if no custom name provided - this ensures all activity creation goes through naming dialog
     // This is especially important for mobile users who shouldn't need to click into input fields to rename
-    console.log('addActivity called with customName:', customName, 'type:', typeof customName);
-    console.log('Current addActivityModalState:', addActivityModalState);
     if (customName === null || customName === undefined || customName === '') {
-      console.log('Opening add activity modal');
       setAddActivityModalState({ isOpen: true });
-      console.log('Modal state set to open, returning early');
       return;
     }
-
-    console.log('Creating activity with custom name (bypassing modal)');
 
     // Ensure the name is always a string and not an object
     let activityName = "New Activity";
@@ -1450,15 +1656,16 @@ export default function App() {
       }
     }
 
-    console.log('Creating activity with name:', activityName);
+    // Use provided color or generate random one
+    const activityColor = customColor || `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`;
 
     const newActivity = {
       id: Date.now().toString(),
       name: activityName,
       percentage: 0,
-      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`,
-      duration: 0,
-      timeRemaining: isTimerActive ? 0 : 0, // Start with 0 time during session
+      color: activityColor,
+      duration: presetTime > 0 ? Math.round(presetTime / 60) : 0, // Convert seconds to minutes
+      timeRemaining: presetTime > 0 ? presetTime : (isTimerActive ? 0 : 0), // Use preset time or 0
       isCompleted: false,
       isLocked: false,
     };
@@ -1483,8 +1690,22 @@ export default function App() {
     });
   };
 
-  const handleAddActivityWithName = (name) => {
-    addActivity(name);
+  const handleAddActivityWithName = (name, color, presetTime = 0) => {
+    addActivity(name, color, presetTime);
+  };
+
+  const saveActivityTemplate = (name) => {
+    const newTemplate = {
+      id: Date.now().toString(),
+      name: name.trim(),
+      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`
+    };
+    
+    // Check if template with same name already exists
+    const existingTemplate = activityTemplates.find(t => t.name.toLowerCase() === name.toLowerCase());
+    if (!existingTemplate) {
+      setActivityTemplates(prev => [...prev, newTemplate]);
+    }
   };
 
   const removeActivity = (id) => {
@@ -1764,15 +1985,37 @@ export default function App() {
   };
 
   const getOverallProgress = () => {
-    const totalDurationSeconds = activities.reduce((sum, act) => sum + (act.duration * 60), 0);
-    if (totalDurationSeconds === 0) return 0;
+    // Calculate total allocated time based on percentages and session duration
+    const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
+    if (totalSessionSeconds === 0) return 0;
 
     const totalElapsedSeconds = activities.reduce((sum, act) => {
-      const elapsed = (act.duration * 60) - Math.max(0, act.timeRemaining);
-      return sum + elapsed;
+      // For activities with allocated time (percentage > 0)
+      if (act.percentage > 0) {
+        const allocatedSeconds = (act.percentage / 100) * totalSessionSeconds;
+        const elapsed = allocatedSeconds - Math.max(0, act.timeRemaining);
+        return sum + elapsed;
+      }
+      // For activities added during session (percentage = 0), use duration if available
+      else if (act.duration > 0) {
+        const elapsed = (act.duration * 60) - Math.max(0, act.timeRemaining);
+        return sum + elapsed;
+      }
+      return sum;
     }, 0);
 
-    return (totalElapsedSeconds / totalDurationSeconds) * 100;
+    // Calculate total possible time (allocated + added activities)
+    const totalAllocatedSeconds = activities.reduce((sum, act) => {
+      if (act.percentage > 0) {
+        return sum + (act.percentage / 100) * totalSessionSeconds;
+      } else if (act.duration > 0) {
+        return sum + (act.duration * 60);
+      }
+      return sum;
+    }, 0);
+
+    if (totalAllocatedSeconds === 0) return 0;
+    return (totalElapsedSeconds / totalAllocatedSeconds) * 100;
   };
 
   // Ensure currentActivityIndex is valid and currentActivity exists
@@ -1835,6 +2078,7 @@ export default function App() {
                 totalProgress={getOverallProgress()}
                 activityProgress={activityProgress}
                 activityColor={currentActivity?.color}
+                totalSessionMinutes={totalSessionMinutes}
               />
             ) : (
               <div className="space-y-2">
@@ -1848,6 +2092,7 @@ export default function App() {
                   className="h-4"
                   overallProgress={getOverallProgress()}
                   currentActivityColor={currentActivity?.color}
+                  totalSessionMinutes={totalSessionMinutes}
                 />
               </div>
             )
@@ -2414,6 +2659,8 @@ export default function App() {
           isOpen={addActivityModalState.isOpen}
           onClose={() => setAddActivityModalState({ isOpen: false })}
           onAdd={handleAddActivityWithName}
+          templates={activityTemplates}
+          onSaveTemplate={saveActivityTemplate}
         />
       )}
     </div>
