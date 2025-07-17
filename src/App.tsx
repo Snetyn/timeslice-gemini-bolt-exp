@@ -736,11 +736,7 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
             </div>
           </div>
           <div className="flex justify-end space-x-2">
-            <Button 
-              variant="outline" 
-              onClick={handleCloseModal}
-              style={{ touchAction: 'manipulation' }}
-            >
+            <Button variant="outline" onClick={handleCloseModal}>
               Cancel
             </Button>
             <Button 
@@ -979,6 +975,314 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
   );
 };
 
+// Activity Management Page Component
+const ActivityManagementPage = ({ 
+  activityTemplates, 
+  setActivityTemplates, 
+  activities, 
+  setActivities, 
+  onBackToTimer 
+}) => {
+  const [editingTemplate, setEditingTemplate] = useState<ActivityTemplate | null>(null);
+  const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Filter templates based on search query
+  const filteredTemplates = activityTemplates.filter(template =>
+    template.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const handleEditTemplate = (template: ActivityTemplate) => {
+    setEditingTemplate(template);
+  };
+
+  const handleSaveTemplate = (templateData: { name: string; color: string }) => {
+    if (editingTemplate && editingTemplate.id) {
+      // Update existing template
+      setActivityTemplates(prev => 
+        prev.map(t => t.id === editingTemplate.id ? { ...t, ...templateData } : t)
+      );
+    } else {
+      // Add new template
+      const newTemplate = {
+        id: Date.now().toString(),
+        ...templateData
+      };
+      setActivityTemplates(prev => [...prev, newTemplate]);
+    }
+    setEditingTemplate(null);
+  };
+
+  const handleDeleteTemplate = (templateId: string) => {
+    setActivityTemplates(prev => prev.filter(t => t.id !== templateId));
+  };
+
+  const handleAddNewTemplate = () => {
+    setEditingTemplate({
+      id: '',
+      name: '',
+      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`
+    });
+  };
+
+  const handleBulkDelete = () => {
+    setActivityTemplates(prev => 
+      prev.filter(t => !selectedTemplates.includes(t.id))
+    );
+    setSelectedTemplates([]);
+  };
+
+  const handleSelectTemplate = (templateId: string) => {
+    setSelectedTemplates(prev => 
+      prev.includes(templateId) 
+        ? prev.filter(id => id !== templateId)
+        : [...prev, templateId]
+    );
+  };
+
+  const handleAddToCurrentSession = (template: ActivityTemplate) => {
+    const newActivity = {
+      id: Date.now().toString(),
+      name: template.name,
+      color: template.color,
+      percentage: 10, // Default percentage
+      duration: 0,
+      timeRemaining: 0,
+      isCompleted: false,
+      isLocked: false
+    };
+    setActivities(prev => [...prev, newActivity]);
+  };
+
+  const getUsageCount = (templateName: string) => {
+    return activities.filter(a => a.name === templateName).length;
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 font-sans">
+      <div className="max-w-6xl mx-auto">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={onBackToTimer}
+                  className="flex items-center space-x-2"
+                >
+                  <Icon name="rotateCcw" className="h-4 w-4" />
+                  <span>Back to Timer</span>
+                </Button>
+                <CardTitle className="text-3xl font-bold">Activity Management</CardTitle>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={handleAddNewTemplate}
+                >
+                  <Icon name="plus" className="h-4 w-4 mr-2" />
+                  New Template
+                </Button>
+                {selectedTemplates.length > 0 && (
+                  <Button 
+                    variant="destructive" 
+                    size="sm" 
+                    onClick={handleBulkDelete}
+                  >
+                    <Icon name="trash2" className="h-4 w-4 mr-2" />
+                    Delete ({selectedTemplates.length})
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* Search and Stats */}
+            <div className="flex items-center justify-between">
+              <div className="flex-1 max-w-md">
+                <Input
+                  placeholder="Search templates..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full"
+                />
+              </div>
+              <div className="flex items-center space-x-4 text-sm text-gray-600">
+                <span>Total Templates: {activityTemplates.length}</span>
+                <span>Current Session Activities: {activities.length}</span>
+              </div>
+            </div>
+
+            {/* Activity Templates Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {filteredTemplates.map(template => (
+                <Card key={template.id} className="relative">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center space-x-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedTemplates.includes(template.id)}
+                          onChange={() => handleSelectTemplate(template.id)}
+                          className="rounded"
+                        />
+                        <div 
+                          className="w-4 h-4 rounded-full border-2 border-gray-300" 
+                          style={{ backgroundColor: template.color }}
+                        />
+                        <h3 className="font-medium text-lg">{template.name}</h3>
+                      </div>
+                      <div className="flex items-center space-x-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleEditTemplate(template)}
+                        >
+                          <Icon name="settings" className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteTemplate(template.id)}
+                        >
+                          <Icon name="trash2" className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <div className="text-sm text-gray-600">
+                        Used {getUsageCount(template.name)} times
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleAddToCurrentSession(template)}
+                          className="flex-1"
+                        >
+                          <Icon name="plus" className="h-4 w-4 mr-2" />
+                          Add to Session
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {filteredTemplates.length === 0 && (
+              <div className="text-center py-12">
+                <p className="text-gray-500 mb-4">
+                  {searchQuery ? 'No templates match your search' : 'No activity templates yet'}
+                </p>
+                <Button onClick={handleAddNewTemplate}>
+                  <Icon name="plus" className="h-4 w-4 mr-2" />
+                  Create your first template
+                </Button>
+              </div>
+            )}
+
+            {/* Current Session Activities */}
+            <div className="border-t pt-6">
+              <h3 className="text-lg font-semibold mb-4">Current Session Activities</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {activities.map(activity => (
+                  <Card key={activity.id} className="border-blue-200">
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center space-x-2">
+                          <div 
+                            className="w-4 h-4 rounded-full" 
+                            style={{ backgroundColor: activity.color }}
+                          />
+                          <span className="font-medium">{activity.name}</span>
+                        </div>
+                        <Badge variant="secondary">{activity.percentage}%</Badge>
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        {activity.isLocked && <Icon name="lock" className="h-4 w-4 inline mr-1" />}
+                        {activity.isCompleted ? 'Completed' : 'Active'}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Edit Template Modal */}
+      {editingTemplate && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>
+                {editingTemplate.id ? 'Edit Template' : 'New Template'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="template-name">Template Name</Label>
+                <Input
+                  id="template-name"
+                  value={editingTemplate.name}
+                  onChange={(e) => setEditingTemplate(prev => prev ? ({ ...prev, name: e.target.value }) : null)}
+                  placeholder="e.g., Deep Work, Exercise, Reading..."
+                />
+              </div>
+              
+              <div>
+                <Label htmlFor="template-color">Color</Label>
+                <div className="flex items-center space-x-2 mt-2">
+                  <div 
+                    className="w-8 h-8 rounded-full border-2 border-gray-300" 
+                    style={{ backgroundColor: editingTemplate.color }}
+                  />
+                  <Input
+                    id="template-color"
+                    value={editingTemplate.color}
+                    onChange={(e) => setEditingTemplate(prev => prev ? ({ ...prev, color: e.target.value }) : null)}
+                    placeholder="hsl(220, 70%, 50%)"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditingTemplate(prev => prev ? ({ 
+                      ...prev, 
+                      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)` 
+                    }) : null)}
+                  >
+                    <Icon name="dice" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              
+              <div className="flex justify-end space-x-2 pt-4">
+                <Button variant="outline" onClick={() => setEditingTemplate(null)}>
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={() => handleSaveTemplate({
+                    name: editingTemplate.name,
+                    color: editingTemplate.color
+                  })}
+                  disabled={!editingTemplate.name.trim()}
+                >
+                  {editingTemplate.id ? 'Update' : 'Create'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // FlowmodoroActivity component that behaves like other activities
 const FlowmodoroActivity = ({ flowState, settings, onTakeBreak, onSkipBreak, onReset, isTimerActive, formatTime }) => {
   if (!settings.flowmodoroEnabled) return null;
@@ -1182,6 +1486,9 @@ export default function App() {
 
   // Add Activity Modal State (NEW)
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
+
+  // Navigation State for Activity Management Page
+  const [currentPage, setCurrentPage] = useState('timer'); // 'timer' or 'manage-activities'
 
   // Activity Templates State (NEW)
   const [activityTemplates, setActivityTemplates] = useState<ActivityTemplate[]>(() => {
@@ -2040,7 +2347,15 @@ export default function App() {
 
   const activityProgress = currentActivity?.duration > 0 ? ((currentActivity.duration * 60 - Math.max(0, currentActivity.timeRemaining)) / (currentActivity.duration * 60)) * 100 : 0;
 
-  const mainContent = isTimerActive ? (
+  const mainContent = currentPage === 'manage-activities' ? (
+    <ActivityManagementPage
+      activityTemplates={activityTemplates}
+      setActivityTemplates={setActivityTemplates}
+      activities={activities}
+      setActivities={setActivities}
+      onBackToTimer={() => setCurrentPage('timer')}
+    />
+  ) : isTimerActive ? (
     <div className="max-w-2xl mx-auto">
       <Card>
         <CardHeader>
@@ -2217,13 +2532,19 @@ export default function App() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-3xl font-bold">TimeSlice</CardTitle>
-            <Button variant="outline" size="sm" onClick={() => {
-              console.log("showSettings before toggle:", showSettings);
-              setShowSettings(!showSettings);
-            }}>
-              <Icon name="settings" className="h-4 w-4 mr-2" />
-              Settings
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage('manage-activities')}>
+                <Icon name="list" className="h-4 w-4 mr-2" />
+                Manage Activities
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => {
+                console.log("showSettings before toggle:", showSettings);
+                setShowSettings(!showSettings);
+              }}>
+                <Icon name="settings" className="h-4 w-4 mr-2" />
+                Settings
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-8">
