@@ -4,6 +4,8 @@ interface ActivityTemplate {
   id: string;
   name: string;
   color: string;
+  category?: string;
+  tags?: string[];
 }
 
 // --- Self-Contained UI Components ---
@@ -986,17 +988,69 @@ const ActivityManagementPage = ({
   const [editingTemplate, setEditingTemplate] = useState<ActivityTemplate | null>(null);
   const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [showTagManager, setShowTagManager] = useState(false);
+  
+  // Custom categories and tags management
+  const [customCategories, setCustomCategories] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceCustomCategories');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  
+  const [customTags, setCustomTags] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceCustomTags');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
 
-  // Filter templates based on search query
-  const filteredTemplates = activityTemplates.filter(template =>
-    template.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Save custom categories and tags to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceCustomCategories', JSON.stringify(customCategories));
+    } catch (e) {
+      console.error('Failed to save custom categories:', e);
+    }
+  }, [customCategories]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceCustomTags', JSON.stringify(customTags));
+    } catch (e) {
+      console.error('Failed to save custom tags:', e);
+    }
+  }, [customTags]);
+
+  // Default categories
+  const defaultCategories = ['work', 'health', 'learning', 'personal', 'social', 'creative', 'maintenance', 'other'];
+  const allCategories = [...defaultCategories, ...customCategories];
+
+  // Get all unique tags from templates and custom tags
+  const allTags = [...new Set([
+    ...customTags,
+    ...activityTemplates.flatMap(template => template.tags || [])
+  ])].sort();
+
+  // Filter templates based on search query and category
+  const filteredTemplates = activityTemplates.filter(template => {
+    const matchesSearch = template.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (template.tags && template.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase())));
+    const matchesCategory = categoryFilter === 'all' || template.category === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
 
   const handleEditTemplate = (template: ActivityTemplate) => {
     setEditingTemplate(template);
   };
 
-  const handleSaveTemplate = (templateData: { name: string; color: string }) => {
+  const handleSaveTemplate = (templateData: { name: string; color: string; category?: string; tags?: string[] }) => {
     if (editingTemplate && editingTemplate.id) {
       // Update existing template
       setActivityTemplates(prev => 
@@ -1021,7 +1075,9 @@ const ActivityManagementPage = ({
     setEditingTemplate({
       id: '',
       name: '',
-      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`
+      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`,
+      category: undefined,
+      tags: undefined
     });
   };
 
@@ -1054,8 +1110,50 @@ const ActivityManagementPage = ({
     setActivities(prev => [...prev, newActivity]);
   };
 
+  const handleRemoveFromSession = (activityId: string) => {
+    setActivities(prev => prev.filter(a => a.id !== activityId));
+  };
+
   const getUsageCount = (templateName: string) => {
     return activities.filter(a => a.name === templateName).length;
+  };
+
+  const handleAddCategory = (categoryName: string) => {
+    const trimmedName = categoryName.trim().toLowerCase();
+    if (trimmedName && !allCategories.includes(trimmedName)) {
+      setCustomCategories(prev => [...prev, trimmedName]);
+    }
+  };
+
+  const handleRemoveCategory = (categoryName: string) => {
+    setCustomCategories(prev => prev.filter(c => c !== categoryName));
+    // Also remove this category from any templates that use it
+    setActivityTemplates(prev => 
+      prev.map(template => 
+        template.category === categoryName 
+          ? { ...template, category: undefined }
+          : template
+      )
+    );
+  };
+
+  const handleAddTag = (tagName: string) => {
+    const trimmedName = tagName.trim().toLowerCase();
+    if (trimmedName && !allTags.includes(trimmedName)) {
+      setCustomTags(prev => [...prev, trimmedName]);
+    }
+  };
+
+  const handleRemoveTag = (tagName: string) => {
+    setCustomTags(prev => prev.filter(t => t !== tagName));
+    // Also remove this tag from any templates that use it
+    setActivityTemplates(prev => 
+      prev.map(template => 
+        template.tags 
+          ? { ...template, tags: template.tags.filter(t => t !== tagName) }
+          : template
+      )
+    );
   };
 
   return (
@@ -1103,7 +1201,7 @@ const ActivityManagementPage = ({
             <div className="flex items-center justify-between">
               <div className="flex-1 max-w-md">
                 <Input
-                  placeholder="Search templates..."
+                  placeholder="Search templates or tags..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full"
@@ -1112,6 +1210,60 @@ const ActivityManagementPage = ({
               <div className="flex items-center space-x-4 text-sm text-gray-600">
                 <span>Total Templates: {activityTemplates.length}</span>
                 <span>Current Session Activities: {activities.length}</span>
+              </div>
+            </div>
+
+            {/* Category Filter */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm font-medium">Filter by Category:</span>
+              <div className="flex flex-wrap gap-2">
+                {['all', ...allCategories].map(category => (
+                  <Button
+                    key={category}
+                    variant={categoryFilter === category ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setCategoryFilter(category)}
+                    className="text-xs"
+                  >
+                    {category === 'all' ? 'All' : category.charAt(0).toUpperCase() + category.slice(1)}
+                  </Button>
+                ))}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowCategoryManager(true)}
+                  className="text-xs"
+                >
+                  <Icon name="settings" className="h-3 w-3 mr-1" />
+                  Manage
+                </Button>
+              </div>
+            </div>
+
+            {/* Tags Management */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm font-medium">All Tags:</span>
+              <div className="flex flex-wrap gap-1">
+                {allTags.slice(0, 10).map(tag => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full"
+                  >
+                    {tag}
+                  </span>
+                ))}
+                {allTags.length > 10 && (
+                  <span className="text-xs text-gray-500">+{allTags.length - 10} more</span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowTagManager(true)}
+                  className="text-xs"
+                >
+                  <Icon name="settings" className="h-3 w-3 mr-1" />
+                  Manage Tags
+                </Button>
               </div>
             </div>
 
@@ -1132,7 +1284,16 @@ const ActivityManagementPage = ({
                           className="w-4 h-4 rounded-full border-2 border-gray-300" 
                           style={{ backgroundColor: template.color }}
                         />
-                        <h3 className="font-medium text-lg">{template.name}</h3>
+                        <div className="flex-1">
+                          <h3 className="font-medium text-lg">{template.name}</h3>
+                          {template.category && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              <Badge variant="secondary" className="text-xs px-2 py-0.5">
+                                {template.category}
+                              </Badge>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center space-x-1">
                         <Button
@@ -1156,6 +1317,18 @@ const ActivityManagementPage = ({
                       <div className="text-sm text-gray-600">
                         Used {getUsageCount(template.name)} times
                       </div>
+                      {template.tags && template.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {template.tags.map((tag, index) => (
+                            <span
+                              key={index}
+                              className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div className="flex items-center space-x-2">
                         <Button
                           size="sm"
@@ -1200,7 +1373,17 @@ const ActivityManagementPage = ({
                           />
                           <span className="font-medium">{activity.name}</span>
                         </div>
-                        <Badge variant="secondary">{activity.percentage}%</Badge>
+                        <div className="flex items-center space-x-2">
+                          <Badge variant="secondary">{activity.percentage}%</Badge>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveFromSession(activity.id)}
+                            className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                          >
+                            <Icon name="x" className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
                       <div className="text-sm text-gray-600">
                         {activity.isLocked && <Icon name="lock" className="h-4 w-4 inline mr-1" />}
@@ -1210,6 +1393,11 @@ const ActivityManagementPage = ({
                   </Card>
                 ))}
               </div>
+              {activities.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  No activities in current session
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -1260,6 +1448,58 @@ const ActivityManagementPage = ({
                   </Button>
                 </div>
               </div>
+
+              <div>
+                <Label htmlFor="template-category">Category</Label>
+                <select
+                  id="template-category"
+                  value={editingTemplate.category || ''}
+                  onChange={(e) => setEditingTemplate(prev => prev ? ({ ...prev, category: e.target.value || undefined }) : null)}
+                  className="flex h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <option value="">No Category</option>
+                  {allCategories.map(category => (
+                    <option key={category} value={category}>
+                      {category.charAt(0).toUpperCase() + category.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <Label htmlFor="template-tags">Tags</Label>
+                <Input
+                  id="template-tags"
+                  value={editingTemplate.tags?.join(', ') || ''}
+                  onChange={(e) => setEditingTemplate(prev => prev ? ({ 
+                    ...prev, 
+                    tags: e.target.value ? e.target.value.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0) : undefined
+                  }) : null)}
+                  placeholder="e.g., urgent, important, project-a"
+                />
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {allTags.slice(0, 8).map(tag => (
+                    <Button
+                      key={tag}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const currentTags = editingTemplate.tags || [];
+                        if (!currentTags.includes(tag)) {
+                          setEditingTemplate(prev => prev ? ({ 
+                            ...prev, 
+                            tags: [...currentTags, tag]
+                          }) : null);
+                        }
+                      }}
+                      className="h-6 px-2 text-xs"
+                    >
+                      + {tag}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Separate tags with commas or click suggestions above</p>
+              </div>
               
               <div className="flex justify-end space-x-2 pt-4">
                 <Button variant="outline" onClick={() => setEditingTemplate(null)}>
@@ -1268,11 +1508,183 @@ const ActivityManagementPage = ({
                 <Button 
                   onClick={() => handleSaveTemplate({
                     name: editingTemplate.name,
-                    color: editingTemplate.color
+                    color: editingTemplate.color,
+                    category: editingTemplate.category,
+                    tags: editingTemplate.tags
                   })}
                   disabled={!editingTemplate.name.trim()}
                 >
                   {editingTemplate.id ? 'Update' : 'Create'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Category Manager Modal */}
+      {showCategoryManager && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Manage Categories</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Default Categories */}
+              <div>
+                <Label>Default Categories</Label>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  {defaultCategories.map(category => (
+                    <div
+                      key={category}
+                      className="flex items-center justify-between p-2 bg-gray-50 rounded"
+                    >
+                      <span className="text-sm">{category.charAt(0).toUpperCase() + category.slice(1)}</span>
+                      <span className="text-xs text-gray-500">Default</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Categories */}
+              <div>
+                <Label>Custom Categories</Label>
+                <div className="space-y-2 mt-2">
+                  {customCategories.map(category => (
+                    <div
+                      key={category}
+                      className="flex items-center justify-between p-2 bg-blue-50 rounded"
+                    >
+                      <span className="text-sm">{category.charAt(0).toUpperCase() + category.slice(1)}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveCategory(category)}
+                        className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                      >
+                        <Icon name="x" className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                  {customCategories.length === 0 && (
+                    <p className="text-sm text-gray-500 italic">No custom categories yet</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Add New Category */}
+              <div>
+                <Label htmlFor="new-category">Add New Category</Label>
+                <div className="flex items-center space-x-2 mt-2">
+                  <Input
+                    id="new-category"
+                    placeholder="Enter category name"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        const value = e.target.value.trim().toLowerCase();
+                        if (value && !allCategories.includes(value)) {
+                          handleAddCategory(value);
+                          e.target.value = '';
+                        }
+                      }
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={(e) => {
+                      const input = e.target.parentElement.querySelector('input');
+                      const value = input.value.trim().toLowerCase();
+                      if (value && !allCategories.includes(value)) {
+                        handleAddCategory(value);
+                        input.value = '';
+                      }
+                    }}
+                  >
+                    <Icon name="plus" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-4">
+                <Button variant="outline" onClick={() => setShowCategoryManager(false)}>
+                  Close
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Tag Manager Modal */}
+      {showTagManager && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Manage Tags</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Existing Tags */}
+              <div>
+                <Label>Existing Tags</Label>
+                <div className="flex flex-wrap gap-2 mt-2 max-h-48 overflow-y-auto">
+                  {allTags.map(tag => (
+                    <div
+                      key={tag}
+                      className="flex items-center space-x-1 bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs"
+                    >
+                      <span>{tag}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveTag(tag)}
+                        className="h-4 w-4 p-0 text-blue-600 hover:text-red-600"
+                      >
+                        <Icon name="x" className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                  {allTags.length === 0 && (
+                    <p className="text-sm text-gray-500 italic">No tags yet</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Add New Tag */}
+              <div>
+                <Label htmlFor="new-tag">Add New Tag</Label>
+                <div className="flex items-center space-x-2 mt-2">
+                  <Input
+                    id="new-tag"
+                    placeholder="Enter tag name"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        const value = e.target.value.trim().toLowerCase();
+                        if (value && !allTags.includes(value)) {
+                          handleAddTag(value);
+                          e.target.value = '';
+                        }
+                      }
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={(e) => {
+                      const input = e.target.parentElement.querySelector('input');
+                      const value = input.value.trim().toLowerCase();
+                      if (value && !allTags.includes(value)) {
+                        handleAddTag(value);
+                        input.value = '';
+                      }
+                    }}
+                  >
+                    <Icon name="plus" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-4">
+                <Button variant="outline" onClick={() => setShowTagManager(false)}>
+                  Close
                 </Button>
               </div>
             </CardContent>
