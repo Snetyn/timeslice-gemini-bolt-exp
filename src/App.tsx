@@ -1028,9 +1028,8 @@ const ActivityManagementPage = ({
     }
   }, [customTags]);
 
-  // Default categories
-  const defaultCategories = ['work', 'health', 'learning', 'personal', 'social', 'creative', 'maintenance', 'other'];
-  const allCategories = [...defaultCategories, ...customCategories];
+  // Only custom categories now
+  const allCategories = [...customCategories];
 
   // Get all unique tags from templates and custom tags
   const allTags = [...new Set([
@@ -1530,25 +1529,9 @@ const ActivityManagementPage = ({
               <CardTitle>Manage Categories</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Default Categories */}
+              {/* Categories */}
               <div>
-                <Label>Default Categories</Label>
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  {defaultCategories.map(category => (
-                    <div
-                      key={category}
-                      className="flex items-center justify-between p-2 bg-gray-50 rounded"
-                    >
-                      <span className="text-sm">{category.charAt(0).toUpperCase() + category.slice(1)}</span>
-                      <span className="text-xs text-gray-500">Default</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Custom Categories */}
-              <div>
-                <Label>Custom Categories</Label>
+                <Label>Categories</Label>
                 <div className="space-y-2 mt-2">
                   {customCategories.map(category => (
                     <div
@@ -1557,10 +1540,10 @@ const ActivityManagementPage = ({
                     >
                       <span className="text-sm">{category.charAt(0).toUpperCase() + category.slice(1)}</span>
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
                         onClick={() => handleRemoveCategory(category)}
-                        className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                        className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 border-red-300"
                       >
                         <Icon name="x" className="h-3 w-3" />
                       </Button>
@@ -1634,10 +1617,10 @@ const ActivityManagementPage = ({
                     >
                       <span>{tag}</span>
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
                         onClick={() => handleRemoveTag(tag)}
-                        className="h-4 w-4 p-0 text-blue-600 hover:text-red-600"
+                        className="h-4 w-4 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 border-red-300"
                       >
                         <Icon name="x" className="h-3 w-3" />
                       </Button>
