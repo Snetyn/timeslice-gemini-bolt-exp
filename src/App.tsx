@@ -1733,6 +1733,23 @@ const ActivityManagementPage = ({
               </div>
 
               <div>
+                <Label htmlFor="activity-duration">Exact Time Duration</Label>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    id="activity-duration"
+                    type="number"
+                    min="0"
+                    value={editingActivity.duration || 0}
+                    onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, duration: parseInt(e.target.value) || 0 }) : null)}
+                    className="flex-1"
+                    placeholder="Enter minutes"
+                  />
+                  <span className="text-sm text-gray-500">minutes</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">Set exact time in minutes (overrides percentage if set)</p>
+              </div>
+
+              <div>
                 <Label htmlFor="activity-color">Color</Label>
                 <div className="flex items-center space-x-2 mt-2">
                   <div 
