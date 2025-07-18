@@ -2972,15 +2972,15 @@ export default function App() {
                 totalSessionMinutes={totalSessionMinutes}
               />
             ) : (
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm text-gray-600">
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-gray-600">
                   <span>Overall Progress</span>
                   <span>{Math.round(getOverallProgress())}%</span>
                 </div>
                 <VisualProgress
                   activities={activities}
                   style={settings.progressBarStyle}
-                  className="h-4"
+                  className="h-3"
                   overallProgress={getOverallProgress()}
                   currentActivityColor={currentActivity?.color}
                   totalSessionMinutes={totalSessionMinutes}
@@ -3043,21 +3043,21 @@ export default function App() {
                 return (
                   <div
                     key={activity.id}
-                    className={`relative overflow-hidden flex items-center justify-between p-3 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
+                    className={`relative overflow-hidden flex items-center justify-between p-2 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
                       } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}`}
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
                     {settings.showActivityProgress && (
                       <div className="absolute top-0 left-0 h-full opacity-20" style={{ width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear' }}></div>
                     )}
-                    <div className="flex items-center space-x-4 z-10">
-                      <input type="checkbox" className="h-5 w-5 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
-                      <div className="w-4 h-4 rounded-full" style={{ backgroundColor: activity.color }} />
-                      <span className="font-semibold">{activity.name}</span>
+                    <div className="flex items-center space-x-2 z-10">
+                      <input type="checkbox" className="h-4 w-4 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activity.color }} />
+                      <span className="font-semibold text-sm">{activity.name}</span>
                     </div>
-                    <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
                       {settings.showActivityTime && (
-                        <span className="text-sm font-mono z-10">{formatTime(activity.timeRemaining)}</span>
+                        <span className="text-xs font-mono z-10">{formatTime(activity.timeRemaining)}</span>
                       )}
                       <Button 
                         size="sm" 
@@ -3084,17 +3084,17 @@ export default function App() {
                         }}
                         disabled={false} // TEMPORARILY DISABLED THE DISABLE CONDITION
                         title="Transfer time to vault"
-                        className="bg-blue-100 hover:bg-blue-200 z-20 relative"
+                        className="bg-blue-100 hover:bg-blue-200 z-20 relative h-6 w-6 p-0"
                       >
-                        <Icon name="arrowUpDown" className="h-4 w-4" />
+                        <Icon name="arrowUpDown" className="h-3 w-3" />
                       </Button>
                     </div>
                   </div>
                 );
               })}
             </div>
-            <Button variant="outline" onClick={() => addActivity()} className="w-full mt-2 bg-blue-50 border-blue-200 hover:bg-blue-100">
-              <Icon name="plus" className="h-4 w-4 mr-2" />
+            <Button variant="outline" onClick={() => addActivity()} className="w-full mt-1 bg-blue-50 border-blue-200 hover:bg-blue-100 h-8 text-sm">
+              <Icon name="plus" className="h-3 w-3 mr-2" />
               Add Activity
             </Button>
           </div>
