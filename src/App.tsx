@@ -2935,16 +2935,16 @@ export default function App() {
   ) : isTimerActive ? (
     <div className="max-w-2xl mx-auto">
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-2xl">TimeSlice Timer</CardTitle>
-            <div className="flex space-x-2">
-              <Button variant="outline" size="sm" onClick={pauseResumeTimer} className="w-24">
-                <Icon name={isPaused ? "play" : "pause"} className="h-4 w-4 mr-2" />
+            <CardTitle className="text-lg sm:text-xl">TimeSlice Timer</CardTitle>
+            <div className="flex space-x-1 sm:space-x-2">
+              <Button variant="outline" size="sm" onClick={pauseResumeTimer} className="h-7 w-16 sm:h-8 sm:w-20 text-xs">
+                <Icon name={isPaused ? "play" : "pause"} className="h-3 w-3 mr-1" />
                 {isPaused ? "Resume" : "Pause"}
               </Button>
-              <Button variant="outline" size="sm" onClick={resetSession} className="w-24">
-                <Icon name="rotateCcw" className="h-4 w-4 mr-2" />
+              <Button variant="outline" size="sm" onClick={resetSession} className="h-7 w-14 sm:h-8 sm:w-16 text-xs">
+                <Icon name="rotateCcw" className="h-3 w-3 mr-1" />
                 Reset
               </Button>
               <Button
@@ -2952,16 +2952,15 @@ export default function App() {
                 size="sm"
                 onClick={selectRandomActivity}
                 disabled={activities.filter(a => !a.isCompleted).length <= 1}
-                className="w-24"
+                className="h-7 w-16 sm:h-8 sm:w-20 text-xs"
               >
-                <Icon name="dice" className="h-4 w-4 mr-2" />
+                <Icon name="dice" className="h-3 w-3 mr-1" />
                 Random
-
               </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-3 pt-0">
           {settings.showMainProgress && (
             settings.progressView === 'circular' ? (
               <CircularProgress
@@ -2989,37 +2988,37 @@ export default function App() {
               </div>
             )
           )}
-          <div className="text-center space-y-4">
-            <div className="flex items-center justify-center space-x-3">
-              <div className="w-6 h-6 rounded-full" style={{ backgroundColor: currentActivity?.color }} />
-              <h2 className="text-3xl font-bold">{currentActivity?.name}</h2>
+          <div className="text-center space-y-2">
+            <div className="flex items-center justify-center space-x-2">
+              <div className="w-4 h-4 sm:w-5 sm:h-5 rounded-full" style={{ backgroundColor: currentActivity?.color }} />
+              <h2 className="text-xl sm:text-2xl font-bold">{currentActivity?.name}</h2>
             </div>
             {settings.showActivityTimer && (
-              <div className="text-6xl font-mono font-bold text-slate-800">{currentActivity?.isCompleted ? "COMPLETED" : formatTime(currentActivity?.timeRemaining || 0)}</div>
+              <div className="text-4xl sm:text-5xl font-mono font-bold text-slate-800">{currentActivity?.isCompleted ? "COMPLETED" : formatTime(currentActivity?.timeRemaining || 0)}</div>
             )}
-            {isPaused && <Badge variant="secondary" className="text-lg px-4 py-2">PAUSED</Badge>}
+            {isPaused && <Badge variant="secondary" className="text-sm sm:text-base px-3 py-1">PAUSED</Badge>}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-            <div className="space-y-1">
-              <div className="text-sm text-gray-600">Time Vault</div>
-              <div className="text-xl font-semibold text-green-600">{formatTime(vaultTime)}</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-center">
+            <div className="space-y-0.5">
+              <div className="text-xs text-gray-600">Time Vault</div>
+              <div className="text-lg font-semibold text-green-600">{formatTime(vaultTime)}</div>
               {vaultTime > 0 && (
                 <Button 
                   size="sm" 
                   variant="outline" 
-                  className="mt-2" 
+                  className="mt-1 h-6 text-xs px-2" 
                   onClick={() => setBorrowModalState({ isOpen: true, activityId: currentActivity?.id || '' })}
                   title="Borrow time from vault"
                 >
-                  <Icon name="arrowUpDown" className="h-4 w-4 mr-1" />
+                  <Icon name="arrowUpDown" className="h-3 w-3 mr-1" />
                   Borrow
                 </Button>
               )}
             </div>
             {settings.showEndTime && (
-              <div className="space-y-1">
-                <div className="text-sm text-gray-600">Predicted End</div>
-                <div className="text-xl font-semibold">{getPredictedEndTime()}</div>
+              <div className="space-y-0.5">
+                <div className="text-xs text-gray-600">Predicted End</div>
+                <div className="text-lg font-semibold">{getPredictedEndTime()}</div>
               </div>
             )}
           </div>
@@ -3036,10 +3035,9 @@ export default function App() {
             formatTime={formatTime}
           />
           
-          <div className="space-y-2">
-            <h3 className="font-semibold">Activities</h3>
-            <div className="space-y-2">
-              {activities.map((activity, index) => {
+          <div className="space-y-1">
+            <h3 className="font-semibold text-sm">Activities</h3>
+            <div className="space-y-1">{activities.map((activity, index) => {
                 const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - Math.max(0, activity.timeRemaining)) / (activity.duration * 60)) * 100 : 0;
                 const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
                 return (
