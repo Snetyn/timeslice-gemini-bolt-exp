@@ -468,11 +468,11 @@ const ColorPicker = ({ isOpen, onClose, currentColor, onColorChange, favorites, 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-md">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+      <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-lg">Color Picker</CardTitle>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <CardTitle className="text-base sm:text-lg">Color Picker</CardTitle>
+          <Button variant="ghost" size="sm" onClick={onClose} className="h-8 w-8">
             <Icon name="x" className="h-4 w-4" />
           </Button>
         </CardHeader>
@@ -1164,30 +1164,31 @@ const ActivityManagementPage = ({
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 font-sans">
+    <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans">
       <div className="max-w-6xl mx-auto">
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
+              <div className="flex items-center space-x-2 sm:space-x-4">
                 <Button 
                   variant="ghost" 
                   size="sm" 
                   onClick={onBackToTimer}
-                  className="flex items-center space-x-2"
+                  className="flex items-center space-x-1 sm:space-x-2 h-8 sm:h-9 text-xs sm:text-sm"
                 >
-                  <Icon name="rotateCcw" className="h-4 w-4" />
+                  <Icon name="rotateCcw" className="h-3 w-3 sm:h-4 sm:w-4" />
                   <span>Back to Timer</span>
                 </Button>
-                <CardTitle className="text-3xl font-bold">Activity Management</CardTitle>
+                <CardTitle className="text-xl sm:text-2xl lg:text-3xl font-bold">Activity Management</CardTitle>
               </div>
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1 sm:space-x-2">
                 <Button 
                   variant="outline" 
                   size="sm" 
                   onClick={handleAddNewTemplate}
+                  className="h-8 sm:h-9 text-xs sm:text-sm"
                 >
-                  <Icon name="plus" className="h-4 w-4 mr-2" />
+                  <Icon name="plus" className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                   New Template
                 </Button>
                 {selectedTemplates.length > 0 && (
@@ -1195,42 +1196,43 @@ const ActivityManagementPage = ({
                     variant="destructive" 
                     size="sm" 
                     onClick={handleBulkDelete}
+                    className="h-8 sm:h-9 text-xs sm:text-sm"
                   >
-                    <Icon name="trash2" className="h-4 w-4 mr-2" />
+                    <Icon name="trash2" className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                     Delete ({selectedTemplates.length})
                   </Button>
                 )}
               </div>
             </div>
           </CardHeader>
-          <CardContent className="space-y-6">
+          <CardContent className="space-y-4 sm:space-y-6 p-3 sm:p-6">
             {/* Search and Stats */}
-            <div className="flex items-center justify-between">
-              <div className="flex-1 max-w-md">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-0 sm:justify-between">
+              <div className="flex-1 w-full sm:max-w-md">
                 <Input
                   placeholder="Search templates or tags..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full"
+                  className="w-full h-8 sm:h-9 text-sm"
                 />
               </div>
-              <div className="flex items-center space-x-4 text-sm text-gray-600">
-                <span>Total Templates: {activityTemplates.length}</span>
-                <span>Current Session Activities: {activities.length}</span>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-1 sm:space-y-0 sm:space-x-4 text-xs sm:text-sm text-gray-600">
+                <span>Templates: {activityTemplates.length}</span>
+                <span>Session: {activities.length}</span>
               </div>
             </div>
 
             {/* Category Filter */}
-            <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium">Filter by Category:</span>
-              <div className="flex flex-wrap gap-2">
+            <div className="space-y-2">
+              <span className="text-xs sm:text-sm font-medium">Filter by Category:</span>
+              <div className="flex flex-wrap gap-1 sm:gap-2">
                 {['all', ...allCategories].map(category => (
                   <Button
                     key={category}
                     variant={categoryFilter === category ? "default" : "outline"}
                     size="sm"
                     onClick={() => setCategoryFilter(category)}
-                    className="text-xs"
+                    className="text-xs h-7 sm:h-8"
                   >
                     {category === 'all' ? 'All' : category.charAt(0).toUpperCase() + category.slice(1)}
                   </Button>
@@ -1239,7 +1241,7 @@ const ActivityManagementPage = ({
                   variant="ghost"
                   size="sm"
                   onClick={() => setShowCategoryManager(true)}
-                  className="text-xs"
+                  className="text-xs h-7 sm:h-8"
                 >
                   <Icon name="settings" className="h-3 w-3 mr-1" />
                   Manage
@@ -1248,13 +1250,13 @@ const ActivityManagementPage = ({
             </div>
 
             {/* Tags Management */}
-            <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium">All Tags:</span>
+            <div className="space-y-2">
+              <span className="text-xs sm:text-sm font-medium">All Tags:</span>
               <div className="flex flex-wrap gap-1">
                 {allTags.slice(0, 10).map(tag => (
                   <span
                     key={tag}
-                    className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full"
+                    className="inline-flex items-center px-1.5 py-0.5 text-xs bg-blue-100 text-blue-800 rounded-full"
                   >
                     {tag}
                   </span>
@@ -1266,7 +1268,7 @@ const ActivityManagementPage = ({
                   variant="ghost"
                   size="sm"
                   onClick={() => setShowTagManager(true)}
-                  className="text-xs"
+                  className="text-xs h-7 sm:h-8"
                 >
                   <Icon name="settings" className="h-3 w-3 mr-1" />
                   Manage Tags
@@ -1275,53 +1277,55 @@ const ActivityManagementPage = ({
             </div>
 
             {/* Activity Templates Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
               {filteredTemplates.map(template => (
                 <Card key={template.id} className="relative">
-                  <CardContent className="p-4">
+                  <CardContent className="p-3 sm:p-4">
                     <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center space-x-3">
+                      <div className="flex items-center space-x-2 sm:space-x-3 flex-1 min-w-0">
                         <input
                           type="checkbox"
                           checked={selectedTemplates.includes(template.id)}
                           onChange={() => handleSelectTemplate(template.id)}
-                          className="rounded"
+                          className="rounded flex-shrink-0"
                         />
                         <div 
-                          className="w-4 h-4 rounded-full border-2 border-gray-300" 
+                          className="w-3 h-3 sm:w-4 sm:h-4 rounded-full border-2 border-gray-300 flex-shrink-0" 
                           style={{ backgroundColor: template.color }}
                         />
-                        <div className="flex-1">
-                          <h3 className="font-medium text-lg">{template.name}</h3>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-medium text-sm sm:text-lg truncate">{template.name}</h3>
                           {template.category && (
                             <div className="text-xs text-gray-500 mt-1">
-                              <Badge variant="secondary" className="text-xs px-2 py-0.5">
+                              <Badge variant="secondary" className="text-xs px-1.5 py-0.5">
                                 {template.category}
                               </Badge>
                             </div>
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center space-x-1">
+                      <div className="flex items-center space-x-1 flex-shrink-0">
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleEditTemplate(template)}
+                          className="h-6 w-6 sm:h-8 sm:w-8 p-0"
                         >
-                          <Icon name="settings" className="h-4 w-4" />
+                          <Icon name="settings" className="h-3 w-3 sm:h-4 sm:w-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleDeleteTemplate(template.id)}
+                          className="h-6 w-6 sm:h-8 sm:w-8 p-0"
                         >
-                          <Icon name="trash2" className="h-4 w-4" />
+                          <Icon name="trash2" className="h-3 w-3 sm:h-4 sm:w-4" />
                         </Button>
                       </div>
                     </div>
                     
                     <div className="space-y-2">
-                      <div className="text-sm text-gray-600">
+                      <div className="text-xs sm:text-sm text-gray-600">
                         Used {getUsageCount(template.name)} times
                       </div>
                       {template.tags && template.tags.length > 0 && (
@@ -1329,7 +1333,7 @@ const ActivityManagementPage = ({
                           {template.tags.map((tag, index) => (
                             <span
                               key={index}
-                              className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full"
+                              className="inline-flex items-center px-1.5 py-0.5 text-xs bg-blue-100 text-blue-800 rounded-full"
                             >
                               {tag}
                             </span>
@@ -1341,9 +1345,9 @@ const ActivityManagementPage = ({
                           size="sm"
                           variant="outline"
                           onClick={() => handleAddToCurrentSession(template)}
-                          className="flex-1"
+                          className="flex-1 h-8 text-xs sm:text-sm"
                         >
-                          <Icon name="plus" className="h-4 w-4 mr-2" />
+                          <Icon name="plus" className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                           Add to Session
                         </Button>
                       </div>
@@ -1368,20 +1372,22 @@ const ActivityManagementPage = ({
             {/* Current Session Activities */}
             <div className="border-t pt-6">
               <h3 className="text-lg font-semibold mb-4">Current Session Activities</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                 {activities.map(activity => (
                   <Card key={activity.id} className="border-blue-200">
-                    <CardContent className="p-4">
+                    <CardContent className="p-3 sm:p-4">
                       <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-2 flex-1 min-w-0">
                           <div 
-                            className="w-4 h-4 rounded-full" 
+                            className="w-3 h-3 sm:w-4 sm:h-4 rounded-full flex-shrink-0" 
                             style={{ backgroundColor: activity.color }}
                           />
-                          <span className="font-medium">{activity.name}</span>
+                          <span className="font-medium text-sm sm:text-base truncate">{activity.name}</span>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <Badge variant="secondary">{activity.percentage}%</Badge>
+                        <div className="flex items-center space-x-1 sm:space-x-2 flex-shrink-0">
+                          <Badge variant="secondary" className="text-xs px-1.5 py-0.5 sm:px-2.5 sm:py-0.5">
+                            {activity.percentage}%
+                          </Badge>
                           
                           {/* Edit Button */}
                           <Button
@@ -1391,10 +1397,10 @@ const ActivityManagementPage = ({
                               e.stopPropagation();
                               handleEditActivity(activity);
                             }}
-                            className="h-6 w-6 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-blue-300"
+                            className="h-6 w-6 sm:h-8 sm:w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-blue-300"
                             title="Edit Activity"
                           >
-                            ⚙️
+                            <span className="text-xs sm:text-sm">⚙️</span>
                           </Button>
                           
                           {/* Delete Button */}
@@ -1402,15 +1408,15 @@ const ActivityManagementPage = ({
                             variant="ghost"
                             size="sm"
                             onClick={() => handleRemoveFromSession(activity.id)}
-                            className="h-6 w-6 p-0 text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-300"
+                            className="h-6 w-6 sm:h-8 sm:w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-300"
                             title="Delete Activity"
                           >
-                            ❌
+                            <span className="text-xs sm:text-sm">❌</span>
                           </Button>
                         </div>
                       </div>
-                      <div className="text-sm text-gray-600">
-                        {activity.isLocked && <Icon name="lock" className="h-4 w-4 inline mr-1" />}
+                      <div className="text-xs sm:text-sm text-gray-600">
+                        {activity.isLocked && <Icon name="lock" className="h-3 w-3 sm:h-4 sm:w-4 inline mr-1" />}
                         {activity.isCompleted ? 'Completed' : 'Active'}
                       </div>
                     </CardContent>
@@ -1429,10 +1435,10 @@ const ActivityManagementPage = ({
 
       {/* Edit Template Modal */}
       {editingTemplate && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
             <CardHeader>
-              <CardTitle>
+              <CardTitle className="text-base sm:text-lg">
                 {editingTemplate.id ? 'Edit Template' : 'New Template'}
               </CardTitle>
             </CardHeader>
@@ -1548,10 +1554,10 @@ const ActivityManagementPage = ({
 
       {/* Category Manager Modal */}
       {showCategoryManager && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
             <CardHeader>
-              <CardTitle>Manage Categories</CardTitle>
+              <CardTitle className="text-base sm:text-lg">Manage Categories</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Categories */}
@@ -1624,10 +1630,10 @@ const ActivityManagementPage = ({
 
       {/* Tag Manager Modal */}
       {showTagManager && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
             <CardHeader>
-              <CardTitle>Manage Tags</CardTitle>
+              <CardTitle className="text-base sm:text-lg">Manage Tags</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Existing Tags */}
@@ -1700,10 +1706,10 @@ const ActivityManagementPage = ({
 
       {/* Edit Activity Modal */}
       {editingActivity && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-md">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <Card className="w-full max-w-md max-h-[90vh] overflow-y-auto">
             <CardHeader>
-              <CardTitle>Edit Activity: {editingActivity.name}</CardTitle>
+              <CardTitle className="text-base sm:text-lg">Edit Activity: {editingActivity.name}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
