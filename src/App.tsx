@@ -1564,14 +1564,13 @@ const ActivityManagementPage = ({
                       className="flex items-center justify-between p-2 bg-blue-50 rounded"
                     >
                       <span className="text-sm">{category.charAt(0).toUpperCase() + category.slice(1)}</span>
-                      <Button
-                        variant="outline"
-                        size="sm"
+                      <button
                         onClick={() => handleRemoveCategory(category)}
-                        className="h-6 w-6 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 border-red-300"
+                        className="h-6 w-6 text-red-600 hover:text-red-800 hover:bg-red-100 rounded border border-red-300 flex items-center justify-center"
+                        title="Remove category"
                       >
-                        <Icon name="x" className="h-3 w-3" />
-                      </Button>
+                        ❌
+                      </button>
                     </div>
                   ))}
                   {customCategories.length === 0 && (
@@ -1641,14 +1640,13 @@ const ActivityManagementPage = ({
                       className="flex items-center space-x-1 bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs"
                     >
                       <span>{tag}</span>
-                      <Button
-                        variant="outline"
-                        size="sm"
+                      <button
                         onClick={() => handleRemoveTag(tag)}
-                        className="h-4 w-4 p-0 text-red-500 hover:text-red-700 hover:bg-red-50 border-red-300"
+                        className="ml-1 text-red-600 hover:text-red-800 hover:bg-red-100 rounded-full w-4 h-4 flex items-center justify-center text-xs"
+                        title="Remove tag"
                       >
-                        <Icon name="x" className="h-3 w-3" />
-                      </Button>
+                        ❌
+                      </button>
                     </div>
                   ))}
                   {allTags.length === 0 && (
