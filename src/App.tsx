@@ -992,6 +992,9 @@ const ActivityManagementPage = ({
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [showTagManager, setShowTagManager] = useState(false);
   
+  // Activity customization state
+  const [editingActivity, setEditingActivity] = useState<any | null>(null);
+  
   // Custom categories and tags management
   const [customCategories, setCustomCategories] = useState<string[]>(() => {
     try {
@@ -1153,6 +1156,11 @@ const ActivityManagementPage = ({
           : template
       )
     );
+  };
+
+  // Activity customization handlers
+  const handleEditActivity = (activity: any) => {
+    setEditingActivity(activity);
   };
 
   return (
@@ -1374,13 +1382,30 @@ const ActivityManagementPage = ({
                         </div>
                         <div className="flex items-center space-x-2">
                           <Badge variant="secondary">{activity.percentage}%</Badge>
+                          
+                          {/* Edit Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleEditActivity(activity);
+                            }}
+                            className="h-6 w-6 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-blue-300"
+                            title="Edit Activity"
+                          >
+                            ⚙️
+                          </Button>
+                          
+                          {/* Delete Button */}
                           <Button
                             variant="ghost"
                             size="sm"
                             onClick={() => handleRemoveFromSession(activity.id)}
-                            className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                            className="h-6 w-6 p-0 text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-300"
+                            title="Delete Activity"
                           >
-                            <Icon name="x" className="h-4 w-4" />
+                            ❌
                           </Button>
                         </div>
                       </div>
@@ -1668,6 +1693,130 @@ const ActivityManagementPage = ({
               <div className="flex justify-end space-x-2 pt-4">
                 <Button variant="outline" onClick={() => setShowTagManager(false)}>
                   Close
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Edit Activity Modal */}
+      {editingActivity && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>Edit Activity: {editingActivity.name}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="activity-name">Activity Name</Label>
+                <Input
+                  id="activity-name"
+                  value={editingActivity.name}
+                  onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, name: e.target.value }) : null)}
+                  placeholder="Activity name..."
+                />
+              </div>
+              
+              <div>
+                <Label htmlFor="activity-percentage">Time Percentage</Label>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    id="activity-percentage"
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={editingActivity.percentage}
+                    onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, percentage: parseInt(e.target.value) || 0 }) : null)}
+                    className="flex-1"
+                  />
+                  <span className="text-sm text-gray-500">%</span>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="activity-color">Color</Label>
+                <div className="flex items-center space-x-2 mt-2">
+                  <div 
+                    className="w-8 h-8 rounded-full border-2 border-gray-300" 
+                    style={{ backgroundColor: editingActivity.color }}
+                  />
+                  <Input
+                    id="activity-color"
+                    value={editingActivity.color}
+                    onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, color: e.target.value }) : null)}
+                    placeholder="hsl(220, 70%, 50%)"
+                    className="flex-1"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditingActivity(prev => prev ? ({ 
+                      ...prev, 
+                      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)` 
+                    }) : null)}
+                  >
+                    <Icon name="dice" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              <div>
+                <Label>Add Tags</Label>
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {allTags.slice(0, 8).map(tag => (
+                    <Button
+                      key={tag}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        // Add tag functionality here if needed
+                        console.log('Add tag:', tag);
+                      }}
+                      className="h-6 px-2 text-xs"
+                    >
+                      + {tag}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <Label>Add Category</Label>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      // Add category functionality here if needed
+                      console.log('Add category:', e.target.value);
+                    }
+                  }}
+                  className="flex h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm"
+                >
+                  <option value="">Select a category to add...</option>
+                  {allCategories.map(category => (
+                    <option key={category} value={category}>
+                      {category.charAt(0).toUpperCase() + category.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="flex justify-end space-x-2 pt-4">
+                <Button variant="outline" onClick={() => setEditingActivity(null)}>
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={() => {
+                    // Save changes to the activity
+                    setActivities(prev => 
+                      prev.map(a => a.id === editingActivity.id ? editingActivity : a)
+                    );
+                    setEditingActivity(null);
+                  }}
+                  disabled={!editingActivity.name.trim()}
+                >
+                  Save Changes
                 </Button>
               </div>
             </CardContent>
