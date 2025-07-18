@@ -1670,11 +1670,12 @@ const ActivityManagementPage = ({
 
               {/* Add New Tag */}
               <div>
-                <Label htmlFor="new-tag">Add New Tag</Label>
-                <div className="flex items-center space-x-2 mt-2">
+                <Label htmlFor="new-tag" className="text-xs sm:text-sm">Add New Tag</Label>
+                <div className="flex items-center space-x-2 mt-1">
                   <Input
                     id="new-tag"
                     placeholder="Enter tag name"
+                    className="h-8 sm:h-10 text-xs sm:text-sm"
                     onKeyPress={(e) => {
                       if (e.key === 'Enter') {
                         const value = e.target.value.trim().toLowerCase();
@@ -1687,6 +1688,7 @@ const ActivityManagementPage = ({
                   />
                   <Button
                     size="sm"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0"
                     onClick={(e) => {
                       const input = e.target.parentElement.querySelector('input');
                       const value = input.value.trim().toLowerCase();
@@ -1696,13 +1698,13 @@ const ActivityManagementPage = ({
                       }
                     }}
                   >
-                    <Icon name="plus" className="h-4 w-4" />
+                    <Icon name="plus" className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
                 </div>
               </div>
 
-              <div className="flex justify-end space-x-2 pt-4">
-                <Button variant="outline" onClick={() => setShowTagManager(false)}>
+              <div className="flex justify-end space-x-2 pt-2 sm:pt-4">
+                <Button variant="outline" onClick={() => setShowTagManager(false)} className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4">
                   Close
                 </Button>
               </div>
@@ -3122,13 +3124,13 @@ export default function App() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-8">
+        <CardContent className="space-y-6">
           {showSettings && (
             <Card className="bg-gray-50">
               <CardHeader>
                 <CardTitle className="text-lg">Timer Settings</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-3">
                 <div className="space-y-2">
                   <Label>Overtime Behavior</Label>
                   <div className="flex items-center gap-2">
@@ -3319,16 +3321,16 @@ export default function App() {
             </Card>
           )}
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             <h2 className="text-xl font-semibold">Session Duration</h2>
-            <div className="flex items-center gap-4 mb-2">
-              <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')}>Set Duration</Button>
-              <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')}>Set End Time</Button>
+            <div className="flex items-center gap-2 mb-1">
+              <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')} className="h-8 text-xs">Set Duration</Button>
+              <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')} className="h-8 text-xs">Set End Time</Button>
             </div>
             {durationType === 'duration' ? (
-              <div className="flex flex-wrap items-center gap-4">
+              <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center space-x-2">
-                  <Label htmlFor="hours">Hours:</Label>
+                  <Label htmlFor="hours" className="text-sm">Hours:</Label>
                   <Input 
                     id="hours" 
                     type="number" 
@@ -3349,11 +3351,11 @@ export default function App() {
                       const value = Number.parseInt(e.target.value) || 0;
                       setTotalHours(Math.max(0, Math.min(12, value)));
                     }}
-                    className="w-20" 
+                    className="w-16 h-8 text-sm" 
                   />
                 </div>
                 <div className="flex items-center space-x-2">
-                  <Label htmlFor="minutes">Minutes:</Label>
+                  <Label htmlFor="minutes" className="text-sm">Minutes:</Label>
                   <Input 
                     id="minutes" 
                     type="number" 
@@ -3374,21 +3376,21 @@ export default function App() {
                       const value = Number.parseInt(e.target.value) || 0;
                       setTotalMinutes(Math.max(0, Math.min(59, value)));
                     }}
-                    className="w-20" 
+                    className="w-16 h-8 text-sm" 
                   />
                 </div>
               </div>
             ) : (
-              <div className="flex flex-wrap items-center gap-4">
+              <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center space-x-2">
-                  <Label htmlFor="end-time">End Time:</Label>
-                  <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-32" />
+                  <Label htmlFor="end-time" className="text-sm">End Time:</Label>
+                  <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-28 h-8 text-sm" />
                 </div>
               </div>
             )}
             <div className="text-sm text-gray-600">Total session will be {totalSessionMinutes} minutes.</div>
           </div>
-          <div className="space-y-4">
+          <div className="space-y-3">
             <h2 className="text-xl font-semibold">Time Allocation</h2>
             <div
               className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex"
@@ -3421,7 +3423,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold">Activities</h2>
               <div className="flex items-center gap-2">
@@ -3431,10 +3433,10 @@ export default function App() {
                 </Badge>
               </div>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-1">
               {activities.map((activity) => (
-                <div key={activity.id} className="grid grid-cols-1 sm:grid-cols-12 items-center gap-x-4 gap-y-2 p-3 border rounded-lg">
-                  <button className="sm:col-span-1 w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
+                <div key={activity.id} className="flex items-center gap-2 p-2 border rounded-lg">
+                  <button className="w-6 h-6 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
 
                   <Input 
                     value={activity.name} 
@@ -3445,11 +3447,11 @@ export default function App() {
                         updateActivityName(activity.id, "New Activity");
                       }
                     }}
-                    className="sm:col-span-4" 
+                    className="flex-1 h-7 text-sm min-w-0" 
                     placeholder="Activity name" 
                   />
 
-                  <div className="sm:col-span-2 flex items-center space-x-2">
+                  <div className="flex items-center gap-1">
                     <Input
                       type="number"
                       min="0" max="100" step="1"
@@ -3468,13 +3470,13 @@ export default function App() {
                         const value = Number.parseFloat(e.target.value) || 0;
                         updateAndScalePercentages(activity.id, Math.max(0, Math.min(100, value)));
                       }}
-                      className="w-full"
+                      className="w-12 h-7 text-xs text-center"
                       disabled={activity.isLocked}
                     />
-                    <span className="text-sm text-gray-600">%</span>
+                    <span className="text-xs text-gray-600">%</span>
                   </div>
 
-                  <div className="sm:col-span-2 flex items-center space-x-2">
+                  <div className="flex items-center gap-1">
                     <Input
                       type="number"
                       min="0" step="1"
@@ -3488,27 +3490,23 @@ export default function App() {
                           updateAndScalePercentages(activity.id, newPerc);
                         }
                       }}
-                      className="w-full"
+                      className="w-12 h-7 text-xs text-center"
                       disabled={activity.isLocked}
                     />
-                    <span className="text-sm text-gray-600">min</span>
+                    <span className="text-xs text-gray-600">min</span>
                   </div>
 
-                  <div className="sm:col-span-1 flex justify-center">
-                    <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)}>
-                      <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
-                    </Button>
-                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)} className="h-7 w-7 p-0 flex-shrink-0">
+                    <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-3 w-3 ${activity.isLocked ? 'text-red-500' : ''}`} />
+                  </Button>
 
-                  <div className="sm:col-span-1 flex justify-end">
-                    <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1}>
-                      <Icon name="trash2" className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1} className="h-7 w-7 p-0 flex-shrink-0">
+                    <Icon name="trash2" className="h-3 w-3" />
+                  </Button>
                 </div>
               ))}
             </div>
-            <Button variant="outline" onClick={() => addActivity()} className="w-full bg-transparent">
+            <Button variant="outline" onClick={() => addActivity()} className="w-full bg-transparent h-8 text-sm">
               <Icon name="plus" className="h-4 w-4 mr-2" />
               Add Activity
             </Button>
