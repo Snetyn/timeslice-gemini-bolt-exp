@@ -3102,27 +3102,27 @@ export default function App() {
       </Card>
     </div>
   ) : (
-    <div className="max-w-4xl mx-auto">
-      <Card>
+    <div className="max-w-4xl mx-auto px-4 sm:px-6">
+      <Card className="overflow-hidden">
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-3xl font-bold">TimeSlice</CardTitle>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => setCurrentPage('manage-activities')}>
-                <Icon name="list" className="h-4 w-4 mr-2" />
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
+            <CardTitle className="text-2xl sm:text-3xl font-bold">TimeSlice</CardTitle>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage('manage-activities')} className="flex-1 sm:flex-none h-9 text-sm">
+                <Icon name="settings" className="h-4 w-4 mr-2" />
                 Manage Activities
               </Button>
               <Button variant="outline" size="sm" onClick={() => {
                 console.log("showSettings before toggle:", showSettings);
                 setShowSettings(!showSettings);
-              }}>
+              }} className="flex-1 sm:flex-none h-9 text-sm">
                 <Icon name="settings" className="h-4 w-4 mr-2" />
                 Settings
               </Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent className="space-y-6 p-4 sm:p-6">
           {showSettings && (
             <Card className="bg-gray-50">
               <CardHeader>
@@ -3319,16 +3319,16 @@ export default function App() {
             </Card>
           )}
 
-          <div className="space-y-3">
-            <h2 className="text-xl font-semibold">Session Duration</h2>
-            <div className="flex items-center gap-2 mb-1">
-              <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')} className="h-8 text-xs">Set Duration</Button>
-              <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')} className="h-8 text-xs">Set End Time</Button>
+          <div className="space-y-4">
+            <h2 className="text-lg sm:text-xl font-semibold">Session Duration</h2>
+            <div className="flex items-center gap-2 mb-2">
+              <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')} className="h-9 text-sm flex-1 sm:flex-none">Set Duration</Button>
+              <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')} className="h-9 text-sm flex-1 sm:flex-none">Set End Time</Button>
             </div>
             {durationType === 'duration' ? (
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="grid grid-cols-2 gap-4 sm:flex sm:flex-wrap sm:items-center sm:gap-6">
                 <div className="flex items-center space-x-2">
-                  <Label htmlFor="hours" className="text-sm">Hours:</Label>
+                  <Label htmlFor="hours" className="text-sm font-medium">Hours:</Label>
                   <Input 
                     id="hours" 
                     type="number" 
@@ -3349,11 +3349,11 @@ export default function App() {
                       const value = Number.parseInt(e.target.value) || 0;
                       setTotalHours(Math.max(0, Math.min(12, value)));
                     }}
-                    className="w-16 h-8 text-sm" 
+                    className="w-20 h-9 text-sm" 
                   />
                 </div>
                 <div className="flex items-center space-x-2">
-                  <Label htmlFor="minutes" className="text-sm">Minutes:</Label>
+                  <Label htmlFor="minutes" className="text-sm font-medium">Minutes:</Label>
                   <Input 
                     id="minutes" 
                     type="number" 
@@ -3374,24 +3374,24 @@ export default function App() {
                       const value = Number.parseInt(e.target.value) || 0;
                       setTotalMinutes(Math.max(0, Math.min(59, value)));
                     }}
-                    className="w-16 h-8 text-sm" 
+                    className="w-20 h-9 text-sm" 
                   />
                 </div>
               </div>
             ) : (
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center space-x-2">
-                  <Label htmlFor="end-time" className="text-sm">End Time:</Label>
-                  <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-28 h-8 text-sm" />
-                </div>
+              <div className="flex items-center space-x-2">
+                <Label htmlFor="end-time" className="text-sm font-medium">End Time:</Label>
+                <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="w-32 h-9 text-sm" />
               </div>
             )}
-            <div className="text-sm text-gray-600">Total session will be {totalSessionMinutes} minutes.</div>
+            <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
+              Total session will be <span className="font-semibold">{totalSessionMinutes} minutes</span>.
+            </div>
           </div>
-          <div className="space-y-3">
-            <h2 className="text-xl font-semibold">Time Allocation</h2>
+          <div className="space-y-4">
+            <h2 className="text-lg sm:text-xl font-semibold">Time Allocation</h2>
             <div
-              className="relative h-12 bg-gray-200 rounded-lg overflow-hidden flex"
+              className="relative h-16 sm:h-12 bg-gray-200 rounded-lg overflow-hidden flex"
               onMouseDown={handleBarDrag}
             >
               {activities.map((activity) => (
@@ -3421,20 +3421,24 @@ export default function App() {
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Activities</h2>
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h2 className="text-lg sm:text-xl font-semibold">Activities</h2>
               <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={handleDistributeEqually}>Distribute</Button>
-                <Badge variant={Math.abs(totalPercentage -  100) < 0.1 ? 'default' : 'destructive'} className="text-sm">
+                <Button size="sm" variant="outline" onClick={handleDistributeEqually} className="h-8 text-xs">Distribute</Button>
+                <Badge variant={Math.abs(totalPercentage -  100) < 0.1 ? 'default' : 'destructive'} className="text-xs">
                   Total: {Math.round(totalPercentage)}%
                 </Badge>
               </div>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-2">
               {activities.map((activity) => (
-                <div key={activity.id} className="flex items-center gap-2 p-2 border rounded-lg">
-                  <button className="w-6 h-6 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" style={{ backgroundColor: activity.color }} onClick={() => openColorPicker(activity.id, activity.color)} />
+                <div key={activity.id} className="flex items-center gap-2 p-3 border rounded-lg bg-white">
+                  <button 
+                    className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" 
+                    style={{ backgroundColor: activity.color }} 
+                    onClick={() => openColorPicker(activity.id, activity.color)} 
+                  />
 
                   <Input 
                     value={activity.name} 
@@ -3445,11 +3449,11 @@ export default function App() {
                         updateActivityName(activity.id, "New Activity");
                       }
                     }}
-                    className="flex-1 h-7 text-sm min-w-0" 
+                    className="flex-1 h-8 text-sm min-w-0" 
                     placeholder="Activity name" 
                   />
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-shrink-0">
                     <Input
                       type="number"
                       min="0" max="100" step="1"
@@ -3468,13 +3472,13 @@ export default function App() {
                         const value = Number.parseFloat(e.target.value) || 0;
                         updateAndScalePercentages(activity.id, Math.max(0, Math.min(100, value)));
                       }}
-                      className="w-12 h-7 text-xs text-center"
+                      className="w-14 h-8 text-sm text-center"
                       disabled={activity.isLocked}
                     />
-                    <span className="text-xs text-gray-600">%</span>
+                    <span className="text-sm text-gray-600 min-w-[8px]">%</span>
                   </div>
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-shrink-0">
                     <Input
                       type="number"
                       min="0" step="1"
@@ -3488,31 +3492,36 @@ export default function App() {
                           updateAndScalePercentages(activity.id, newPerc);
                         }
                       }}
-                      className="w-12 h-7 text-xs text-center"
+                      className="w-14 h-8 text-sm text-center"
                       disabled={activity.isLocked}
                     />
-                    <span className="text-xs text-gray-600">min</span>
+                    <span className="text-sm text-gray-600 min-w-[24px]">min</span>
                   </div>
 
-                  <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)} className="h-7 w-7 p-0 flex-shrink-0">
-                    <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-3 w-3 ${activity.isLocked ? 'text-red-500' : ''}`} />
+                  <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)} className="h-8 w-8 p-0 flex-shrink-0">
+                    <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
                   </Button>
 
-                  <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1} className="h-7 w-7 p-0 flex-shrink-0">
-                    <Icon name="trash2" className="h-3 w-3" />
+                  <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1} className="h-8 w-8 p-0 flex-shrink-0">
+                    <Icon name="trash2" className="h-4 w-4" />
                   </Button>
                 </div>
               ))}
             </div>
-            <Button variant="outline" onClick={() => addActivity()} className="w-full bg-transparent h-8 text-sm">
-              <Icon name="plus" className="h-4 w-4 mr-2" />
+            <Button variant="outline" onClick={() => addActivity()} className="w-full bg-transparent h-10 text-sm">
+              <Icon name="plus" className="h-5 w-5 mr-2" />
               Add Activity
             </Button>
           </div>
 
-          <div className="flex justify-center pt-4">
-            <Button size="lg" onClick={startSession} disabled={Math.abs(totalPercentage - 100) > 0.1} className="px-8 py-3 text-lg">
-              <Icon name="play" className="h-5 w-5 mr-2" />
+          <div className="flex justify-center pt-6">
+            <Button 
+              size="lg" 
+              onClick={startSession} 
+              disabled={Math.abs(totalPercentage - 100) > 0.1} 
+              className="w-full sm:w-auto px-8 py-4 text-lg h-12"
+            >
+              <Icon name="play" className="h-6 w-6 mr-3" />
               Start Session
             </Button>
           </div>
@@ -3522,7 +3531,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 font-sans">
+    <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans">
       {mainContent}
       <ColorPicker isOpen={colorPickerState.isOpen} onClose={closeColorPicker} currentColor={colorPickerState.currentColor} onColorChange={handleColorChange} favorites={favoriteColors} onAddFavorite={addFavoriteColor} />
       {borrowModalState.isOpen && (
