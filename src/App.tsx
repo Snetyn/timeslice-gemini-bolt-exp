@@ -1442,22 +1442,23 @@ const ActivityManagementPage = ({
                 {editingTemplate.id ? 'Edit Template' : 'New Template'}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3 sm:space-y-4 p-3 sm:p-6">
               <div>
-                <Label htmlFor="template-name">Template Name</Label>
+                <Label htmlFor="template-name" className="text-xs sm:text-sm">Template Name</Label>
                 <Input
                   id="template-name"
                   value={editingTemplate.name}
                   onChange={(e) => setEditingTemplate(prev => prev ? ({ ...prev, name: e.target.value }) : null)}
                   placeholder="e.g., Deep Work, Exercise, Reading..."
+                  className="h-8 sm:h-10 text-xs sm:text-sm mt-1"
                 />
               </div>
               
               <div>
-                <Label htmlFor="template-color">Color</Label>
-                <div className="flex items-center space-x-2 mt-2">
+                <Label htmlFor="template-color" className="text-xs sm:text-sm">Color</Label>
+                <div className="flex items-center space-x-2 mt-1">
                   <div 
-                    className="w-8 h-8 rounded-full border-2 border-gray-300" 
+                    className="w-6 h-6 sm:w-8 sm:h-8 rounded-full border-2 border-gray-300 flex-shrink-0" 
                     style={{ backgroundColor: editingTemplate.color }}
                   />
                   <Input
@@ -1465,6 +1466,7 @@ const ActivityManagementPage = ({
                     value={editingTemplate.color}
                     onChange={(e) => setEditingTemplate(prev => prev ? ({ ...prev, color: e.target.value }) : null)}
                     placeholder="hsl(220, 70%, 50%)"
+                    className="h-8 sm:h-10 text-xs sm:text-sm"
                   />
                   <Button
                     variant="outline"
@@ -1473,19 +1475,20 @@ const ActivityManagementPage = ({
                       ...prev, 
                       color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)` 
                     }) : null)}
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0"
                   >
-                    <Icon name="dice" className="h-4 w-4" />
+                    <Icon name="dice" className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
                 </div>
               </div>
 
               <div>
-                <Label htmlFor="template-category">Category</Label>
+                <Label htmlFor="template-category" className="text-xs sm:text-sm">Category</Label>
                 <select
                   id="template-category"
                   value={editingTemplate.category || ''}
                   onChange={(e) => setEditingTemplate(prev => prev ? ({ ...prev, category: e.target.value || undefined }) : null)}
-                  className="flex h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="flex h-8 sm:h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 sm:py-2 text-xs sm:text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 mt-1"
                 >
                   <option value="">No Category</option>
                   {allCategories.map(category => (
@@ -1497,7 +1500,7 @@ const ActivityManagementPage = ({
               </div>
 
               <div>
-                <Label htmlFor="template-tags">Tags</Label>
+                <Label htmlFor="template-tags" className="text-xs sm:text-sm">Tags</Label>
                 <Input
                   id="template-tags"
                   value={editingTemplate.tags?.join(', ') || ''}
@@ -1506,8 +1509,9 @@ const ActivityManagementPage = ({
                     tags: e.target.value ? e.target.value.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0) : undefined
                   }) : null)}
                   placeholder="e.g., urgent, important, project-a"
+                  className="h-8 sm:h-10 text-xs sm:text-sm mt-1"
                 />
-                <div className="flex flex-wrap gap-1 mt-2">
+                <div className="flex flex-wrap gap-1 mt-1">
                   {allTags.slice(0, 8).map(tag => (
                     <Button
                       key={tag}
@@ -1531,8 +1535,8 @@ const ActivityManagementPage = ({
                 <p className="text-xs text-gray-500 mt-1">Separate tags with commas or click suggestions above</p>
               </div>
               
-              <div className="flex justify-end space-x-2 pt-4">
-                <Button variant="outline" onClick={() => setEditingTemplate(null)}>
+              <div className="flex justify-end space-x-2 pt-2 sm:pt-4">
+                <Button variant="outline" onClick={() => setEditingTemplate(null)} className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4">
                   Cancel
                 </Button>
                 <Button 
@@ -1543,6 +1547,7 @@ const ActivityManagementPage = ({
                     tags: editingTemplate.tags
                   })}
                   disabled={!editingTemplate.name.trim()}
+                  className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4"
                 >
                   {editingTemplate.id ? 'Update' : 'Create'}
                 </Button>
@@ -1559,11 +1564,11 @@ const ActivityManagementPage = ({
             <CardHeader>
               <CardTitle className="text-base sm:text-lg">Manage Categories</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3 sm:space-y-4 p-3 sm:p-6">
               {/* Categories */}
               <div>
-                <Label>Categories</Label>
-                <div className="space-y-2 mt-2">
+                <Label className="text-xs sm:text-sm">Categories</Label>
+                <div className="space-y-2 mt-1">
                   {customCategories.map(category => (
                     <div
                       key={category}
@@ -1587,11 +1592,12 @@ const ActivityManagementPage = ({
 
               {/* Add New Category */}
               <div>
-                <Label htmlFor="new-category">Add New Category</Label>
-                <div className="flex items-center space-x-2 mt-2">
+                <Label htmlFor="new-category" className="text-xs sm:text-sm">Add New Category</Label>
+                <div className="flex items-center space-x-2 mt-1">
                   <Input
                     id="new-category"
                     placeholder="Enter category name"
+                    className="h-8 sm:h-10 text-xs sm:text-sm"
                     onKeyPress={(e) => {
                       if (e.key === 'Enter') {
                         const value = e.target.value.trim().toLowerCase();
@@ -1604,6 +1610,7 @@ const ActivityManagementPage = ({
                   />
                   <Button
                     size="sm"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0"
                     onClick={(e) => {
                       const input = e.target.parentElement.querySelector('input');
                       const value = input.value.trim().toLowerCase();
@@ -1613,13 +1620,13 @@ const ActivityManagementPage = ({
                       }
                     }}
                   >
-                    <Icon name="plus" className="h-4 w-4" />
+                    <Icon name="plus" className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
                 </div>
               </div>
 
-              <div className="flex justify-end space-x-2 pt-4">
-                <Button variant="outline" onClick={() => setShowCategoryManager(false)}>
+              <div className="flex justify-end space-x-2 pt-2 sm:pt-4">
+                <Button variant="outline" onClick={() => setShowCategoryManager(false)} className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4">
                   Close
                 </Button>
               </div>
@@ -1635,11 +1642,11 @@ const ActivityManagementPage = ({
             <CardHeader>
               <CardTitle className="text-base sm:text-lg">Manage Tags</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3 sm:space-y-4 p-3 sm:p-6">
               {/* Existing Tags */}
               <div>
-                <Label>Existing Tags</Label>
-                <div className="flex flex-wrap gap-2 mt-2 max-h-48 overflow-y-auto">
+                <Label className="text-xs sm:text-sm">Existing Tags</Label>
+                <div className="flex flex-wrap gap-2 mt-1 max-h-32 sm:max-h-48 overflow-y-auto">
                   {allTags.map(tag => (
                     <div
                       key={tag}
@@ -1711,20 +1718,21 @@ const ActivityManagementPage = ({
             <CardHeader>
               <CardTitle className="text-base sm:text-lg">Edit Activity: {editingActivity.name}</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-3 sm:space-y-4 p-3 sm:p-6">
               <div>
-                <Label htmlFor="activity-name">Activity Name</Label>
+                <Label htmlFor="activity-name" className="text-xs sm:text-sm">Activity Name</Label>
                 <Input
                   id="activity-name"
                   value={editingActivity.name}
                   onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, name: e.target.value }) : null)}
                   placeholder="Activity name..."
+                  className="h-8 sm:h-10 text-xs sm:text-sm mt-1"
                 />
               </div>
               
               <div>
-                <Label htmlFor="activity-percentage">Time Percentage</Label>
-                <div className="flex items-center space-x-2">
+                <Label htmlFor="activity-percentage" className="text-xs sm:text-sm">Time Percentage</Label>
+                <div className="flex items-center space-x-2 mt-1">
                   <Input
                     id="activity-percentage"
                     type="number"
@@ -1732,34 +1740,34 @@ const ActivityManagementPage = ({
                     max="100"
                     value={editingActivity.percentage}
                     onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, percentage: parseInt(e.target.value) || 0 }) : null)}
-                    className="flex-1"
+                    className="flex-1 h-8 sm:h-10 text-xs sm:text-sm"
                   />
-                  <span className="text-sm text-gray-500">%</span>
+                  <span className="text-xs sm:text-sm text-gray-500">%</span>
                 </div>
               </div>
 
               <div>
-                <Label htmlFor="activity-duration">Exact Time Duration</Label>
-                <div className="flex items-center space-x-2">
+                <Label htmlFor="activity-duration" className="text-xs sm:text-sm">Exact Time Duration</Label>
+                <div className="flex items-center space-x-2 mt-1">
                   <Input
                     id="activity-duration"
                     type="number"
                     min="0"
                     value={editingActivity.duration || 0}
                     onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, duration: parseInt(e.target.value) || 0 }) : null)}
-                    className="flex-1"
+                    className="flex-1 h-8 sm:h-10 text-xs sm:text-sm"
                     placeholder="Enter minutes"
                   />
-                  <span className="text-sm text-gray-500">minutes</span>
+                  <span className="text-xs sm:text-sm text-gray-500">minutes</span>
                 </div>
                 <p className="text-xs text-gray-500 mt-1">Set exact time in minutes (overrides percentage if set)</p>
               </div>
 
               <div>
-                <Label htmlFor="activity-color">Color</Label>
-                <div className="flex items-center space-x-2 mt-2">
+                <Label htmlFor="activity-color" className="text-xs sm:text-sm">Color</Label>
+                <div className="flex items-center space-x-2 mt-1">
                   <div 
-                    className="w-8 h-8 rounded-full border-2 border-gray-300" 
+                    className="w-6 h-6 sm:w-8 sm:h-8 rounded-full border-2 border-gray-300 flex-shrink-0" 
                     style={{ backgroundColor: editingActivity.color }}
                   />
                   <Input
@@ -1767,7 +1775,7 @@ const ActivityManagementPage = ({
                     value={editingActivity.color}
                     onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, color: e.target.value }) : null)}
                     placeholder="hsl(220, 70%, 50%)"
-                    className="flex-1"
+                    className="flex-1 h-8 sm:h-10 text-xs sm:text-sm"
                   />
                   <Button
                     variant="outline"
@@ -1776,15 +1784,16 @@ const ActivityManagementPage = ({
                       ...prev, 
                       color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)` 
                     }) : null)}
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0"
                   >
-                    <Icon name="dice" className="h-4 w-4" />
+                    <Icon name="dice" className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
                 </div>
               </div>
 
               <div>
-                <Label>Add Tags</Label>
-                <div className="flex flex-wrap gap-1 mt-2">
+                <Label className="text-xs sm:text-sm">Add Tags</Label>
+                <div className="flex flex-wrap gap-1 mt-1">
                   {allTags.slice(0, 8).map(tag => (
                     <Button
                       key={tag}
@@ -1803,7 +1812,7 @@ const ActivityManagementPage = ({
               </div>
 
               <div>
-                <Label>Add Category</Label>
+                <Label className="text-xs sm:text-sm">Add Category</Label>
                 <select
                   value=""
                   onChange={(e) => {
@@ -1812,7 +1821,7 @@ const ActivityManagementPage = ({
                       console.log('Add category:', e.target.value);
                     }
                   }}
-                  className="flex h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm"
+                  className="flex h-8 sm:h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 sm:py-2 text-xs sm:text-sm mt-1"
                 >
                   <option value="">Select a category to add...</option>
                   {allCategories.map(category => (
@@ -1823,8 +1832,8 @@ const ActivityManagementPage = ({
                 </select>
               </div>
               
-              <div className="flex justify-end space-x-2 pt-4">
-                <Button variant="outline" onClick={() => setEditingActivity(null)}>
+              <div className="flex justify-end space-x-2 pt-2 sm:pt-4">
+                <Button variant="outline" onClick={() => setEditingActivity(null)} className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4">
                   Cancel
                 </Button>
                 <Button 
@@ -1836,6 +1845,7 @@ const ActivityManagementPage = ({
                     setEditingActivity(null);
                   }}
                   disabled={!editingActivity.name.trim()}
+                  className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4"
                 >
                   Save Changes
                 </Button>
