@@ -3431,80 +3431,86 @@ export default function App() {
                 </Badge>
               </div>
             </div>
-            <div className="space-y-2">
+            <div className="space-y-3">
               {activities.map((activity) => (
-                <div key={activity.id} className="flex items-center gap-2 p-3 border rounded-lg bg-white">
-                  <button 
-                    className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" 
-                    style={{ backgroundColor: activity.color }} 
-                    onClick={() => openColorPicker(activity.id, activity.color)} 
-                  />
+                <div key={activity.id} className="border rounded-lg bg-white p-3">
+                  {/* First Row: Color + Name + Lock + Delete */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <button 
+                      className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" 
+                      style={{ backgroundColor: activity.color }} 
+                      onClick={() => openColorPicker(activity.id, activity.color)} 
+                    />
 
-                  <Input 
-                    value={activity.name} 
-                    onChange={(e) => updateActivityName(activity.id, e.target.value)} 
-                    onBlur={(e) => {
-                      // If name is empty on blur, set default
-                      if (!e.target.value.trim()) {
-                        updateActivityName(activity.id, "New Activity");
-                      }
-                    }}
-                    className="flex-1 h-8 text-sm min-w-0" 
-                    placeholder="Activity name" 
-                  />
-
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <Input
-                      type="number"
-                      min="0" max="100" step="1"
-                      value={Math.round(activity.percentage)}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        // Allow empty string during editing
-                        if (value === '') {
-                          updateAndScalePercentages(activity.id, 0);
-                        } else {
-                          updateAndScalePercentages(activity.id, Number.parseFloat(value) || 0);
-                        }
-                      }}
+                    <Input 
+                      value={activity.name} 
+                      onChange={(e) => updateActivityName(activity.id, e.target.value)} 
                       onBlur={(e) => {
-                        // Ensure valid value on blur
-                        const value = Number.parseFloat(e.target.value) || 0;
-                        updateAndScalePercentages(activity.id, Math.max(0, Math.min(100, value)));
-                      }}
-                      className="w-14 h-8 text-sm text-center"
-                      disabled={activity.isLocked}
-                    />
-                    <span className="text-sm text-gray-600 min-w-[8px]">%</span>
-                  </div>
-
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <Input
-                      type="number"
-                      min="0" step="1"
-                      value={activity.duration}
-                      onChange={(e) => {
-                        const totalMins = calculateTotalSessionMinutes();
-                        if (totalMins > 0) {
-                          const newDur = Number.parseInt(e.target.value) || 0;
-                          const cappedDur = Math.min(newDur, totalMins);
-                          const newPerc = (cappedDur / totalMins) * 100;
-                          updateAndScalePercentages(activity.id, newPerc);
+                        // If name is empty on blur, set default
+                        if (!e.target.value.trim()) {
+                          updateActivityName(activity.id, "New Activity");
                         }
                       }}
-                      className="w-14 h-8 text-sm text-center"
-                      disabled={activity.isLocked}
+                      className="flex-1 h-9 text-sm" 
+                      placeholder="Activity name" 
                     />
-                    <span className="text-sm text-gray-600 min-w-[24px]">min</span>
+
+                    <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)} className="h-9 w-9 p-0 flex-shrink-0">
+                      <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
+                    </Button>
+
+                    <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1} className="h-9 w-9 p-0 flex-shrink-0">
+                      <Icon name="trash2" className="h-4 w-4" />
+                    </Button>
                   </div>
 
-                  <Button variant="ghost" size="sm" onClick={() => toggleLockActivity(activity.id)} className="h-8 w-8 p-0 flex-shrink-0">
-                    <Icon name={activity.isLocked ? 'lock' : 'unlock'} className={`h-4 w-4 ${activity.isLocked ? 'text-red-500' : ''}`} />
-                  </Button>
+                  {/* Second Row: Percentage + Minutes */}
+                  <div className="flex items-center justify-center gap-6">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="0" max="100" step="1"
+                        value={Math.round(activity.percentage)}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          // Allow empty string during editing
+                          if (value === '') {
+                            updateAndScalePercentages(activity.id, 0);
+                          } else {
+                            updateAndScalePercentages(activity.id, Number.parseFloat(value) || 0);
+                          }
+                        }}
+                        onBlur={(e) => {
+                          // Ensure valid value on blur
+                          const value = Number.parseFloat(e.target.value) || 0;
+                          updateAndScalePercentages(activity.id, Math.max(0, Math.min(100, value)));
+                        }}
+                        className="w-20 h-9 text-sm text-center"
+                        disabled={activity.isLocked}
+                      />
+                      <span className="text-sm text-gray-600 font-medium">%</span>
+                    </div>
 
-                  <Button variant="outline" size="sm" onClick={() => removeActivity(activity.id)} disabled={activities.length === 1} className="h-8 w-8 p-0 flex-shrink-0">
-                    <Icon name="trash2" className="h-4 w-4" />
-                  </Button>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="0" step="1"
+                        value={activity.duration}
+                        onChange={(e) => {
+                          const totalMins = calculateTotalSessionMinutes();
+                          if (totalMins > 0) {
+                            const newDur = Number.parseInt(e.target.value) || 0;
+                            const cappedDur = Math.min(newDur, totalMins);
+                            const newPerc = (cappedDur / totalMins) * 100;
+                            updateAndScalePercentages(activity.id, newPerc);
+                          }
+                        }}
+                        className="w-20 h-9 text-sm text-center"
+                        disabled={activity.isLocked}
+                      />
+                      <span className="text-sm text-gray-600 font-medium">min</span>
+                    </div>
+                  </div>
                 </div>
               ))}
             </div>
