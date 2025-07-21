@@ -53,6 +53,14 @@ const Icon = ({ name, className }) => {
         <path d="M16 16h.01" />
       </>
     ),
+    calendar: (
+      <>
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+      </>
+    ),
     arrowUpDown: <path d="M7 15l5 5 5-5M7 9l5-5 5 5" />,
   };
   return (
@@ -2108,6 +2116,8 @@ export default function App() {
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
   
+  // Mode state - 'session' or 'daily'
+  const [currentMode, setCurrentMode] = useState('session');
   
   const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
   
@@ -3445,12 +3455,161 @@ export default function App() {
           )}
 
           <div className="space-y-4">
-            <h2 className="text-lg sm:text-xl font-semibold">Session Duration</h2>
-            <div className="flex items-center gap-2 mb-2">
-              <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')} className="h-9 text-sm flex-1 sm:flex-none">Set Duration</Button>
-              <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')} className="h-9 text-sm flex-1 sm:flex-none">Set End Time</Button>
+            {/* Mode Selector */}
+            <div className="flex items-center gap-2 mb-6">
+              <span className="text-sm font-medium">Mode:</span>
+              <Button 
+                size="sm" 
+                variant={currentMode === 'session' ? 'default' : 'outline'}
+                className={`h-9 text-sm ${currentMode === 'session' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+                onClick={() => setCurrentMode('session')}
+              >
+                Session Mode
+              </Button>
+              <Button 
+                size="sm" 
+                variant={currentMode === 'daily' ? 'default' : 'outline'}
+                className={`h-9 text-sm ${currentMode === 'daily' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+                onClick={() => setCurrentMode('daily')}
+              >
+                Daily Mode
+              </Button>
             </div>
-            {durationType === 'duration' ? (
+
+            {currentMode === 'session' ? (
+              // Session Mode Content
+              <>
+                <h2 className="text-lg sm:text-xl font-semibold">Session Duration</h2>
+                <div className="flex items-center gap-2 mb-2">
+                  <Button size="sm" variant={durationType === 'duration' ? 'default' : 'outline'} onClick={() => setDurationType('duration')} className="h-9 text-sm flex-1 sm:flex-none">Set Duration</Button>
+                  <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')} className="h-9 text-sm flex-1 sm:flex-none">Set End Time</Button>
+                </div>
+              </>
+            ) : (
+              // Daily Mode Content
+              <>
+                <h2 className="text-lg sm:text-xl font-semibold">Daily Progress</h2>
+                
+                {/* Daily Activity Cards */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-md font-medium">Today's Activities</h3>
+                    <Button size="sm" variant="outline" className="h-8 text-xs">
+                      <Icon name="plus" className="h-3 w-3 mr-1" />
+                      Add Activity
+                    </Button>
+                  </div>
+                  
+                  {/* Sample Daily Activity Cards */}
+                  <div className="grid gap-3">
+                    {/* Work Activity Card */}
+                    <div className="border rounded-lg bg-white p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-4 h-4 rounded-full bg-blue-500"></div>
+                          <span className="font-medium">Work</span>
+                        </div>
+                        <div className="text-sm text-gray-600">2h 30m</div>
+                      </div>
+                      
+                      {/* Progress Bar */}
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs text-gray-500 mb-1">
+                          <span>Today's Progress</span>
+                          <span>40%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div className="bg-blue-500 h-2 rounded-full" style={{ width: '40%' }}></div>
+                        </div>
+                      </div>
+                      
+                      {/* Start/Stop Button */}
+                      <Button size="sm" className="w-full bg-green-600 hover:bg-green-700 text-white">
+                        <Icon name="play" className="h-3 w-3 mr-2" />
+                        Start
+                      </Button>
+                    </div>
+
+                    {/* Exercise Activity Card */}
+                    <div className="border rounded-lg bg-white p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-4 h-4 rounded-full bg-red-500"></div>
+                          <span className="font-medium">Exercise</span>
+                        </div>
+                        <div className="text-sm text-gray-600">45m</div>
+                      </div>
+                      
+                      {/* Progress Bar */}
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs text-gray-500 mb-1">
+                          <span>Today's Progress</span>
+                          <span>75%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div className="bg-red-500 h-2 rounded-full" style={{ width: '75%' }}></div>
+                        </div>
+                      </div>
+                      
+                      {/* Start/Stop Button */}
+                      <Button size="sm" className="w-full bg-green-600 hover:bg-green-700 text-white">
+                        <Icon name="play" className="h-3 w-3 mr-2" />
+                        Start
+                      </Button>
+                    </div>
+
+                    {/* Reading Activity Card */}
+                    <div className="border rounded-lg bg-white p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-4 h-4 rounded-full bg-green-500"></div>
+                          <span className="font-medium">Reading</span>
+                        </div>
+                        <div className="text-sm text-gray-600">1h 15m</div>
+                      </div>
+                      
+                      {/* Progress Bar */}
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs text-gray-500 mb-1">
+                          <span>Today's Progress</span>
+                          <span>20%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div className="bg-green-500 h-2 rounded-full" style={{ width: '20%' }}></div>
+                        </div>
+                      </div>
+                      
+                      {/* Start/Stop Button - Currently Active */}
+                      <Button size="sm" className="w-full bg-red-600 hover:bg-red-700 text-white">
+                        <Icon name="pause" className="h-3 w-3 mr-2" />
+                        Stop (Active)
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Daily Summary */}
+                  <div className="bg-blue-50 rounded-lg p-4 mt-4">
+                    <h4 className="font-medium text-blue-800 mb-2">Today's Summary</h4>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <div className="text-blue-600">Total Time</div>
+                        <div className="font-semibold text-blue-800">4h 30m</div>
+                      </div>
+                      <div>
+                        <div className="text-blue-600">Activities</div>
+                        <div className="font-semibold text-blue-800">3 active</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          {currentMode === 'session' && (
+            <>
+              <div className="space-y-4">
+                {durationType === 'duration' ? (
               <div className="grid grid-cols-2 gap-4 sm:flex sm:flex-wrap sm:items-center sm:gap-6">
                 <div className="flex items-center space-x-2">
                   <Label htmlFor="hours" className="text-sm font-medium">Hours:</Label>
@@ -3676,6 +3835,8 @@ export default function App() {
               Start Session
             </Button>
           </div>
+              </>
+            )}
         </CardContent>
       </Card>
     </div>
