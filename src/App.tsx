@@ -767,7 +767,7 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
 interface AddActivityModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, color: string, presetTime?: number) => void;
+  onAdd: (name: string, color: string, presetTime?: number, countUp?: boolean) => void;
   templates: ActivityTemplate[];
   onSaveTemplate: (name: string) => void;
 }
@@ -779,6 +779,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
   const [presetMinutes, setPresetMinutes] = React.useState(0);
   const [presetSeconds, setPresetSeconds] = React.useState(0);
   const [usePresetTime, setUsePresetTime] = React.useState(false);
+  const [useCountUp, setUseCountUp] = React.useState(false);
 
   if (!isOpen) return null;
 
@@ -798,13 +799,14 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
       timeInSeconds = (presetMinutes * 60) + presetSeconds;
     }
     
-    onAdd(name, color, timeInSeconds);
+    onAdd(name, color, timeInSeconds, useCountUp);
     setActivityName("");
     setSelectedTemplate(null);
     setShowTemplates(false);
     setPresetMinutes(0);
     setPresetSeconds(0);
     setUsePresetTime(false);
+    setUseCountUp(false);
     onClose();
   };
 
@@ -829,6 +831,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
     setPresetMinutes(0);
     setPresetSeconds(0);
     setUsePresetTime(false);
+    setUseCountUp(false);
     onClose();
   };
 
@@ -954,6 +957,28 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
                   )}
                 </div>
               )}
+            </div>
+
+            {/* Count Up Option */}
+            <div className="space-y-2 border-t pt-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm">Count up timer?</Label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="use-count-up"
+                    className="w-4 h-4"
+                    checked={useCountUp}
+                    onChange={(e) => setUseCountUp(e.target.checked)}
+                  />
+                  <label htmlFor="use-count-up" className="text-sm text-gray-600">
+                    Count up
+                  </label>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500">
+                Count-up activities accumulate time instead of counting down
+              </p>
             </div>
 
             {!activityName.trim() && !selectedTemplate && (
@@ -1952,7 +1977,8 @@ export default function App() {
             duration: Number(activity.duration || 0),
             timeRemaining: Number(activity.timeRemaining || 0),
             isCompleted: Boolean(activity.isCompleted),
-            isLocked: Boolean(activity.isLocked)
+            isLocked: Boolean(activity.isLocked),
+            countUp: Boolean(activity.countUp || false)
           }));
         }
       }
@@ -1960,8 +1986,8 @@ export default function App() {
       console.error("Failed to load activities from localStorage", e);
     }
     return [
-      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
-      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false },
+      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false },
+      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false },
     ];
   });
 
@@ -2320,8 +2346,8 @@ export default function App() {
     console.log('Calculated total minutes:', totalMins);
     setActivities(prev => prev.map(activity => {
       const newDuration = Math.round((activity.percentage / 100) * totalMins);
-      const newTimeRemaining = newDuration * 60;
-      console.log(`Activity ${activity.name}: ${activity.percentage}% = ${newDuration}min = ${newTimeRemaining}sec`);
+      const newTimeRemaining = activity.countUp ? 0 : newDuration * 60;
+      console.log(`Activity ${activity.name}: ${activity.percentage}% = ${newDuration}min = ${newTimeRemaining}sec (countUp: ${activity.countUp})`);
       return {
         ...activity,
         duration: newDuration,
@@ -2404,40 +2430,46 @@ export default function App() {
         const current = newActivities[currentActivityIndex];
         if (!current) break;
 
-        if (current.timeRemaining > 0) {
-          const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
-          current.timeRemaining -= timeToTake;
-          secondsToProcess -= timeToTake;
-        }
+        if (current.countUp) {
+          // For count-up activities, we add time instead of subtracting
+          current.timeRemaining += secondsToProcess;
+          secondsToProcess = 0; // Count-up activities don't "complete" in the traditional sense
+        } else {
+          if (current.timeRemaining > 0) {
+            const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
+            current.timeRemaining -= timeToTake;
+            secondsToProcess -= timeToTake;
+          }
 
-        if (current.timeRemaining <= 0) {
-          if (settings.overtimeType === 'drain') {
-            const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
-              .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
+          if (current.timeRemaining <= 0) {
+            if (settings.overtimeType === 'drain') {
+              const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
+                .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
 
-            if (donors.length > 0) {
-              const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
-              const donorToDrain = donors[donorIndex];
-              newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
-            }
-            current.timeRemaining -= 1;
-            secondsToProcess -= 1;
-
-          } else if (settings.overtimeType === 'postpone') {
-            current.timeRemaining -= secondsToProcess;
-            secondsToProcess = 0;
-          } else { // 'none'
-            if (!current.isCompleted) {
-              current.isCompleted = true;
-
-              const nextIndex = newActivities.findIndex(act => !act.isCompleted);
-              if (nextIndex !== -1) {
-                setCurrentActivityIndex(nextIndex);
-              } else {
-                setIsTimerActive(false);
+              if (donors.length > 0) {
+                const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
+                const donorToDrain = donors[donorIndex];
+                newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
               }
+              current.timeRemaining -= 1;
+              secondsToProcess -= 1;
+
+            } else if (settings.overtimeType === 'postpone') {
+              current.timeRemaining -= secondsToProcess;
+              secondsToProcess = 0;
+            } else { // 'none'
+              if (!current.isCompleted) {
+                current.isCompleted = true;
+
+                const nextIndex = newActivities.findIndex(act => !act.isCompleted);
+                if (nextIndex !== -1) {
+                  setCurrentActivityIndex(nextIndex);
+                } else {
+                  setIsTimerActive(false);
+                }
+              }
+              secondsToProcess = 0; // Stop processing after completion
             }
-            secondsToProcess = 0; // Stop processing after completion
           }
         }
       }
@@ -2522,7 +2554,7 @@ export default function App() {
     return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
-  const addActivity = (customName = null, customColor = null, presetTime = 0) => {
+  const addActivity = (customName = null, customColor = null, presetTime = 0, countUp = false) => {
     // Always open modal if no custom name provided - this ensures all activity creation goes through naming dialog
     // This is especially important for mobile users who shouldn't need to click into input fields to rename
     if (customName === null || customName === undefined || customName === '') {
@@ -2552,6 +2584,7 @@ export default function App() {
       timeRemaining: presetTime > 0 ? presetTime : (isTimerActive ? 0 : 0), // Use preset time or 0
       isCompleted: false,
       isLocked: false,
+      countUp: countUp,
     };
     
     setActivities(prev => {
@@ -2574,8 +2607,8 @@ export default function App() {
     });
   };
 
-  const handleAddActivityWithName = (name, color, presetTime = 0) => {
-    addActivity(name, color, presetTime);
+  const handleAddActivityWithName = (name, color, presetTime = 0, countUp = false) => {
+    addActivity(name, color, presetTime, countUp);
   };
 
   const saveActivityTemplate = (name) => {
@@ -2671,6 +2704,10 @@ export default function App() {
     setActivities(prev => prev.map(act => act.id === id ? { ...act, isLocked: !act.isLocked } : act));
   };
 
+  const toggleCountUpActivity = (id) => {
+    setActivities(prev => prev.map(act => act.id === id ? { ...act, countUp: !act.countUp } : act));
+  };
+
   const updateActivityName = (id, name) => {
     // Allow empty string during editing, only default when saving/blur
     console.log('Updating activity name:', id, 'to:', name);
@@ -2707,7 +2744,7 @@ export default function App() {
     setActivities((prev) =>
       prev.map((activity) => ({
         ...activity,
-        timeRemaining: Math.round((activity.percentage / 100) * totalMins) * 60,
+        timeRemaining: activity.countUp ? 0 : Math.round((activity.percentage / 100) * totalMins) * 60,
         isCompleted: false,
       })),
     );
@@ -3510,6 +3547,20 @@ export default function App() {
                       />
                       <span className="text-sm text-gray-600 font-medium">min</span>
                     </div>
+                  </div>
+
+                  {/* Third Row: Count Up Timer Checkbox */}
+                  <div className="flex items-center justify-center gap-2 mt-3">
+                    <input
+                      type="checkbox"
+                      id={`countup-${activity.id}`}
+                      className="w-4 h-4"
+                      checked={activity.countUp || false}
+                      onChange={() => toggleCountUpActivity(activity.id)}
+                    />
+                    <label htmlFor={`countup-${activity.id}`} className="text-sm text-gray-600 font-medium">
+                      Count up
+                    </label>
                   </div>
                 </div>
               ))}
