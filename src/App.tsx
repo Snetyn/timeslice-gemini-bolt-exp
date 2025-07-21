@@ -1010,12 +1010,13 @@ const ActivityManagementPage = ({
   setActivities, 
   onBackToTimer 
 }) => {
-  const [editingTemplate, setEditingTemplate] = useState<ActivityTemplate | null>(null);
-  const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [showCategoryManager, setShowCategoryManager] = useState(false);
-  const [showTagManager, setShowTagManager] = useState(false);
+  try {
+    const [editingTemplate, setEditingTemplate] = useState<ActivityTemplate | null>(null);
+    const [selectedTemplates, setSelectedTemplates] = useState<string[]>([]);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [categoryFilter, setCategoryFilter] = useState<string>('all');
+    const [showCategoryManager, setShowCategoryManager] = useState(false);
+    const [showTagManager, setShowTagManager] = useState(false);
   
   // Activity customization state
   const [editingActivity, setEditingActivity] = useState<any | null>(null);
@@ -1024,7 +1025,14 @@ const ActivityManagementPage = ({
   const [customCategories, setCustomCategories] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('timeSliceCustomCategories');
-      return saved ? JSON.parse(saved) : [];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Validate that we have an array of strings
+        if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
+          return parsed;
+        }
+      }
+      return [];
     } catch (e) {
       return [];
     }
@@ -1033,7 +1041,14 @@ const ActivityManagementPage = ({
   const [customTags, setCustomTags] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('timeSliceCustomTags');
-      return saved ? JSON.parse(saved) : [];
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Validate that we have an array of strings
+        if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
+          return parsed;
+        }
+      }
+      return [];
     } catch (e) {
       return [];
     }
@@ -1259,9 +1274,9 @@ const ActivityManagementPage = ({
                     onClick={() => setCategoryFilter(category)}
                     className="text-xs h-7 sm:h-8"
                   >
-                    {category === 'all' ? 'All' : category.charAt(0).toUpperCase() + category.slice(1)}
+                    {category === 'all' ? 'All' : (typeof category === 'string' && category.length > 0) ? category.charAt(0).toUpperCase() + category.slice(1) : 'Unknown'}
                   </Button>
-                ))}
+                ))})
                 <Button
                   variant="ghost"
                   size="sm"
@@ -1518,7 +1533,7 @@ const ActivityManagementPage = ({
                   <option value="">No Category</option>
                   {allCategories.map(category => (
                     <option key={category} value={category}>
-                      {category.charAt(0).toUpperCase() + category.slice(1)}
+                      {(typeof category === 'string' && category.length > 0) ? category.charAt(0).toUpperCase() + category.slice(1) : 'Unknown'}
                     </option>
                   ))}
                 </select>
@@ -1599,7 +1614,7 @@ const ActivityManagementPage = ({
                       key={category}
                       className="flex items-center justify-between p-2 bg-blue-50 rounded"
                     >
-                      <span className="text-sm">{category.charAt(0).toUpperCase() + category.slice(1)}</span>
+                      <span className="text-sm">{(typeof category === 'string' && category.length > 0) ? category.charAt(0).toUpperCase() + category.slice(1) : 'Unknown'}</span>
                       <button
                         onClick={() => handleRemoveCategory(category)}
                         className="h-6 w-6 text-red-600 hover:text-red-800 hover:bg-red-100 rounded border border-red-300 flex items-center justify-center"
@@ -1853,7 +1868,7 @@ const ActivityManagementPage = ({
                   <option value="">Select a category to add...</option>
                   {allCategories.map(category => (
                     <option key={category} value={category}>
-                      {category.charAt(0).toUpperCase() + category.slice(1)}
+                      {(typeof category === 'string' && category.length > 0) ? category.charAt(0).toUpperCase() + category.slice(1) : 'Unknown'}
                     </option>
                   ))}
                 </select>
@@ -1883,6 +1898,31 @@ const ActivityManagementPage = ({
       )}
     </div>
   );
+  } catch (error) {
+    console.error('ActivityManagementPage error:', error);
+    return (
+      <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans">
+        <div className="max-w-6xl mx-auto">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xl text-red-600">Error in Activity Management</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p>There was an error rendering the Activity Management page:</p>
+              <pre className="bg-red-50 p-2 mt-2 text-sm">{error.toString()}</pre>
+              <Button 
+                variant="outline" 
+                onClick={onBackToTimer}
+                className="mt-4"
+              >
+                Back to Timer
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 };
 
 // FlowmodoroActivity component that behaves like other activities
@@ -2335,7 +2375,7 @@ export default function App() {
   }, [durationType, endTime, totalHours, totalMinutes]);
 
   const totalSessionMinutes = calculateTotalSessionMinutes();
-  const totalPercentage = activities.reduce((sum, activity) => sum + activity.percentage, 0);
+  const totalPercentage = activities.filter(activity => !activity.countUp).reduce((sum, activity) => sum + activity.percentage, 0);
 
   // This effect keeps durations in sync with percentages and total time
   const activityPercentages = activities.map(a => a.percentage).join(',');
@@ -2655,24 +2695,43 @@ export default function App() {
   };
 
   const handleDistributeEqually = () => {
-    const lockedTotal = activities.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
-    const unlockedActivities = activities.filter(a => !a.isLocked);
+    const lockedTotal = activities.filter(a => a.isLocked && !a.countUp).reduce((sum, a) => sum + a.percentage, 0);
+    const unlockedActivities = activities.filter(a => !a.isLocked && !a.countUp);
     const remainingPercentage = 100 - lockedTotal;
-    const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
+    
+    if (unlockedActivities.length === 0) return;
 
-    setActivities(prev => prev.map(act => {
-      if (act.isLocked) return act;
-      return { ...act, percentage: equalPercentage };
-    }));
+    // Calculate base percentage for each unlocked activity
+    const basePercentage = Math.floor(remainingPercentage / unlockedActivities.length);
+    const remainder = remainingPercentage - (basePercentage * unlockedActivities.length);
+
+    setActivities(prev => {
+      let remainderToDistribute = remainder;
+      
+      return prev.map(act => {
+        if (act.isLocked || act.countUp) return act;
+        
+        // Give base percentage to all unlocked, non-count-up activities
+        let activityPercentage = basePercentage;
+        
+        // Give 1 extra percent to the first few activities until remainder is distributed
+        if (remainderToDistribute > 0) {
+          activityPercentage += 1;
+          remainderToDistribute -= 1;
+        }
+        
+        return { ...act, percentage: activityPercentage };
+      });
+    });
   };
 
   const updateAndScalePercentages = (idOfChangedActivity, newPercentage) => {
     setActivities(prev => {
-      const lockedTotal = prev.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+      const lockedTotal = prev.filter(a => a.isLocked && !a.countUp).reduce((sum, a) => sum + a.percentage, 0);
       const maxAllowed = 100 - lockedTotal;
       const safeNewPercentage = Math.min(newPercentage, maxAllowed);
 
-      const otherUnlockedActivities = prev.filter(a => !a.isLocked && a.id !== idOfChangedActivity);
+      const otherUnlockedActivities = prev.filter(a => !a.isLocked && !a.countUp && a.id !== idOfChangedActivity);
       const otherUnlockedTotal = otherUnlockedActivities.reduce((sum, a) => sum + a.percentage, 0);
 
       const remainingForOthers = maxAllowed - safeNewPercentage;
@@ -2682,10 +2741,10 @@ export default function App() {
         if (act.id === idOfChangedActivity) {
           return { ...act, percentage: safeNewPercentage };
         }
-        if (act.isLocked) {
+        if (act.isLocked || act.countUp) {
           return act;
         }
-        // It's another unlocked activity, scale it
+        // It's another unlocked, non-count-up activity, scale it
         return { ...act, percentage: act.percentage * scaleFactor };
       });
 
@@ -2711,7 +2770,30 @@ export default function App() {
   };
 
   const toggleCountUpActivity = (id) => {
-    setActivities(prev => prev.map(act => act.id === id ? { ...act, countUp: !act.countUp } : act));
+    setActivities(prev => prev.map(act => {
+      if (act.id === id) {
+        const newCountUp = !act.countUp;
+        if (newCountUp) {
+          // When enabling count-up: set percentage to 0, lock it, reset time
+          return { 
+            ...act, 
+            countUp: newCountUp, 
+            percentage: 0, 
+            isLocked: true,
+            timeRemaining: 0,
+            duration: 0
+          };
+        } else {
+          // When disabling count-up: unlock it but keep percentage at 0 for manual adjustment
+          return { 
+            ...act, 
+            countUp: newCountUp, 
+            isLocked: false
+          };
+        }
+      }
+      return act;
+    }));
   };
 
   const updateActivityName = (id, name) => {
@@ -3437,7 +3519,7 @@ export default function App() {
               className="relative h-16 sm:h-12 bg-gray-200 rounded-lg overflow-hidden flex"
               onMouseDown={handleBarDrag}
             >
-              {activities.map((activity) => (
+              {activities.filter(activity => !activity.countUp).map((activity) => (
                 <div
                   key={activity.id}
                   className="h-full flex items-center justify-center text-white font-medium text-sm transition-all duration-200 pointer-events-none"
@@ -3446,9 +3528,10 @@ export default function App() {
                   {settings.showAllocationPercentage && activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
                 </div>
               ))}
-              {activities.slice(0, -1).map((_, index) => {
-                const position = activities.slice(0, index + 1).reduce((sum, a) => sum + a.percentage, 0);
-                const isDividerLocked = activities[index].isLocked && (activities[index + 1] && activities[index + 1].isLocked);
+              {activities.filter(activity => !activity.countUp).slice(0, -1).map((_, index) => {
+                const nonCountUpActivities = activities.filter(activity => !activity.countUp);
+                const position = nonCountUpActivities.slice(0, index + 1).reduce((sum, a) => sum + a.percentage, 0);
+                const isDividerLocked = nonCountUpActivities[index].isLocked && (nonCountUpActivities[index + 1] && nonCountUpActivities[index + 1].isLocked);
                 return (
                   <div
                     key={index}
@@ -3529,7 +3612,7 @@ export default function App() {
                           updateAndScalePercentages(activity.id, Math.max(0, Math.min(100, value)));
                         }}
                         className="w-20 h-9 text-sm text-center"
-                        disabled={activity.isLocked}
+                        disabled={activity.isLocked || activity.countUp}
                       />
                       <span className="text-sm text-gray-600 font-medium">%</span>
                     </div>
@@ -3549,7 +3632,7 @@ export default function App() {
                           }
                         }}
                         className="w-20 h-9 text-sm text-center"
-                        disabled={activity.isLocked}
+                        disabled={activity.isLocked || activity.countUp}
                       />
                       <span className="text-sm text-gray-600 font-medium">min</span>
                     </div>
@@ -3567,6 +3650,11 @@ export default function App() {
                     <label htmlFor={`countup-${activity.id}`} className="text-sm text-gray-600 font-medium">
                       Count up
                     </label>
+                    {activity.countUp && (
+                      <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full ml-2">
+                        Excluded from % calculation
+                      </span>
+                    )}
                   </div>
                 </div>
               ))}
