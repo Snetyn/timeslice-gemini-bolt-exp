@@ -2375,21 +2375,27 @@ export default function App() {
 
     // Handle flowmodoro break countdown first
     if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
-      setFlowmodoroState(prev => {
-        const newBreakTimeRemaining = prev.breakTimeRemaining - 1;
-        if (newBreakTimeRemaining <= 0) {
+      const now = Date.now();
+      const elapsedSeconds = Math.round((now - lastTickTimestampRef.current) / 1000);
+      lastTickTimestampRef.current = now;
+
+      if (elapsedSeconds > 0) {
+        setFlowmodoroState(prev => {
+          const newBreakTimeRemaining = Math.max(0, prev.breakTimeRemaining - elapsedSeconds);
+          if (newBreakTimeRemaining <= 0) {
+            return {
+              ...prev,
+              isOnBreak: false,
+              breakTimeRemaining: 0,
+              initialBreakDuration: 0
+            };
+          }
           return {
             ...prev,
-            isOnBreak: false,
-            breakTimeRemaining: 0,
-            initialBreakDuration: 0
+            breakTimeRemaining: newBreakTimeRemaining
           };
-        }
-        return {
-          ...prev,
-          breakTimeRemaining: newBreakTimeRemaining
-        };
-      });
+        });
+      }
       return; // Don't process regular timer during break
     }
 
