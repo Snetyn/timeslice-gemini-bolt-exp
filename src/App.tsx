@@ -3490,115 +3490,221 @@ export default function App() {
               <>
                 <h2 className="text-lg sm:text-xl font-semibold">Daily Progress</h2>
                 
-                {/* Daily Activity Cards */}
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-md font-medium">Today's Activities</h3>
-                    <Button size="sm" variant="outline" className="h-8 text-xs">
-                      <Icon name="plus" className="h-3 w-3 mr-1" />
-                      Add Activity
-                    </Button>
+                {/* Current Time Display */}
+                <div className="text-center p-3 bg-blue-50 rounded-lg">
+                  <div className="text-lg font-semibold text-blue-800">Current Time: 14:23</div>
+                  <div className="text-sm text-blue-600">Until Reset (00:30): 10h 6m remaining</div>
+                </div>
+
+                {/* Dynamic Timeline Bar */}
+                <div className="space-y-4">
+                  <h3 className="text-md font-semibold">Live Activity Timeline</h3>
+                  
+                  {/* Dynamic Timeline Bar */}
+                  <div className="relative h-20 bg-gray-200 rounded-lg overflow-hidden">
+                    {/* NOW Indicator (Fixed at start) */}
+                    <div 
+                      className="absolute top-0 w-2 h-full bg-red-500 z-20 shadow-lg"
+                      style={{ left: '0%' }}
+                      title="NOW"
+                    >
+                      <div className="absolute -top-6 -left-2 text-xs font-bold text-red-600">NOW</div>
+                    </div>
+                    
+                    {/* Grey Default Fill (shows when no activity is active) */}
+                    <div 
+                      className="absolute top-0 h-full bg-gray-400 flex items-center justify-center text-gray-600 text-sm font-medium"
+                      style={{ left: '0%', width: '100%' }}
+                      title="Unscheduled Time - Select an activity to start"
+                    >
+                      Select an activity to begin timeline
+                    </div>
+                    
+                    {/* Active Activity Block (only shows when activity is selected/started) */}
+                    {/* This would be conditionally rendered based on which activity is active */}
+                    <div 
+                      className="absolute top-0 h-full bg-blue-500 flex flex-col items-center justify-center text-white text-xs font-medium transition-all duration-1000 ease-linear border-l-2 border-blue-600 z-10"
+                      style={{ left: '0%', width: '35%', display: 'none' }}
+                      title="Work Activity - In Progress"
+                    >
+                      <div className="font-semibold">Work</div>
+                      <div className="text-xs opacity-90">2h 30m (62%)</div>
+                      <div className="text-xs opacity-75">Started: 12:00</div>
+                    </div>
+                    
+                    {/* Scheduled Activities (non-active, positioned but not consuming) */}
+                    <div 
+                      className="absolute top-0 h-full bg-green-500 opacity-40 flex flex-col items-center justify-center text-white text-xs font-medium z-5"
+                      style={{ left: '35%', width: '30%' }}
+                      title="Exercise Activity - Scheduled (not started)"
+                    >
+                      <div className="font-semibold">Exercise</div>
+                      <div className="text-xs opacity-90">1h 45m</div>
+                      <div className="text-xs opacity-75">Scheduled: 16:30</div>
+                    </div>
+                    
+                    <div 
+                      className="absolute top-0 h-full bg-purple-500 opacity-40 flex flex-col items-center justify-center text-white text-xs font-medium z-5"
+                      style={{ left: '65%', width: '20%' }}
+                      title="Reading Activity - Scheduled (not started)"
+                    >
+                      <div className="font-semibold">Reading</div>
+                      <div className="text-xs opacity-90">1h 15m</div>
+                      <div className="text-xs opacity-75">Scheduled: 18:15</div>
+                    </div>
+                    
+                    {/* Progress Animation Line (only for active activity) */}
+                    <div className="absolute bottom-0 left-0 h-1 bg-red-400 opacity-60" style={{ width: '0%', display: 'none' }}></div>
                   </div>
                   
-                  {/* Sample Daily Activity Cards */}
-                  <div className="grid gap-3">
-                    {/* Work Activity Card */}
-                    <div className="border rounded-lg bg-white p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-4 h-4 rounded-full bg-blue-500"></div>
-                          <span className="font-medium">Work</span>
-                        </div>
-                        <div className="text-sm text-gray-600">2h 30m</div>
-                      </div>
-                      
-                      {/* Progress Bar */}
-                      <div className="mb-3">
-                        <div className="flex justify-between text-xs text-gray-500 mb-1">
-                          <span>Today's Progress</span>
-                          <span>40%</span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div className="bg-blue-500 h-2 rounded-full" style={{ width: '40%' }}></div>
-                        </div>
-                      </div>
-                      
-                      {/* Start/Stop Button */}
-                      <Button size="sm" className="w-full bg-green-600 hover:bg-green-700 text-white">
-                        <Icon name="play" className="h-3 w-3 mr-2" />
-                        Start
-                      </Button>
-                    </div>
+                  {/* Timeline Info */}
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>▶ Click "Start" on any activity to begin timeline</span>
+                    <span>Next Reset: Tomorrow 00:30</span>
+                  </div>
+                </div>
 
-                    {/* Exercise Activity Card */}
-                    <div className="border rounded-lg bg-white p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-4 h-4 rounded-full bg-red-500"></div>
-                          <span className="font-medium">Exercise</span>
-                        </div>
-                        <div className="text-sm text-gray-600">45m</div>
-                      </div>
-                      
-                      {/* Progress Bar */}
-                      <div className="mb-3">
-                        <div className="flex justify-between text-xs text-gray-500 mb-1">
-                          <span>Today's Progress</span>
-                          <span>75%</span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div className="bg-red-500 h-2 rounded-full" style={{ width: '75%' }}></div>
-                        </div>
-                      </div>
-                      
-                      {/* Start/Stop Button */}
-                      <Button size="sm" className="w-full bg-green-600 hover:bg-green-700 text-white">
-                        <Icon name="play" className="h-3 w-3 mr-2" />
-                        Start
+                {/* Activity Controls - Session Mode Style */}
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <h3 className="text-md font-semibold">Today's Activities</h3>
+                    <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" className="h-8 text-xs">Auto-Schedule</Button>
+                      <Button size="sm" variant="default" className="h-8 text-xs bg-green-600 hover:bg-green-700">
+                        <Icon name="plus" className="h-3 w-3 mr-1" />
+                        Quick Add
                       </Button>
-                    </div>
-
-                    {/* Reading Activity Card */}
-                    <div className="border rounded-lg bg-white p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-4 h-4 rounded-full bg-green-500"></div>
-                          <span className="font-medium">Reading</span>
-                        </div>
-                        <div className="text-sm text-gray-600">1h 15m</div>
-                      </div>
-                      
-                      {/* Progress Bar */}
-                      <div className="mb-3">
-                        <div className="flex justify-between text-xs text-gray-500 mb-1">
-                          <span>Today's Progress</span>
-                          <span>20%</span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2">
-                          <div className="bg-green-500 h-2 rounded-full" style={{ width: '20%' }}></div>
-                        </div>
-                      </div>
-                      
-                      {/* Start/Stop Button - Currently Active */}
-                      <Button size="sm" className="w-full bg-red-600 hover:bg-red-700 text-white">
-                        <Icon name="pause" className="h-3 w-3 mr-2" />
-                        Stop (Active)
-                      </Button>
+                      <Badge variant="default" className="text-xs">
+                        Total: 24h (100%)
+                      </Badge>
                     </div>
                   </div>
+                  
+                  {/* Sample Activity Cards */}
+                  <div className="space-y-3">
+                    {/* Work Activity */}
+                    <div className="border rounded-lg bg-white p-3 hover:bg-blue-50 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-6 h-6 rounded-full bg-blue-500"></div>
+                        <span className="font-medium">Work</span>
+                        <Badge variant="secondary" className="text-xs">Scheduled</Badge>
+                        <Button size="sm" variant="outline" className="ml-auto h-6 text-xs px-2">
+                          <Icon name="play" className="h-3 w-3 mr-1" />
+                          Start
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-4 text-sm">
+                        <div>
+                          <div className="text-gray-600">Time Window</div>
+                          <div className="font-medium">12:00-16:30</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Duration</div>
+                          <div className="font-medium">4h 30m (18.8%)</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Status</div>
+                          <div className="font-medium">Ready to start</div>
+                        </div>
+                      </div>
+                    </div>
 
-                  {/* Daily Summary */}
-                  <div className="bg-blue-50 rounded-lg p-4 mt-4">
-                    <h4 className="font-medium text-blue-800 mb-2">Today's Summary</h4>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <div className="text-blue-600">Total Time</div>
-                        <div className="font-semibold text-blue-800">4h 30m</div>
+                    {/* Exercise Activity */}
+                    <div className="border rounded-lg bg-white p-3 hover:bg-green-50 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-6 h-6 rounded-full bg-green-500"></div>
+                        <span className="font-medium">Exercise</span>
+                        <Badge variant="secondary" className="text-xs">Scheduled</Badge>
+                        <Button size="sm" variant="outline" className="ml-auto h-6 text-xs px-2">
+                          <Icon name="play" className="h-3 w-3 mr-1" />
+                          Start
+                        </Button>
                       </div>
-                      <div>
-                        <div className="text-blue-600">Activities</div>
-                        <div className="font-semibold text-blue-800">3 active</div>
+                      <div className="grid grid-cols-3 gap-4 text-sm">
+                        <div>
+                          <div className="text-gray-600">Time Window</div>
+                          <div className="font-medium">16:30-18:15</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Duration</div>
+                          <div className="font-medium">1h 45m (7.3%)</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Status</div>
+                          <div className="font-medium">Starts in 2h 7m</div>
+                        </div>
                       </div>
+                    </div>
+
+                    {/* Reading Activity */}
+                    <div className="border rounded-lg bg-white p-3 hover:bg-purple-50 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-6 h-6 rounded-full bg-purple-500"></div>
+                        <span className="font-medium">Reading</span>
+                        <Badge variant="secondary" className="text-xs">Scheduled</Badge>
+                        <Button size="sm" variant="outline" className="ml-auto h-6 text-xs px-2">
+                          <Icon name="play" className="h-3 w-3 mr-1" />
+                          Start
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-4 text-sm">
+                        <div>
+                          <div className="text-gray-600">Time Window</div>
+                          <div className="font-medium">18:15-19:30</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Duration</div>
+                          <div className="font-medium">1h 15m (5.2%)</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-600">Status</div>
+                          <div className="font-medium">Starts in 3h 52m</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Add New Activity Card */}
+                    <div className="border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 p-3 hover:bg-gray-100 cursor-pointer transition-colors">
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-6 h-6 rounded-full border-2 border-dashed border-gray-400 flex items-center justify-center">
+                          <Icon name="plus" className="h-3 w-3 text-gray-500" />
+                        </div>
+                        <input 
+                          type="text" 
+                          placeholder="Quick add activity (press Enter)" 
+                          className="font-medium bg-transparent border-none outline-none flex-1 text-gray-700 placeholder-gray-500"
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter' && e.target.value.trim()) {
+                              // Quick add function would go here
+                              console.log('Quick adding:', e.target.value);
+                              e.target.value = '';
+                            }
+                          }}
+                        />
+                        <Badge variant="outline" className="text-xs text-gray-500">Auto-schedule</Badge>
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        Type activity name and press Enter to auto-schedule with random time slot
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Today's Summary */}
+                <div className="bg-blue-50 rounded-lg p-4">
+                  <h4 className="font-medium text-blue-800 mb-2">Today's Summary</h4>
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <div className="text-blue-600">Total Planned</div>
+                      <div className="font-semibold text-blue-800">24h (100%)</div>
+                    </div>
+                    <div>
+                      <div className="text-blue-600">Active Time</div>
+                      <div className="font-semibold text-blue-800">7h 30m (31.3%)</div>
+                    </div>
+                    <div>
+                      <div className="text-blue-600">Remaining</div>
+                      <div className="font-semibold text-blue-800">4h 37m</div>
                     </div>
                   </div>
                 </div>
