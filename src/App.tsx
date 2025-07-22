@@ -2533,30 +2533,13 @@ export default function App() {
             const currentSessionMinutes = Math.floor(timeSpentSeconds / 60);
             const totalTimeSpent = activity.timeSpent + currentSessionMinutes;
             
-            // Step 13: Auto-complete when time is consumed
-            if (totalTimeSpent >= activity.duration) {
-              // Step 16: Handle overtime - continue tracking but mark as overtime
-              if (totalTimeSpent > activity.duration) {
-                return { 
-                  ...activity, 
-                  timeSpent: totalTimeSpent,
-                  status: 'overtime',
-                  overtimeMinutes: totalTimeSpent - activity.duration
-                };
-              } else {
-                // Exactly finished - mark as completed
-                setTimeout(() => {
-                  setActiveDailyActivity(null);
-                }, 100);
-                
-                return { 
-                  ...activity, 
-                  timeSpent: activity.duration, 
-                  status: 'completed',
-                  isActive: false,
-                  startedAt: null
-                };
-              }
+            // Check if activity has exceeded its planned duration
+            if (totalTimeSpent >= activity.duration && activity.status !== 'overtime') {
+              // Mark as overtime instead of auto-completing
+              return { 
+                ...activity, 
+                status: 'overtime'
+              };
             }
             
             // Just return activity without updating timeSpent until completion
@@ -3267,6 +3250,17 @@ export default function App() {
       startedAt: activity.id === activityId ? new Date() : activity.startedAt
     })));
     setActiveDailyActivity(activityId);
+  };
+
+  const toggleDailyActivityCompletion = (activityId: string) => {
+    setDailyActivities(prev => prev.map(activity => {
+      if (activity.id === activityId) {
+        // If currently completed, mark as scheduled. If not completed, mark as completed.
+        const newStatus = activity.status === 'completed' ? 'scheduled' : 'completed';
+        return { ...activity, status: newStatus };
+      }
+      return activity;
+    }));
   };
 
   const stopDailyActivity = () => {
@@ -4210,8 +4204,11 @@ export default function App() {
                   </div>
                   
                   <div className="pl-4 space-y-3 border-l-2 border-green-200">
-                    <div className="flex items-center justify-between">
-                      <Label>Show Activity Progress Bars</Label>
+                    <div className="flex items-center justify-between py-2">
+                      <div>
+                        <Label className="text-sm font-medium">Show Activity Progress Bars</Label>
+                        <p className="text-xs text-gray-500 mt-1">Display progress indicators on activity cards</p>
+                      </div>
                       <Switch 
                         id="daily-show-activity-progress"
                         checked={settings.dailyShowActivityProgress} 
@@ -4221,25 +4218,30 @@ export default function App() {
                     
                     {settings.dailyShowActivityProgress && (
                       <div className="space-y-2">
-                        <Label>Progress Bar Style</Label>
+                        <Label className="text-sm font-medium">Progress Bar Style</Label>
                         <div className="flex items-center gap-2">
                           <Button 
                             size="sm" 
                             variant={settings.dailyActivityProgressType === 'fill' ? 'default' : 'outline'} 
                             onClick={() => setSettings(prev => ({ ...prev, dailyActivityProgressType: 'fill' }))}
+                            className="flex-1 h-9 text-sm"
+                            style={{ touchAction: 'manipulation' }}
                           >
-                            Fill Up
+                            📈 Fill Up
                           </Button>
                           <Button 
                             size="sm" 
                             variant={settings.dailyActivityProgressType === 'drain' ? 'default' : 'outline'} 
                             onClick={() => setSettings(prev => ({ ...prev, dailyActivityProgressType: 'drain' }))}
+                            className="flex-1 h-9 text-sm"
+                            style={{ touchAction: 'manipulation' }}
                           >
-                            Drain Down
+                            📉 Drain Down
                           </Button>
                         </div>
-                        <p className="text-xs text-gray-500">
-                          Fill Up: Progress bar fills as time is spent. Drain Down: Progress bar drains as time is spent.
+                        <p className="text-xs text-gray-500 leading-relaxed">
+                          <strong>Fill Up:</strong> Progress bar fills as time is spent.<br/>
+                          <strong>Drain Down:</strong> Progress bar drains showing time remaining.
                         </p>
                       </div>
                     )}
@@ -4554,15 +4556,30 @@ export default function App() {
                   </div>
                   
                   {/* Dynamic Activity Cards */}
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {dailyActivities.map((activity) => {
-                      // Calculate activity progress for daily mode
+                      // Calculate activity progress for daily mode with real-time updates
                       const realTimeSpent = getRealTimeSpent(activity);
-                      const activityProgress = activity.duration > 0 ? (realTimeSpent / activity.duration) * 100 : 0;
-                      const displayProgress = settings.dailyActivityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
+                      // For active activities, calculate progress including current seconds
+                      let actualProgress = 0;
+                      if (activity.status === 'active' && activity.startedAt) {
+                        const totalSecondsSpent = Math.floor((currentTime.getTime() - activity.startedAt) / 1000) + (activity.timeSpent * 60);
+                        actualProgress = activity.duration > 0 ? (totalSecondsSpent / (activity.duration * 60)) * 100 : 0;
+                      } else {
+                        actualProgress = activity.duration > 0 ? (realTimeSpent / activity.duration) * 100 : 0;
+                      }
+                      
+                      // Fix: For drain mode, show remaining progress (100 - filled percentage)
+                      const displayProgress = settings.dailyActivityProgressType === 'fill' ? 
+                        actualProgress : 
+                        Math.max(0, 100 - actualProgress);
+                      
+                      // Calculate earned rest time for this activity (if flowmodoro enabled)
+                      const earnedRestMinutes = settings.flowmodoroEnabled ? 
+                        Math.floor(realTimeSpent / settings.flowmodoroRatio) : 0;
                       
                       return (
-                      <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
+                      <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-2 transition-all duration-200 ${
                         activity.status === 'completed'
                           ? 'bg-green-50 border-green-200 hover:bg-green-100 cursor-pointer'
                           : activity.status === 'overtime'
@@ -4579,136 +4596,245 @@ export default function App() {
                         }
                       }}
                       >
-                        {/* Progress Bar Background */}
+                        {/* Progress Bar Background - Android Compatible */}
                         {settings.dailyShowActivityProgress && (
                           <div 
-                            className="absolute top-0 left-0 h-full opacity-15 transition-all duration-500"
+                            className="absolute top-0 left-0 h-full transition-all duration-300 rounded-lg"
                             style={{ 
-                              width: `${Math.max(0, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`, 
-                              backgroundColor: activity.color
+                              width: `${Math.max(3, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`, 
+                              background: `linear-gradient(90deg, ${
+                                activity.color.startsWith('#') ? activity.color : 
+                                activity.color.includes('blue') ? '#2563eb' :
+                                activity.color.includes('green') ? '#059669' :
+                                activity.color.includes('red') ? '#dc2626' :
+                                activity.color.includes('purple') ? '#7c3aed' :
+                                activity.color.includes('yellow') ? '#d97706' :
+                                activity.color.includes('orange') ? '#ea580c' :
+                                activity.color.includes('pink') ? '#db2777' :
+                                activity.color.includes('indigo') ? '#4f46e5' :
+                                '#6b7280'
+                              }30, ${
+                                activity.color.startsWith('#') ? activity.color : 
+                                activity.color.includes('blue') ? '#2563eb' :
+                                activity.color.includes('green') ? '#059669' :
+                                activity.color.includes('red') ? '#dc2626' :
+                                activity.color.includes('purple') ? '#7c3aed' :
+                                activity.color.includes('yellow') ? '#d97706' :
+                                activity.color.includes('orange') ? '#ea580c' :
+                                activity.color.includes('pink') ? '#db2777' :
+                                activity.color.includes('indigo') ? '#4f46e5' :
+                                '#6b7280'
+                              }60)`
                             }}
                           />
                         )}
                         
-                        {/* Card Content */}
+                        {/* Mobile-Optimized Progress Indicators */}
+                        {settings.dailyShowActivityProgress && (
+                          <>
+                            {/* Progress percentage indicator */}
+                            {realTimeSpent > 0 && (
+                              <div className="absolute top-1 right-1 bg-black bg-opacity-80 text-white text-xs px-1.5 py-0.5 rounded z-20 font-mono">
+                                {Math.round(activityProgress)}%
+                                {settings.dailyActivityProgressType === 'drain' && ' left'}
+                              </div>
+                            )}
+                            
+                            {/* Flowmodoro rest time earned indicator */}
+                            {settings.flowmodoroEnabled && earnedRestMinutes > 0 && (
+                              <div className="absolute top-1 left-1 bg-purple-600 bg-opacity-90 text-white text-xs px-1.5 py-0.5 rounded z-20 font-mono">
+                                +{earnedRestMinutes}m rest
+                              </div>
+                            )}
+                            
+                            {/* Bottom progress bar for high visibility */}
+                            <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gray-300 rounded-b-lg z-10">
+                              <div 
+                                className="h-full transition-all duration-300 rounded-b-lg"
+                                style={{ 
+                                  width: `${Math.max(0, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`,
+                                  backgroundColor: activity.color.startsWith('#') ? activity.color : 
+                                    activity.color.includes('blue') ? '#2563eb' :
+                                    activity.color.includes('green') ? '#059669' :
+                                    activity.color.includes('red') ? '#dc2626' :
+                                    activity.color.includes('purple') ? '#7c3aed' :
+                                    activity.color.includes('yellow') ? '#d97706' :
+                                    activity.color.includes('orange') ? '#ea580c' :
+                                    activity.color.includes('pink') ? '#db2777' :
+                                    activity.color.includes('indigo') ? '#4f46e5' :
+                                    '#6b7280'
+                                }}
+                              />
+                            </div>
+                          </>
+                        )}
+                        
+                        {/* Card Content - Android Optimized */}
                         <div className="relative z-10">
-                        <div className="flex items-center gap-3 mb-2">
-                          <div className={`w-6 h-6 rounded-full ${activity.color}`}></div>
-                          <span className="font-medium">{activity.name}</span>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className={`w-5 h-5 rounded-full ${activity.color} flex-shrink-0`}></div>
+                          <span className="font-medium text-sm leading-tight flex-1 min-w-0 truncate">{activity.name}</span>
                           <Badge variant={
                             activity.status === 'completed' ? 'default' :
                             activity.status === 'overtime' ? 'destructive' :
                             activity.status === 'active' ? 'default' : 'secondary'
-                          } className={`text-xs ${
+                          } className={`text-xs px-1.5 py-0.5 flex-shrink-0 ${
                             activity.status === 'completed' ? 'bg-green-100 text-green-800 border-green-200' :
                             activity.status === 'overtime' ? 'bg-red-100 text-red-800 border-red-200' :
                             activity.status === 'active' ? 'bg-blue-100 text-blue-800 border-blue-200' : ''
                           }`}>
-                            {activity.status === 'completed' ? '✓ Completed' : 
-                             activity.status === 'overtime' ? '⚠ OVERTIME' :
-                             activity.status === 'active' ? 'Active' : 'Scheduled'}
+                            {activity.status === 'completed' ? '✓' : 
+                             activity.status === 'overtime' ? '⚠' :
+                             activity.status === 'active' ? '▶' : '⏸'}
                           </Badge>
-                          <div className="ml-auto flex items-center gap-2">
-                            {activity.status === 'completed' ? (
-                              <span className="h-6 text-xs px-2 bg-green-50 border border-green-200 text-green-700 rounded flex items-center pointer-events-none">
-                                <Icon name="check" className="h-3 w-3 mr-1" />
-                                Done
-                              </span>
-                            ) : activity.status === 'overtime' ? (
-                              <span className="h-6 text-xs px-2 bg-red-50 border border-red-200 text-red-700 rounded flex items-center pointer-events-none">
-                                <Icon name="alertTriangle" className="h-3 w-3 mr-1" />
-                                Click to Stop
-                              </span>
-                            ) : activity.status === 'active' ? (
-                              <span className="h-6 text-xs px-2 bg-red-50 border border-red-200 rounded flex items-center pointer-events-none">
-                                <Icon name="pause" className="h-3 w-3 mr-1" />
-                                Click to Stop
-                              </span>
-                            ) : (
-                              <span className="h-6 text-xs px-2 border border-blue-300 bg-blue-50 rounded flex items-center pointer-events-none">
-                                <Icon name="play" className="h-3 w-3 mr-1" />
-                                Click to Start
-                              </span>
-                            )}
-                            
+                        </div>
+                        
+                        {/* Action buttons row - Android touch-friendly */}
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1">
+                            {/* Completion checkbox like session mode */}
+                            <div className="flex items-center gap-2">
+                              <input 
+                                type="checkbox" 
+                                className="h-4 w-4 rounded text-green-600 focus:ring-green-500" 
+                                checked={activity.status === 'completed'} 
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  toggleDailyActivityCompletion(activity.id);
+                                }} 
+                              />
+                              {activity.status === 'completed' ? (
+                                <span className="text-xs px-2 py-1 bg-green-50 border border-green-200 text-green-700 rounded-md flex items-center">
+                                  <Icon name="check" className="h-3 w-3 mr-1" />
+                                  Done
+                                </span>
+                              ) : activity.status === 'overtime' ? (
+                                <span className="text-xs px-2 py-1 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center font-medium">
+                                  Overtime - Tap to Stop
+                                </span>
+                              ) : activity.status === 'active' ? (
+                                <span className="text-xs px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded-md flex items-center font-medium">
+                                  Running - Tap to Stop
+                                </span>
+                              ) : (
+                                <span className="text-xs px-2 py-1 border border-blue-300 bg-blue-50 text-blue-700 rounded-md flex items-center font-medium">
+                                  Ready - Tap to Start
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          
+                          {/* Action buttons - larger touch targets */}
+                          <div className="flex items-center gap-1">
                             <button 
-                              className="h-6 w-6 text-blue-500 hover:bg-blue-100 rounded flex items-center justify-center"
+                              className="h-7 w-7 text-blue-500 hover:bg-blue-100 rounded-md flex items-center justify-center"
+                              style={{ touchAction: 'manipulation' }}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 openDailyActivityEdit(activity.id);
                               }}
-                              title="Edit activity"
+                              title="Edit"
                             >
-                              <Icon name="edit" className="h-3 w-3" />
+                              <Icon name="edit" className="h-3.5 w-3.5" />
                             </button>
                             
                             <button 
-                              className="h-6 w-6 text-gray-500 hover:bg-gray-100 rounded flex items-center justify-center"
+                              className="h-7 w-7 text-gray-500 hover:bg-gray-100 rounded-md flex items-center justify-center"
+                              style={{ touchAction: 'manipulation' }}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 openActivitySettings(activity.id);
                               }}
-                              title="Activity settings"
+                              title="Settings"
                             >
-                              <Icon name="settings" className="h-3 w-3" />
+                              <Icon name="settings" className="h-3.5 w-3.5" />
                             </button>
                             
                             <button 
-                              className="h-6 w-6 text-red-500 hover:bg-red-50 rounded flex items-center justify-center"
+                              className="h-7 w-7 text-red-500 hover:bg-red-50 rounded-md flex items-center justify-center"
+                              style={{ touchAction: 'manipulation' }}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 removeDailyActivity(activity.id);
                               }}
-                              title="Delete activity"
+                              title="Delete"
                             >
-                              <Icon name="x" className="h-3 w-3" />
+                              <Icon name="x" className="h-3.5 w-3.5" />
                             </button>
                           </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-4 text-sm">
+                        
+                        {/* Compact info grid */}
+                        <div className="grid grid-cols-3 gap-2 text-xs">
                           <div>
-                            <div className="text-gray-600">Time Window</div>
-                            <div className="font-medium">{activity.timeWindow}</div>
+                            <div className="text-gray-500 text-xs">Time</div>
+                            <div className="font-medium text-sm truncate">{activity.timeWindow}</div>
                           </div>
                           <div>
-                            <div className="text-gray-600">Duration</div>
-                            <div className="font-medium">
+                            <div className="text-gray-500 text-xs">Duration</div>
+                            <div className="font-medium text-sm">
                               {(() => {
                                 const realTimeSpent = getRealTimeSpent(activity);
-                                return realTimeSpent > 0 ? (
-                                  <span>
-                                    <span className={activity.status === 'overtime' ? 'text-red-600 font-bold' : 'text-blue-600'}>
-                                      {Math.floor(realTimeSpent / 60)}h {realTimeSpent % 60}m
-                                    </span>
-                                    <span className="text-gray-400"> / </span>
+                                const remainingMinutes = Math.max(0, activity.duration - realTimeSpent);
+                                const remainingSeconds = activity.status === 'active' && activity.startedAt ? 
+                                  Math.max(0, (activity.duration * 60) - Math.floor((currentTime.getTime() - activity.startedAt) / 1000)) : 
+                                  remainingMinutes * 60;
+                                
+                                if (realTimeSpent > 0) {
+                                  return (
+                                    <div className="space-y-1">
+                                      {/* Time spent / Total time */}
+                                      <div>
+                                        <span className={activity.status === 'overtime' ? 'text-red-600 font-bold' : 'text-blue-600'}>
+                                          {Math.floor(realTimeSpent / 60)}h {realTimeSpent % 60}m
+                                        </span>
+                                        <span className="text-gray-400"> / </span>
+                                        <span className="text-xs">{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
+                                      </div>
+                                      
+                                      {/* Real-time countdown/overtime */}
+                                      {activity.status === 'active' && (
+                                        <div className="text-xs">
+                                          {remainingSeconds > 0 ? (
+                                            <span className="text-blue-600 font-mono">
+                                              -{Math.floor(remainingSeconds / 60)}:{(remainingSeconds % 60).toString().padStart(2, '0')} left
+                                            </span>
+                                          ) : (
+                                            <span className="text-red-600 font-bold font-mono animate-pulse">
+                                              +{Math.floor(Math.abs(remainingSeconds) / 60)}:{(Math.abs(remainingSeconds) % 60).toString().padStart(2, '0')} over
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                      
+                                      {activity.status === 'overtime' && (
+                                        <div className="text-xs">
+                                          <span className="text-red-600 font-bold">
+                                            OVERTIME: +{realTimeSpent - activity.duration}m over
+                                          </span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                } else {
+                                  return (
                                     <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
-                                    {activity.status === 'overtime' ? (
-                                      <span className="text-xs text-red-600 font-bold block">
-                                        OVERTIME: +{realTimeSpent - activity.duration}m over
-                                      </span>
-                                    ) : (
-                                      <span className="text-xs text-gray-500 block">
-                                        ({Math.floor((realTimeSpent / activity.duration) * 100)}% complete)
-                                      </span>
-                                    )}
-                                  </span>
-                                ) : (
-                                  <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m ({activity.percentage}%)</span>
-                                );
+                                  );
+                                }
                               })()}
                             </div>
                           </div>
                           <div>
-                            <div className="text-gray-600">Status</div>
-                            <div className="font-medium">
+                            <div className="text-gray-500 text-xs">Status</div>
+                            <div className="font-medium text-sm">
                               {activity.status === 'completed' ? (
-                                <span className="text-green-600">✓ Completed</span>
+                                <span className="text-green-600">Complete</span>
                               ) : activity.status === 'overtime' ? (
-                                <span className="text-red-600 font-bold">⚠ OVERTIME!</span>
+                                <span className="text-red-600 font-bold">OVERTIME</span>
                               ) : activity.status === 'active' ? (
-                                <span className="text-blue-600">In progress</span>
+                                <span className="text-blue-600">Running</span>
                               ) : (
-                                <span>Ready to start</span>
+                                <span className="text-gray-600">Ready</span>
                               )}
                             </div>
                           </div>
