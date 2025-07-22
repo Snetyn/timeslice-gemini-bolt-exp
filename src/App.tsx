@@ -2415,6 +2415,9 @@ export default function App() {
       flowmodoroProgressType: 'fill', // 'fill' or 'drain' like other activities
       flowmodoroResetStartTime: '06:00', // Daily reset at 6 AM
       flowmodoroResetEndTime: '23:59', // Daily reset at 11:59 PM
+      // Daily Mode specific settings
+      dailyShowActivityProgress: true, // Show progress bars in daily activity cards
+      dailyActivityProgressType: 'fill', // 'fill' or 'drain'
     };
     try {
       const saved = localStorage.getItem('timeSliceSettings');
@@ -2499,15 +2502,36 @@ export default function App() {
     }
   }, [currentMode]);
 
-  // Step 12: Update time spent for active activities
+  // Step 12: Update time spent for active activities + Flowmodoro accumulation
   useEffect(() => {
     if (currentMode === 'daily' && activeDailyActivity) {
       const interval = setInterval(() => {
+        // Flowmodoro accumulation for daily mode
+        if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+          const elapsedSeconds = 1; // Since we run every second
+          const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
+          const minutesToAdd = Math.floor(newAccumulated / settings.flowmodoroRatio);
+          
+          if (minutesToAdd > 0) {
+            setFlowmodoroState(prevFlow => ({
+              ...prevFlow,
+              availableRestMinutes: prevFlow.availableRestMinutes + minutesToAdd,
+              availableRestTime: (prevFlow.availableRestMinutes + minutesToAdd) * 60,
+              accumulatedFractionalTime: newAccumulated % settings.flowmodoroRatio
+            }));
+          } else {
+            setFlowmodoroState(prevFlow => ({
+              ...prevFlow,
+              accumulatedFractionalTime: newAccumulated
+            }));
+          }
+        }
+
         setDailyActivities(prev => prev.map(activity => {
           if (activity.isActive && activity.startedAt) {
-            const timeSpentSeconds = Math.floor((new Date() - activity.startedAt) / 1000);
-            const timeSpentMinutes = Math.floor(timeSpentSeconds / 60);
-            const totalTimeSpent = activity.timeSpent + timeSpentMinutes;
+            const timeSpentSeconds = Math.floor((Date.now() - (activity.startedAt as any).getTime()) / 1000);
+            const currentSessionMinutes = Math.floor(timeSpentSeconds / 60);
+            const totalTimeSpent = activity.timeSpent + currentSessionMinutes;
             
             // Step 13: Auto-complete when time is consumed
             if (totalTimeSpent >= activity.duration) {
@@ -2535,45 +2559,72 @@ export default function App() {
               }
             }
             
-            return { ...activity, timeSpent: totalTimeSpent };
+            // Just return activity without updating timeSpent until completion
+            // The display will show totalTimeSpent but we won't save it until done
+            return activity;
           }
           return activity;
         }));
       }, 1000);
       return () => clearInterval(interval);
     }
-  }, [currentMode, activeDailyActivity]);
+  }, [currentMode, activeDailyActivity, settings.flowmodoroEnabled, settings.flowmodoroRatio]);
+
+  // Helper function to get real-time timeSpent for display
+  const getRealTimeSpent = (activity) => {
+    if (activity.isActive && activity.startedAt) {
+      const currentSessionSeconds = Math.floor((Date.now() - (activity.startedAt as any).getTime()) / 1000);
+      const currentSessionMinutes = Math.floor(currentSessionSeconds / 60);
+      return activity.timeSpent + currentSessionMinutes;
+    }
+    return activity.timeSpent;
+  };
 
   // Step 14: Calculate real-time timeline position for sliding animation
   const getActiveActivityTimelinePosition = () => {
     const activeActivity = dailyActivities.find(a => a.isActive && a.startedAt);
-    if (!activeActivity) return { width: 35, consumed: 0 };
     
-    const elapsedMinutes = Math.floor((new Date() - activeActivity.startedAt) / 60000);
-    const totalElapsed = activeActivity.timeSpent + elapsedMinutes;
+    // Calculate remaining minutes until day reset (0:30)
+    const now = new Date();
+    const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
+    
+    if (!activeActivity || !activeActivity.startedAt) return { width: 0, consumed: 0, totalRemainingMinutes, consumedWidth: 0 };
+    
+    const currentSessionSeconds = Math.floor((Date.now() - (activeActivity.startedAt as any).getTime()) / 1000);
+    const currentSessionMinutes = Math.floor(currentSessionSeconds / 60);
+    const totalElapsed = activeActivity.timeSpent + currentSessionMinutes;
     const consumedPercentage = Math.min((totalElapsed / activeActivity.duration) * 100, 100);
     
-    // Step 16: Handle overtime - extend beyond normal bounds
+    // Calculate width as percentage of total remaining day time
+    const activityWidthInDay = (activeActivity.duration / totalRemainingMinutes) * 100;
+    const consumedWidthInDay = (totalElapsed / totalRemainingMinutes) * 100;
+    const remainingActivityWidth = Math.max(activityWidthInDay - consumedWidthInDay, 0);
+    
+    // Step 16: Handle overtime - extend beyond planned duration
     if (totalElapsed > activeActivity.duration) {
-      const overtimeRatio = (totalElapsed - activeActivity.duration) / activeActivity.duration;
-      const extendedWidth = Math.min(35 + (overtimeRatio * 20), 70); // Can expand up to 70%
+      const overtimeMinutes = totalElapsed - activeActivity.duration;
+      const overtimeWidthInDay = (overtimeMinutes / totalRemainingMinutes) * 100;
+      const totalWidthInDay = activityWidthInDay + overtimeWidthInDay;
+      
       return { 
-        width: extendedWidth, 
+        width: Math.min(totalWidthInDay, 100), 
         consumed: 100,
         timeRemaining: 0,
         isOvertime: true,
-        overtimeMinutes: totalElapsed - activeActivity.duration
+        overtimeMinutes: overtimeMinutes,
+        consumedWidth: activityWidthInDay,
+        totalRemainingMinutes
       };
     }
     
-    const remainingWidth = Math.max(35 - (consumedPercentage * 0.35), 5); // Shrinks from 35% to 5%
-    
     return { 
-      width: remainingWidth, 
+      width: remainingActivityWidth, 
       consumed: consumedPercentage,
       timeRemaining: Math.max(activeActivity.duration - totalElapsed, 0),
       isOvertime: false,
-      overtimeMinutes: 0
+      overtimeMinutes: 0,
+      consumedWidth: consumedWidthInDay,
+      totalRemainingMinutes
     };
   };
   
@@ -3209,7 +3260,7 @@ export default function App() {
 
   const startDailyActivity = (activityId) => {
     console.log('Starting daily activity:', activityId);
-    setDailyActivities(prev => prev.map(activity => ({
+    setDailyActivities((prev: any) => prev.map((activity: any) => ({
       ...activity,
       isActive: activity.id === activityId,
       status: activity.id === activityId ? 'active' : (activity.status === 'active' ? 'scheduled' : activity.status),
@@ -3222,7 +3273,9 @@ export default function App() {
     console.log('Stopping daily activity');
     setDailyActivities(prev => prev.map(activity => {
       if (activity.isActive && activity.startedAt) {
-        const finalTimeSpent = Math.floor((new Date() - activity.startedAt) / 60000); // minutes
+        const currentSessionSeconds = Math.floor((Date.now() - (activity.startedAt as any).getTime()) / 1000);
+        const currentSessionMinutes = Math.floor(currentSessionSeconds / 60);
+        const finalTimeSpent = activity.timeSpent + currentSessionMinutes;
         return {
           ...activity,
           isActive: false,
@@ -3255,7 +3308,7 @@ export default function App() {
       setActivitySettingsModal({
         isOpen: true,
         activityId,
-        activityData: { ...activity }
+        activityData: { ...activity } as any
       });
     }
   };
@@ -3287,7 +3340,7 @@ export default function App() {
       setDailyActivityEditModal({
         isOpen: true,
         activityId,
-        activityData: { ...activity },
+        activityData: { ...activity } as any,
         isNewActivity: false
       });
     }
@@ -3308,7 +3361,7 @@ export default function App() {
         isActive: false,
         timeSpent: 0,
         startedAt: null
-      },
+      } as any,
       isNewActivity: true
     });
   };
@@ -4147,6 +4200,51 @@ export default function App() {
                     </div>
                   )}
                 </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-base font-semibold text-green-700">Daily Mode Settings</Label>
+                      <p className="text-sm text-gray-600">Configure how daily activities are displayed</p>
+                    </div>
+                  </div>
+                  
+                  <div className="pl-4 space-y-3 border-l-2 border-green-200">
+                    <div className="flex items-center justify-between">
+                      <Label>Show Activity Progress Bars</Label>
+                      <Switch 
+                        id="daily-show-activity-progress"
+                        checked={settings.dailyShowActivityProgress} 
+                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, dailyShowActivityProgress: checked }))}
+                      />
+                    </div>
+                    
+                    {settings.dailyShowActivityProgress && (
+                      <div className="space-y-2">
+                        <Label>Progress Bar Style</Label>
+                        <div className="flex items-center gap-2">
+                          <Button 
+                            size="sm" 
+                            variant={settings.dailyActivityProgressType === 'fill' ? 'default' : 'outline'} 
+                            onClick={() => setSettings(prev => ({ ...prev, dailyActivityProgressType: 'fill' }))}
+                          >
+                            Fill Up
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant={settings.dailyActivityProgressType === 'drain' ? 'default' : 'outline'} 
+                            onClick={() => setSettings(prev => ({ ...prev, dailyActivityProgressType: 'drain' }))}
+                          >
+                            Drain Down
+                          </Button>
+                        </div>
+                        <p className="text-xs text-gray-500">
+                          Fill Up: Progress bar fills as time is spent. Drain Down: Progress bar drains as time is spent.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -4195,115 +4293,239 @@ export default function App() {
                   <div className="text-sm text-blue-600">Until Reset (00:30): {Math.floor((24 * 60 - (currentTime.getHours() * 60 + currentTime.getMinutes()) + 30) / 60)}h {(24 * 60 - (currentTime.getHours() * 60 + currentTime.getMinutes()) + 30) % 60}m remaining</div>
                 </div>
 
+                {/* Flowmodoro Rest Timer for Daily Mode */}
+                {settings.flowmodoroEnabled && (
+                  <FlowmodoroActivity 
+                    flowState={flowmodoroState}
+                    settings={settings}
+                    onTakeBreak={takeFlowmodoroBreak}
+                    onSkipBreak={skipFlowmodoroBreak}
+                    onReset={resetFlowmodoroState}
+                    isTimerActive={!!activeDailyActivity}
+                    formatTime={formatTime}
+                  />
+                )}
+
                 {/* Dynamic Timeline Bar */}
                 <div className="space-y-4">
-                  <h3 className="text-md font-semibold">Live Activity Timeline</h3>
+                  <h3 className="text-md font-semibold">Daily Timeline</h3>
                   
-                  {/* Dynamic Timeline Bar */}
-                  <div className="relative h-20 bg-gray-200 rounded-lg overflow-hidden">
+                  {/* Improved Timeline Bar */}
+                  <div className="relative h-24 bg-gradient-to-r from-blue-100 to-gray-100 rounded-lg overflow-hidden border-2 border-blue-200">
                     {/* NOW Indicator (Fixed at start) */}
                     <div 
-                      className="absolute top-0 w-2 h-full bg-red-500 z-20 shadow-lg"
+                      className="absolute top-0 w-1 h-full bg-red-500 z-30 shadow-lg"
                       style={{ left: '0%' }}
                       title="NOW"
                     >
-                      <div className="absolute -top-6 -left-2 text-xs font-bold text-red-600">NOW</div>
+                      <div className="absolute -top-7 -left-3 text-xs font-bold text-red-600 bg-white px-1 rounded shadow">NOW</div>
                     </div>
                     
-                    {/* Conditional Timeline Display */}
-                    {activeDailyActivity ? (
-                      /* Active Activity Timeline with Real-time Sliding */
-                      (() => {
-                        const timelineData = getActiveActivityTimelinePosition();
-                        return (
-                          <>
-                            {/* Active Activity Block (sliding and shrinking in real-time) */}
-                            {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => (
-                              <div 
-                                key={activity.id}
-                                className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium transition-all duration-1000 ease-linear border-l-2 z-10 ${
-                                  timelineData.isOvertime ? 'bg-red-500 border-red-600' : activity.color
-                                }`}
-                                style={{ left: '0%', width: `${timelineData.width}%` }}
-                                title={
-                                  timelineData.isOvertime 
-                                    ? `${activity.name} - OVERTIME! ${timelineData.overtimeMinutes}m over planned time`
-                                    : `${activity.name} - ${timelineData.timeRemaining}m remaining (${Math.round(timelineData.consumed)}% consumed)`
-                                }
-                              >
-                                <div className="font-semibold">{activity.name}</div>
-                                <div className="text-xs opacity-90">
-                                  {timelineData.isOvertime ? `+${timelineData.overtimeMinutes}m OVER` : `${timelineData.timeRemaining}m left`}
-                                </div>
-                                <div className="text-xs opacity-75">
-                                  {timelineData.isOvertime ? 'OVERTIME!' : `${Math.round(timelineData.consumed)}% done`}
-                                </div>
-                              </div>
-                            ))}
-                            
-                            {/* Consumed Time Visualization (shows what's been used) */}
+                    {/* Time Scale Markers */}
+                    {(() => {
+                      const now = new Date();
+                      const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
+                      const markers: any[] = [];
+                      
+                      // Add hour markers for better visual reference
+                      for (let i = 1; i <= Math.min(12, Math.floor(totalRemainingMinutes / 60)); i++) {
+                        const position = (i * 60 / totalRemainingMinutes) * 100;
+                        if (position <= 95) {
+                          markers.push(
                             <div 
-                              className="absolute top-0 h-full bg-gray-600 opacity-30 z-5"
-                              style={{ left: '0%', width: `${Math.max(35 - timelineData.width, 0)}%` }}
-                              title="Time consumed - activity is sliding left"
+                              key={i}
+                              className="absolute top-0 w-px h-full bg-gray-300 opacity-50 z-10"
+                              style={{ left: `${position}%` }}
+                              title={`+${i}h`}
                             >
-                              <div className="absolute top-2 left-2 text-xs text-white font-medium opacity-80">Consumed</div>
+                              <div className="absolute -top-6 -left-2 text-xs text-gray-400">{i}h</div>
                             </div>
-                            
-                            {/* Scheduled Activities (positioned but not consuming) */}
-                            {dailyActivities.filter(activity => activity.status === 'scheduled').map((activity, index) => {
-                              const position = timelineData.width + (index * 20); // Position after active activity
-                              const width = Math.max(15, 20 - index * 2); // Decreasing width
-                              return (
-                                <div 
-                                  key={activity.id}
-                                  className={`absolute top-0 h-full opacity-40 flex flex-col items-center justify-center text-white text-xs font-medium z-5 ${activity.color}`}
-                                  style={{ left: `${Math.min(position, 80)}%`, width: `${width}%` }}
-                                  title={`${activity.name} - Scheduled (${activity.duration}m planned)`}
-                                >
-                                  <div className="font-semibold">{activity.name}</div>
-                                  <div className="text-xs opacity-90">{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</div>
-                                  <div className="text-xs opacity-75">Queued</div>
-                                </div>
-                              );
-                            })}
-                            
-                            {/* Progress Animation Line (shows current consumption rate) */}
-                            <div 
-                              className="absolute bottom-0 left-0 h-1 bg-red-400 opacity-80 transition-all duration-1000" 
-                              style={{ width: `${Math.max(35 - timelineData.width, 0)}%` }}
-                              title="Live consumption progress"
-                            ></div>
-                          </>
-                        );
-                      })()
-                    ) : (
-                      /* Grey Default Fill (shows when no activity is active) */
+                          );
+                        }
+                      }
+                      return markers;
+                    })()}
+                    
+                    {/* Flowmodoro Rest Time Bar (if enabled) */}
+                    {settings.flowmodoroEnabled && (
                       <div 
-                        className="absolute top-0 h-full bg-gray-400 flex items-center justify-center text-gray-600 text-sm font-medium"
-                        style={{ left: '0%', width: '100%' }}
-                        title="Unscheduled Time - Select an activity to start"
+                        className="absolute bottom-0 left-0 h-2 bg-gradient-to-r from-purple-400 to-purple-600 z-15 rounded-b-lg"
+                        style={{ 
+                          width: `${(() => {
+                            const now = new Date();
+                            const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
+                            const availableRestPercentage = (flowmodoroState.availableRestMinutes / totalRemainingMinutes) * 100;
+                            return Math.min(availableRestPercentage, 100);
+                          })()}%` 
+                        }}
+                        title={`Available Rest Time: ${flowmodoroState.availableRestMinutes}m earned`}
                       >
-                        Select an activity to begin timeline
-                        {dailyActivities.length > 0 && (
-                          <span className="ml-2 text-xs opacity-75">({dailyActivities.length} activities ready)</span>
-                        )}
+                        <div className="absolute -top-5 left-2 text-xs text-purple-600 font-medium">
+                          {flowmodoroState.availableRestMinutes}m rest earned
+                        </div>
                       </div>
                     )}
+
+                    {/* Timeline Content */}
+                    {(() => {
+                      const now = new Date();
+                      const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
+                      const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
+                      const plannedPercentageOfDay = Math.min((totalPlannedMinutes / totalRemainingMinutes) * 100, 95);
+                      const unscheduledPercentage = Math.max(100 - plannedPercentageOfDay, 5);
+                      
+                      return (
+                        <>
+                          {/* Planned Activities Section */}
+                          <div 
+                            className="absolute top-0 h-full bg-blue-50 border-r-2 border-blue-300 z-5"
+                            style={{ left: '0%', width: `${plannedPercentageOfDay}%` }}
+                            title={`Planned activities: ${Math.floor(totalPlannedMinutes / 60)}h ${totalPlannedMinutes % 60}m`}
+                          >
+                            <div className="absolute top-1 left-1 text-xs font-medium text-blue-700">
+                              Scheduled ({Math.floor(totalPlannedMinutes / 60)}h {totalPlannedMinutes % 60}m)
+                            </div>
+                          </div>
+                          
+                          {/* Activities within planned section */}
+                          {(() => {
+                            if (activeDailyActivity) {
+                              // Active state timeline
+                              const timelineData = getActiveActivityTimelinePosition();
+                              let currentPosition = 0;
+                              
+                              return (
+                                <>
+                                  {/* Consumed time */}
+                                  <div 
+                                    className="absolute top-0 h-full bg-gray-500 opacity-40 z-10"
+                                    style={{ left: '0%', width: `${((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay}%` }}
+                                    title="Time consumed today"
+                                  />
+                                  
+                                  {/* Active activity */}
+                                  {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => {
+                                    const activityWidth = (timelineData.width / 100) * plannedPercentageOfDay;
+                                    const activityLeft = ((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay;
+                                    
+                                    return (
+                                      <div 
+                                        key={activity.id}
+                                        className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-2 border-white z-20 ${
+                                          timelineData.isOvertime ? 'bg-red-500 animate-pulse' : activity.color
+                                        }`}
+                                        style={{ left: `${activityLeft}%`, width: `${activityWidth}%` }}
+                                        title={
+                                          timelineData.isOvertime 
+                                            ? `${activity.name} - OVERTIME! ${timelineData.overtimeMinutes}m over`
+                                            : `${activity.name} - ${timelineData.timeRemaining}m remaining`
+                                        }
+                                      >
+                                        <div className="font-bold text-center">{activity.name}</div>
+                                        <div className="text-xs opacity-90">
+                                          {timelineData.isOvertime ? `+${timelineData.overtimeMinutes}m` : `${timelineData.timeRemaining}m left`}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  
+                                  {/* Remaining scheduled activities */}
+                                  {(() => {
+                                    let pos = ((timelineData.consumedWidth || 0) + timelineData.width) / 100 * plannedPercentageOfDay;
+                                    return dailyActivities.filter(activity => activity.status === 'scheduled').map((activity) => {
+                                      const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                                      const element = (
+                                        <div 
+                                          key={activity.id}
+                                          className={`absolute top-0 h-full opacity-60 flex flex-col items-center justify-center text-white text-xs font-medium z-15 ${activity.color}`}
+                                          style={{ left: `${pos}%`, width: `${activityWidth}%` }}
+                                          title={`${activity.name} - ${activity.duration}m planned`}
+                                        >
+                                          <div className="font-medium">{activity.name}</div>
+                                          <div className="text-xs">{activity.duration}m</div>
+                                        </div>
+                                      );
+                                      pos += activityWidth;
+                                      return element;
+                                    });
+                                  })()}
+                                </>
+                              );
+                            } else {
+                              // No active activity - show all planned
+                              let currentPosition = 0;
+                              return dailyActivities.map((activity) => {
+                                const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                                const element = (
+                                  <div 
+                                    key={activity.id}
+                                    className={`absolute top-0 h-full opacity-50 flex flex-col items-center justify-center text-white text-xs font-medium z-15 ${activity.color}`}
+                                    style={{ left: `${currentPosition}%`, width: `${activityWidth}%` }}
+                                    title={`${activity.name} - ${activity.duration}m planned`}
+                                  >
+                                    <div className="font-medium">{activity.name}</div>
+                                    <div className="text-xs">{activity.duration}m</div>
+                                  </div>
+                                );
+                                currentPosition += activityWidth;
+                                return element;
+                              });
+                            }
+                          })()}
+                          
+                          {/* Unscheduled Free Time Section */}
+                          <div 
+                            className="absolute top-0 h-full bg-gradient-to-r from-gray-200 to-gray-300 flex items-center justify-center text-gray-600 text-sm font-medium z-5"
+                            style={{ 
+                              left: `${plannedPercentageOfDay}%`, 
+                              width: `${unscheduledPercentage}%` 
+                            }}
+                            title={`Free time: ${Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h until 0:30`}
+                          >
+                            <div className="text-center">
+                              <div className="font-medium">Free Time</div>
+                              <div className="text-xs opacity-75">
+                                {Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h unscheduled
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Visual separator between planned and free time */}
+                          <div 
+                            className="absolute top-0 w-1 h-full bg-blue-400 z-25"
+                            style={{ left: `${plannedPercentageOfDay}%` }}
+                            title="Scheduled | Free time boundary"
+                          />
+                        </>
+                      );
+                    })()}
                   </div>
                   
                   {/* Timeline Info */}
-                  <div className="flex justify-between text-xs text-gray-500">
+                  <div className="flex justify-between items-center text-xs text-gray-500 bg-blue-50 p-2 rounded">
                     <span>
                       {activeDailyActivity ? (() => {
                         const activeActivity = dailyActivities.find(a => a.id === activeDailyActivity);
                         const timelineData = getActiveActivityTimelinePosition();
-                        return `▶ ${activeActivity?.name || 'Activity'} - ${timelineData.timeRemaining}m left (${Math.round(timelineData.consumed)}% consumed)`;
-                      })() : `▶ Click "Start" on any activity to begin timeline`}
+                        return `▶ ${activeActivity?.name || 'Activity'} - ${timelineData.timeRemaining}m left (${Math.round(timelineData.consumed)}% done)`;
+                      })() : `▶ Click "Start" to begin timeline tracking`}
                     </span>
-                    <span>
-                      {activeDailyActivity ? 'Live timeline active' : `Activities: ${dailyActivities.length} total`}
-                    </span>
+                    <div className="flex items-center gap-4">
+                      <span>
+                        {(() => {
+                          const now = new Date();
+                          const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
+                          const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
+                          const utilizationRate = Math.round((totalPlannedMinutes / totalRemainingMinutes) * 100);
+                          return `Day Utilization: ${utilizationRate}%`;
+                        })()}
+                      </span>
+                      {settings.flowmodoroEnabled && (
+                        <span className="text-purple-600">
+                          Rest: {flowmodoroState.availableRestMinutes}m earned
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -4333,16 +4555,43 @@ export default function App() {
                   
                   {/* Dynamic Activity Cards */}
                   <div className="space-y-3">
-                    {dailyActivities.map((activity) => (
-                      <div key={activity.id} className={`border rounded-lg p-3 cursor-pointer transition-all duration-200 ${
+                    {dailyActivities.map((activity) => {
+                      // Calculate activity progress for daily mode
+                      const realTimeSpent = getRealTimeSpent(activity);
+                      const activityProgress = activity.duration > 0 ? (realTimeSpent / activity.duration) * 100 : 0;
+                      const displayProgress = settings.dailyActivityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
+                      
+                      return (
+                      <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
                         activity.status === 'completed'
-                          ? 'bg-green-50 border-green-200 hover:bg-green-100'
+                          ? 'bg-green-50 border-green-200 hover:bg-green-100 cursor-pointer'
                           : activity.status === 'overtime'
-                            ? 'bg-red-50 border-red-300 shadow-md ring-1 ring-red-200'
+                            ? 'bg-red-50 border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer'
                           : activity.status === 'active' 
-                            ? 'border-blue-400 bg-blue-50 shadow-md ring-1 ring-blue-200' 
-                            : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                      }`}>
+                            ? 'border-blue-400 bg-blue-50 shadow-md ring-1 ring-blue-200 cursor-pointer' 
+                            : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer'
+                      }`}
+                      onClick={() => {
+                        if (activity.status === 'scheduled') {
+                          startDailyActivity(activity.id);
+                        } else if (activity.status === 'active' || activity.status === 'overtime') {
+                          stopDailyActivity();
+                        }
+                      }}
+                      >
+                        {/* Progress Bar Background */}
+                        {settings.dailyShowActivityProgress && (
+                          <div 
+                            className="absolute top-0 left-0 h-full opacity-15 transition-all duration-500"
+                            style={{ 
+                              width: `${Math.max(0, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`, 
+                              backgroundColor: activity.color
+                            }}
+                          />
+                        )}
+                        
+                        {/* Card Content */}
+                        <div className="relative z-10">
                         <div className="flex items-center gap-3 mb-2">
                           <div className={`w-6 h-6 rounded-full ${activity.color}`}></div>
                           <span className="font-medium">{activity.name}</span>
@@ -4361,39 +4610,33 @@ export default function App() {
                           </Badge>
                           <div className="ml-auto flex items-center gap-2">
                             {activity.status === 'completed' ? (
-                              <span className="h-6 text-xs px-2 bg-green-50 border border-green-200 text-green-700 rounded flex items-center">
+                              <span className="h-6 text-xs px-2 bg-green-50 border border-green-200 text-green-700 rounded flex items-center pointer-events-none">
                                 <Icon name="check" className="h-3 w-3 mr-1" />
                                 Done
                               </span>
                             ) : activity.status === 'overtime' ? (
-                              <button 
-                                className="h-6 text-xs px-2 bg-red-50 border border-red-200 hover:bg-red-100 text-red-700 rounded flex items-center"
-                                onClick={() => stopDailyActivity()}
-                              >
+                              <span className="h-6 text-xs px-2 bg-red-50 border border-red-200 text-red-700 rounded flex items-center pointer-events-none">
                                 <Icon name="alertTriangle" className="h-3 w-3 mr-1" />
-                                Stop Overtime
-                              </button>
+                                Click to Stop
+                              </span>
                             ) : activity.status === 'active' ? (
-                              <button 
-                                className="h-6 text-xs px-2 bg-red-50 border border-red-200 hover:bg-red-100 rounded flex items-center"
-                                onClick={() => stopDailyActivity()}
-                              >
+                              <span className="h-6 text-xs px-2 bg-red-50 border border-red-200 rounded flex items-center pointer-events-none">
                                 <Icon name="pause" className="h-3 w-3 mr-1" />
-                                Stop
-                              </button>
+                                Click to Stop
+                              </span>
                             ) : (
-                              <button 
-                                className="h-6 text-xs px-2 border border-gray-300 hover:bg-gray-50 rounded flex items-center"
-                                onClick={() => startDailyActivity(activity.id)}
-                              >
+                              <span className="h-6 text-xs px-2 border border-blue-300 bg-blue-50 rounded flex items-center pointer-events-none">
                                 <Icon name="play" className="h-3 w-3 mr-1" />
-                                Start
-                              </button>
+                                Click to Start
+                              </span>
                             )}
                             
                             <button 
-                              className="h-6 w-6 text-blue-500 hover:bg-blue-50 rounded flex items-center justify-center"
-                              onClick={() => openDailyActivityEdit(activity.id)}
+                              className="h-6 w-6 text-blue-500 hover:bg-blue-100 rounded flex items-center justify-center"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openDailyActivityEdit(activity.id);
+                              }}
                               title="Edit activity"
                             >
                               <Icon name="edit" className="h-3 w-3" />
@@ -4401,7 +4644,10 @@ export default function App() {
                             
                             <button 
                               className="h-6 w-6 text-gray-500 hover:bg-gray-100 rounded flex items-center justify-center"
-                              onClick={() => openActivitySettings(activity.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openActivitySettings(activity.id);
+                              }}
                               title="Activity settings"
                             >
                               <Icon name="settings" className="h-3 w-3" />
@@ -4409,7 +4655,10 @@ export default function App() {
                             
                             <button 
                               className="h-6 w-6 text-red-500 hover:bg-red-50 rounded flex items-center justify-center"
-                              onClick={() => removeDailyActivity(activity.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                removeDailyActivity(activity.id);
+                              }}
                               title="Delete activity"
                             >
                               <Icon name="x" className="h-3 w-3" />
@@ -4424,26 +4673,29 @@ export default function App() {
                           <div>
                             <div className="text-gray-600">Duration</div>
                             <div className="font-medium">
-                              {activity.timeSpent > 0 ? (
-                                <span>
-                                  <span className={activity.status === 'overtime' ? 'text-red-600 font-bold' : 'text-blue-600'}>
-                                    {Math.floor(activity.timeSpent / 60)}h {activity.timeSpent % 60}m
+                              {(() => {
+                                const realTimeSpent = getRealTimeSpent(activity);
+                                return realTimeSpent > 0 ? (
+                                  <span>
+                                    <span className={activity.status === 'overtime' ? 'text-red-600 font-bold' : 'text-blue-600'}>
+                                      {Math.floor(realTimeSpent / 60)}h {realTimeSpent % 60}m
+                                    </span>
+                                    <span className="text-gray-400"> / </span>
+                                    <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
+                                    {activity.status === 'overtime' ? (
+                                      <span className="text-xs text-red-600 font-bold block">
+                                        OVERTIME: +{realTimeSpent - activity.duration}m over
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs text-gray-500 block">
+                                        ({Math.floor((realTimeSpent / activity.duration) * 100)}% complete)
+                                      </span>
+                                    )}
                                   </span>
-                                  <span className="text-gray-400"> / </span>
-                                  <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
-                                  {activity.status === 'overtime' ? (
-                                    <span className="text-xs text-red-600 font-bold block">
-                                      OVERTIME: +{activity.timeSpent - activity.duration}m over
-                                    </span>
-                                  ) : (
-                                    <span className="text-xs text-gray-500 block">
-                                      ({Math.floor((activity.timeSpent / activity.duration) * 100)}% complete)
-                                    </span>
-                                  )}
-                                </span>
-                              ) : (
-                                <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m ({activity.percentage}%)</span>
-                              )}
+                                ) : (
+                                  <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m ({activity.percentage}%)</span>
+                                );
+                              })()}
                             </div>
                           </div>
                           <div>
@@ -4461,8 +4713,10 @@ export default function App() {
                             </div>
                           </div>
                         </div>
+                        </div>
                       </div>
-                    ))}
+                      );
+                    })}
 
                     {/* Quick Add New Activity Card */}
                     <div className="border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 p-3 hover:bg-gray-100 cursor-pointer transition-colors">
