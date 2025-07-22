@@ -2119,6 +2119,119 @@ export default function App() {
   // Mode state - 'session' or 'daily'
   const [currentMode, setCurrentMode] = useState('session');
   
+  // Daily Mode State (Step 1: Basic daily activities)
+  const [dailyActivities, setDailyActivities] = useState([
+    {
+      id: 'work-1',
+      name: 'Work',
+      color: 'bg-blue-500',
+      timeWindow: '12:00-16:30',
+      duration: 270, // minutes
+      percentage: 18.8,
+      status: 'scheduled', // 'scheduled', 'active', 'completed'
+      isActive: false,
+      timeSpent: 0,
+      startedAt: null
+    },
+    {
+      id: 'exercise-1', 
+      name: 'Exercise',
+      color: 'bg-green-500',
+      timeWindow: '16:30-18:15',
+      duration: 105,
+      percentage: 7.3,
+      status: 'scheduled',
+      isActive: false,
+      timeSpent: 0,
+      startedAt: null
+    },
+    {
+      id: 'reading-1',
+      name: 'Reading', 
+      color: 'bg-purple-500',
+      timeWindow: '18:15-19:30',
+      duration: 75,
+      percentage: 5.2,
+      status: 'scheduled',
+      isActive: false,
+      timeSpent: 0,
+      startedAt: null
+    }
+  ]);
+  const [activeDailyActivity, setActiveDailyActivity] = useState(null);
+  
+  // Step 15: Activity Settings Modal State
+  const [activitySettingsModal, setActivitySettingsModal] = useState({
+    isOpen: false,
+    activityId: null,
+    activityData: null
+  });
+  
+  // Daily Mode Time State (Step 9: Live Time)
+  const [currentTime, setCurrentTime] = useState(new Date());
+  
+  // Update current time every second for Daily Mode
+  useEffect(() => {
+    if (currentMode === 'daily') {
+      const interval = setInterval(() => {
+        setCurrentTime(new Date());
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [currentMode]);
+
+  // Step 12: Update time spent for active activities
+  useEffect(() => {
+    if (currentMode === 'daily' && activeDailyActivity) {
+      const interval = setInterval(() => {
+        setDailyActivities(prev => prev.map(activity => {
+          if (activity.isActive && activity.startedAt) {
+            const timeSpentSeconds = Math.floor((new Date() - activity.startedAt) / 1000);
+            const timeSpentMinutes = Math.floor(timeSpentSeconds / 60);
+            const totalTimeSpent = activity.timeSpent + timeSpentMinutes;
+            
+            // Step 13: Auto-complete when time is consumed
+            if (totalTimeSpent >= activity.duration) {
+              // Activity completed - stop and mark as completed
+              setTimeout(() => {
+                setActiveDailyActivity(null);
+              }, 100);
+              
+              return { 
+                ...activity, 
+                timeSpent: activity.duration, 
+                status: 'completed',
+                isActive: false,
+                startedAt: null
+              };
+            }
+            
+            return { ...activity, timeSpent: totalTimeSpent };
+          }
+          return activity;
+        }));
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [currentMode, activeDailyActivity]);
+
+  // Step 14: Calculate real-time timeline position for sliding animation
+  const getActiveActivityTimelinePosition = () => {
+    const activeActivity = dailyActivities.find(a => a.isActive && a.startedAt);
+    if (!activeActivity) return { width: 35, consumed: 0 };
+    
+    const elapsedMinutes = Math.floor((new Date() - activeActivity.startedAt) / 60000);
+    const totalElapsed = activeActivity.timeSpent + elapsedMinutes;
+    const consumedPercentage = Math.min((totalElapsed / activeActivity.duration) * 100, 100);
+    const remainingWidth = Math.max(35 - (consumedPercentage * 0.35), 5); // Shrinks from 35% to 5%
+    
+    return { 
+      width: remainingWidth, 
+      consumed: consumedPercentage,
+      timeRemaining: Math.max(activeActivity.duration - totalElapsed, 0)
+    };
+  };
+  
   const [borrowModalState, setBorrowModalState] = useState({ isOpen: false, activityId: '' });
   
   // Siphon Modal State (NEW)
@@ -2665,6 +2778,129 @@ export default function App() {
 
   const handleAddActivityWithName = (name, color, presetTime = 0, countUp = false) => {
     addActivity(name, color, presetTime, countUp);
+  };
+
+  // Daily Mode Functions (Step 2: Quick Add)
+  const quickAddDailyActivity = (name) => {
+    if (!name || !name.trim()) return;
+    
+    // Generate random color
+    const colors = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-red-500', 'bg-yellow-500', 'bg-pink-500', 'bg-indigo-500'];
+    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    
+    // Generate random time slot (1-3 hours)
+    const randomDuration = Math.floor(Math.random() * 120) + 60; // 60-180 minutes
+    const randomPercentage = (randomDuration / (24 * 60)) * 100; // Convert to percentage of day
+    
+    // Generate random time window
+    const startHour = Math.floor(Math.random() * 20) + 4; // Between 4 AM and 11 PM
+    const endHour = Math.min(startHour + Math.floor(randomDuration / 60), 23);
+    const timeWindow = `${startHour.toString().padStart(2, '0')}:00-${endHour.toString().padStart(2, '0')}:00`;
+    
+    const newActivity = {
+      id: `activity-${Date.now()}`,
+      name: name.trim(),
+      color: randomColor,
+      timeWindow,
+      duration: randomDuration,
+      percentage: Math.round(randomPercentage * 10) / 10,
+      status: 'scheduled',
+      isActive: false,
+      timeSpent: 0,
+      startedAt: null
+    };
+    
+    setDailyActivities(prev => [...prev, newActivity]);
+    console.log('Quick added daily activity:', newActivity);
+  };
+
+  const startDailyActivity = (activityId) => {
+    console.log('Starting daily activity:', activityId);
+    setDailyActivities(prev => prev.map(activity => ({
+      ...activity,
+      isActive: activity.id === activityId,
+      status: activity.id === activityId ? 'active' : (activity.status === 'active' ? 'scheduled' : activity.status),
+      startedAt: activity.id === activityId ? new Date() : activity.startedAt
+    })));
+    setActiveDailyActivity(activityId);
+  };
+
+  const stopDailyActivity = () => {
+    console.log('Stopping daily activity');
+    setDailyActivities(prev => prev.map(activity => {
+      if (activity.isActive && activity.startedAt) {
+        const finalTimeSpent = Math.floor((new Date() - activity.startedAt) / 60000); // minutes
+        return {
+          ...activity,
+          isActive: false,
+          status: 'scheduled',
+          timeSpent: finalTimeSpent,
+          startedAt: null
+        };
+      }
+      return {
+        ...activity,
+        isActive: false,
+        status: activity.status === 'active' ? 'scheduled' : activity.status
+      };
+    }));
+    setActiveDailyActivity(null);
+  };
+
+  const removeDailyActivity = (activityId) => {
+    console.log('Removing daily activity:', activityId);
+    setDailyActivities(prev => prev.filter(activity => activity.id !== activityId));
+    if (activeDailyActivity === activityId) {
+      setActiveDailyActivity(null);
+    }
+  };
+
+  // Step 15: Activity Settings Functions
+  const openActivitySettings = (activityId) => {
+    const activity = dailyActivities.find(a => a.id === activityId);
+    if (activity) {
+      setActivitySettingsModal({
+        isOpen: true,
+        activityId,
+        activityData: { ...activity }
+      });
+    }
+  };
+
+  const closeActivitySettings = () => {
+    setActivitySettingsModal({
+      isOpen: false,
+      activityId: null,
+      activityData: null
+    });
+  };
+
+  const saveActivitySettings = (updatedActivity) => {
+    setDailyActivities(prev => prev.map(activity => 
+      activity.id === updatedActivity.id ? { ...activity, ...updatedActivity } : activity
+    ));
+    closeActivitySettings();
+  };
+
+  const deleteActivityFromSettings = (activityId) => {
+    removeDailyActivity(activityId);
+    closeActivitySettings();
+  };
+
+  // Daily Mode Calculations (Step 10: Dynamic Summary)
+  const getDailySummary = () => {
+    const totalPlannedMinutes = dailyActivities.reduce((sum, activity) => sum + activity.duration, 0);
+    const activeActivity = dailyActivities.find(activity => activity.status === 'active');
+    const completedMinutes = 0; // This would track actual completed time in the future
+    const remainingMinutes = totalPlannedMinutes - completedMinutes;
+    
+    return {
+      totalPlannedHours: Math.floor(totalPlannedMinutes / 60),
+      totalPlannedMinutes: totalPlannedMinutes % 60,
+      totalPlannedPercentage: Math.min(100, (totalPlannedMinutes / (24 * 60)) * 100),
+      activeTimeMinutes: activeActivity ? activeActivity.duration : 0,
+      remainingMinutes: Math.max(0, remainingMinutes)
+    };
   };
 
   const saveActivityTemplate = (name) => {
@@ -3492,8 +3728,10 @@ export default function App() {
                 
                 {/* Current Time Display */}
                 <div className="text-center p-3 bg-blue-50 rounded-lg">
-                  <div className="text-lg font-semibold text-blue-800">Current Time: 14:23</div>
-                  <div className="text-sm text-blue-600">Until Reset (00:30): 10h 6m remaining</div>
+                  <div className="text-lg font-semibold text-blue-800">
+                    Current Time: {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                  <div className="text-sm text-blue-600">Until Reset (00:30): {Math.floor((24 * 60 - (currentTime.getHours() * 60 + currentTime.getMinutes()) + 30) / 60)}h {(24 * 60 - (currentTime.getHours() * 60 + currentTime.getMinutes()) + 30) % 60}m remaining</div>
                 </div>
 
                 {/* Dynamic Timeline Bar */}
@@ -3511,56 +3749,90 @@ export default function App() {
                       <div className="absolute -top-6 -left-2 text-xs font-bold text-red-600">NOW</div>
                     </div>
                     
-                    {/* Grey Default Fill (shows when no activity is active) */}
-                    <div 
-                      className="absolute top-0 h-full bg-gray-400 flex items-center justify-center text-gray-600 text-sm font-medium"
-                      style={{ left: '0%', width: '100%' }}
-                      title="Unscheduled Time - Select an activity to start"
-                    >
-                      Select an activity to begin timeline
-                    </div>
-                    
-                    {/* Active Activity Block (only shows when activity is selected/started) */}
-                    {/* This would be conditionally rendered based on which activity is active */}
-                    <div 
-                      className="absolute top-0 h-full bg-blue-500 flex flex-col items-center justify-center text-white text-xs font-medium transition-all duration-1000 ease-linear border-l-2 border-blue-600 z-10"
-                      style={{ left: '0%', width: '35%', display: 'none' }}
-                      title="Work Activity - In Progress"
-                    >
-                      <div className="font-semibold">Work</div>
-                      <div className="text-xs opacity-90">2h 30m (62%)</div>
-                      <div className="text-xs opacity-75">Started: 12:00</div>
-                    </div>
-                    
-                    {/* Scheduled Activities (non-active, positioned but not consuming) */}
-                    <div 
-                      className="absolute top-0 h-full bg-green-500 opacity-40 flex flex-col items-center justify-center text-white text-xs font-medium z-5"
-                      style={{ left: '35%', width: '30%' }}
-                      title="Exercise Activity - Scheduled (not started)"
-                    >
-                      <div className="font-semibold">Exercise</div>
-                      <div className="text-xs opacity-90">1h 45m</div>
-                      <div className="text-xs opacity-75">Scheduled: 16:30</div>
-                    </div>
-                    
-                    <div 
-                      className="absolute top-0 h-full bg-purple-500 opacity-40 flex flex-col items-center justify-center text-white text-xs font-medium z-5"
-                      style={{ left: '65%', width: '20%' }}
-                      title="Reading Activity - Scheduled (not started)"
-                    >
-                      <div className="font-semibold">Reading</div>
-                      <div className="text-xs opacity-90">1h 15m</div>
-                      <div className="text-xs opacity-75">Scheduled: 18:15</div>
-                    </div>
-                    
-                    {/* Progress Animation Line (only for active activity) */}
-                    <div className="absolute bottom-0 left-0 h-1 bg-red-400 opacity-60" style={{ width: '0%', display: 'none' }}></div>
+                    {/* Conditional Timeline Display */}
+                    {activeDailyActivity ? (
+                      /* Active Activity Timeline with Real-time Sliding */
+                      (() => {
+                        const timelineData = getActiveActivityTimelinePosition();
+                        return (
+                          <>
+                            {/* Active Activity Block (sliding and shrinking in real-time) */}
+                            {dailyActivities.filter(activity => activity.status === 'active').map((activity) => (
+                              <div 
+                                key={activity.id}
+                                className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium transition-all duration-1000 ease-linear border-l-2 z-10 ${activity.color}`}
+                                style={{ left: '0%', width: `${timelineData.width}%` }}
+                                title={`${activity.name} - ${timelineData.timeRemaining}m remaining (${Math.round(timelineData.consumed)}% consumed)`}
+                              >
+                                <div className="font-semibold">{activity.name}</div>
+                                <div className="text-xs opacity-90">{timelineData.timeRemaining}m left</div>
+                                <div className="text-xs opacity-75">{Math.round(timelineData.consumed)}% done</div>
+                              </div>
+                            ))}
+                            
+                            {/* Consumed Time Visualization (shows what's been used) */}
+                            <div 
+                              className="absolute top-0 h-full bg-gray-600 opacity-30 z-5"
+                              style={{ left: '0%', width: `${Math.max(35 - timelineData.width, 0)}%` }}
+                              title="Time consumed - activity is sliding left"
+                            >
+                              <div className="absolute top-2 left-2 text-xs text-white font-medium opacity-80">Consumed</div>
+                            </div>
+                            
+                            {/* Scheduled Activities (positioned but not consuming) */}
+                            {dailyActivities.filter(activity => activity.status === 'scheduled').map((activity, index) => {
+                              const position = timelineData.width + (index * 20); // Position after active activity
+                              const width = Math.max(15, 20 - index * 2); // Decreasing width
+                              return (
+                                <div 
+                                  key={activity.id}
+                                  className={`absolute top-0 h-full opacity-40 flex flex-col items-center justify-center text-white text-xs font-medium z-5 ${activity.color}`}
+                                  style={{ left: `${Math.min(position, 80)}%`, width: `${width}%` }}
+                                  title={`${activity.name} - Scheduled (${activity.duration}m planned)`}
+                                >
+                                  <div className="font-semibold">{activity.name}</div>
+                                  <div className="text-xs opacity-90">{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</div>
+                                  <div className="text-xs opacity-75">Queued</div>
+                                </div>
+                              );
+                            })}
+                            
+                            {/* Progress Animation Line (shows current consumption rate) */}
+                            <div 
+                              className="absolute bottom-0 left-0 h-1 bg-red-400 opacity-80 transition-all duration-1000" 
+                              style={{ width: `${Math.max(35 - timelineData.width, 0)}%` }}
+                              title="Live consumption progress"
+                            ></div>
+                          </>
+                        );
+                      })()
+                    ) : (
+                      /* Grey Default Fill (shows when no activity is active) */
+                      <div 
+                        className="absolute top-0 h-full bg-gray-400 flex items-center justify-center text-gray-600 text-sm font-medium"
+                        style={{ left: '0%', width: '100%' }}
+                        title="Unscheduled Time - Select an activity to start"
+                      >
+                        Select an activity to begin timeline
+                        {dailyActivities.length > 0 && (
+                          <span className="ml-2 text-xs opacity-75">({dailyActivities.length} activities ready)</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   
                   {/* Timeline Info */}
                   <div className="flex justify-between text-xs text-gray-500">
-                    <span>▶ Click "Start" on any activity to begin timeline</span>
-                    <span>Next Reset: Tomorrow 00:30</span>
+                    <span>
+                      {activeDailyActivity ? (() => {
+                        const activeActivity = dailyActivities.find(a => a.id === activeDailyActivity);
+                        const timelineData = getActiveActivityTimelinePosition();
+                        return `▶ ${activeActivity?.name || 'Activity'} - ${timelineData.timeRemaining}m left (${Math.round(timelineData.consumed)}% consumed)`;
+                      })() : `▶ Click "Start" on any activity to begin timeline`}
+                    </span>
+                    <span>
+                      {activeDailyActivity ? 'Live timeline active' : `Activities: ${dailyActivities.length} total`}
+                    </span>
                   </div>
                 </div>
 
@@ -3570,98 +3842,129 @@ export default function App() {
                     <h3 className="text-md font-semibold">Today's Activities</h3>
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="outline" className="h-8 text-xs">Auto-Schedule</Button>
-                      <Button size="sm" variant="default" className="h-8 text-xs bg-green-600 hover:bg-green-700">
+                      <Button size="sm" variant="default" className="h-8 text-xs bg-green-600 hover:bg-green-700"
+                        onClick={() => {
+                          const name = prompt('Enter activity name:');
+                          if (name) quickAddDailyActivity(name);
+                        }}
+                      >
                         <Icon name="plus" className="h-3 w-3 mr-1" />
                         Quick Add
                       </Button>
                       <Badge variant="default" className="text-xs">
-                        Total: 24h (100%)
+                        Total: {(() => {
+                          const summary = getDailySummary();
+                          return `${summary.totalPlannedHours}h ${summary.totalPlannedMinutes}m (${Math.round(summary.totalPlannedPercentage)}%)`;
+                        })()}
                       </Badge>
                     </div>
                   </div>
                   
-                  {/* Sample Activity Cards */}
+                  {/* Dynamic Activity Cards */}
                   <div className="space-y-3">
-                    {/* Work Activity */}
-                    <div className="border rounded-lg bg-white p-3 hover:bg-blue-50 cursor-pointer transition-colors">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-6 h-6 rounded-full bg-blue-500"></div>
-                        <span className="font-medium">Work</span>
-                        <Badge variant="secondary" className="text-xs">Scheduled</Badge>
-                        <Button size="sm" variant="outline" className="ml-auto h-6 text-xs px-2">
-                          <Icon name="play" className="h-3 w-3 mr-1" />
-                          Start
-                        </Button>
+                    {dailyActivities.map((activity) => (
+                      <div key={activity.id} className={`border rounded-lg p-3 cursor-pointer transition-all duration-200 ${
+                        activity.status === 'completed'
+                          ? 'bg-green-50 border-green-200 hover:bg-green-100'
+                          : activity.status === 'active' 
+                            ? 'border-blue-400 bg-blue-50 shadow-md ring-1 ring-blue-200' 
+                            : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}>
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className={`w-6 h-6 rounded-full ${activity.color}`}></div>
+                          <span className="font-medium">{activity.name}</span>
+                          <Badge variant={
+                            activity.status === 'completed' ? 'default' :
+                            activity.status === 'active' ? 'default' : 'secondary'
+                          } className={`text-xs ${
+                            activity.status === 'completed' ? 'bg-green-100 text-green-800 border-green-200' :
+                            activity.status === 'active' ? 'bg-blue-100 text-blue-800 border-blue-200' : ''
+                          }`}>
+                            {activity.status === 'completed' ? '✓ Completed' : 
+                             activity.status === 'active' ? 'Active' : 'Scheduled'}
+                          </Badge>
+                          <div className="ml-auto flex items-center gap-2">
+                            {activity.status === 'completed' ? (
+                              <Badge variant="outline" className="h-6 text-xs px-2 bg-green-50 border-green-200 text-green-700">
+                                <Icon name="check" className="h-3 w-3 mr-1" />
+                                Done
+                              </Badge>
+                            ) : activity.status === 'active' ? (
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="h-6 text-xs px-2 bg-red-50 border-red-200 hover:bg-red-100"
+                                onClick={() => stopDailyActivity()}
+                              >
+                                <Icon name="pause" className="h-3 w-3 mr-1" />
+                                Stop
+                              </Button>
+                            ) : (
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="h-6 text-xs px-2"
+                                onClick={() => startDailyActivity(activity.id)}
+                              >
+                                <Icon name="play" className="h-3 w-3 mr-1" />
+                                Start
+                              </Button>
+                            )}
+                            <Button 
+                              size="sm" 
+                              variant="ghost" 
+                              className="h-6 w-6 p-0 text-gray-500 hover:bg-gray-100"
+                              onClick={() => openActivitySettings(activity.id)}
+                              title="Activity settings"
+                            >
+                              <Icon name="settings" className="h-3 w-3" />
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="ghost" 
+                              className="h-6 w-6 p-0 text-red-500 hover:bg-red-50"
+                              onClick={() => removeDailyActivity(activity.id)}
+                              title="Delete activity"
+                            >
+                              <Icon name="x" className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-4 text-sm">
+                          <div>
+                            <div className="text-gray-600">Time Window</div>
+                            <div className="font-medium">{activity.timeWindow}</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-600">Duration</div>
+                            <div className="font-medium">
+                              {activity.timeSpent > 0 ? (
+                                <span>
+                                  <span className="text-blue-600">{Math.floor(activity.timeSpent / 60)}h {activity.timeSpent % 60}m</span>
+                                  <span className="text-gray-400"> / </span>
+                                  <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
+                                  <span className="text-xs text-gray-500 block">({Math.floor((activity.timeSpent / activity.duration) * 100)}% complete)</span>
+                                </span>
+                              ) : (
+                                <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m ({activity.percentage}%)</span>
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-600">Status</div>
+                            <div className="font-medium">
+                              {activity.status === 'completed' ? (
+                                <span className="text-green-600">✓ Completed</span>
+                              ) : activity.status === 'active' ? (
+                                <span className="text-blue-600">In progress</span>
+                              ) : (
+                                <span>Ready to start</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-3 gap-4 text-sm">
-                        <div>
-                          <div className="text-gray-600">Time Window</div>
-                          <div className="font-medium">12:00-16:30</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-600">Duration</div>
-                          <div className="font-medium">4h 30m (18.8%)</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-600">Status</div>
-                          <div className="font-medium">Ready to start</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Exercise Activity */}
-                    <div className="border rounded-lg bg-white p-3 hover:bg-green-50 cursor-pointer transition-colors">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-6 h-6 rounded-full bg-green-500"></div>
-                        <span className="font-medium">Exercise</span>
-                        <Badge variant="secondary" className="text-xs">Scheduled</Badge>
-                        <Button size="sm" variant="outline" className="ml-auto h-6 text-xs px-2">
-                          <Icon name="play" className="h-3 w-3 mr-1" />
-                          Start
-                        </Button>
-                      </div>
-                      <div className="grid grid-cols-3 gap-4 text-sm">
-                        <div>
-                          <div className="text-gray-600">Time Window</div>
-                          <div className="font-medium">16:30-18:15</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-600">Duration</div>
-                          <div className="font-medium">1h 45m (7.3%)</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-600">Status</div>
-                          <div className="font-medium">Starts in 2h 7m</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Reading Activity */}
-                    <div className="border rounded-lg bg-white p-3 hover:bg-purple-50 cursor-pointer transition-colors">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-6 h-6 rounded-full bg-purple-500"></div>
-                        <span className="font-medium">Reading</span>
-                        <Badge variant="secondary" className="text-xs">Scheduled</Badge>
-                        <Button size="sm" variant="outline" className="ml-auto h-6 text-xs px-2">
-                          <Icon name="play" className="h-3 w-3 mr-1" />
-                          Start
-                        </Button>
-                      </div>
-                      <div className="grid grid-cols-3 gap-4 text-sm">
-                        <div>
-                          <div className="text-gray-600">Time Window</div>
-                          <div className="font-medium">18:15-19:30</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-600">Duration</div>
-                          <div className="font-medium">1h 15m (5.2%)</div>
-                        </div>
-                        <div>
-                          <div className="text-gray-600">Status</div>
-                          <div className="font-medium">Starts in 3h 52m</div>
-                        </div>
-                      </div>
-                    </div>
+                    ))}
 
                     {/* Quick Add New Activity Card */}
                     <div className="border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 p-3 hover:bg-gray-100 cursor-pointer transition-colors">
@@ -3675,8 +3978,7 @@ export default function App() {
                           className="font-medium bg-transparent border-none outline-none flex-1 text-gray-700 placeholder-gray-500"
                           onKeyPress={(e) => {
                             if (e.key === 'Enter' && e.target.value.trim()) {
-                              // Quick add function would go here
-                              console.log('Quick adding:', e.target.value);
+                              quickAddDailyActivity(e.target.value);
                               e.target.value = '';
                             }
                           }}
@@ -3696,15 +3998,34 @@ export default function App() {
                   <div className="grid grid-cols-3 gap-4 text-sm">
                     <div>
                       <div className="text-blue-600">Total Planned</div>
-                      <div className="font-semibold text-blue-800">24h (100%)</div>
+                      <div className="font-semibold text-blue-800">
+                        {(() => {
+                          const summary = getDailySummary();
+                          return `${summary.totalPlannedHours}h ${summary.totalPlannedMinutes}m (${Math.round(summary.totalPlannedPercentage)}%)`;
+                        })()}
+                      </div>
                     </div>
                     <div>
                       <div className="text-blue-600">Active Time</div>
-                      <div className="font-semibold text-blue-800">7h 30m (31.3%)</div>
+                      <div className="font-semibold text-blue-800">
+                        {(() => {
+                          const summary = getDailySummary();
+                          const hours = Math.floor(summary.activeTimeMinutes / 60);
+                          const minutes = summary.activeTimeMinutes % 60;
+                          return summary.activeTimeMinutes > 0 ? `${hours}h ${minutes}m` : 'None';
+                        })()}
+                      </div>
                     </div>
                     <div>
                       <div className="text-blue-600">Remaining</div>
-                      <div className="font-semibold text-blue-800">4h 37m</div>
+                      <div className="font-semibold text-blue-800">
+                        {(() => {
+                          const summary = getDailySummary();
+                          const hours = Math.floor(summary.remainingMinutes / 60);
+                          const minutes = summary.remainingMinutes % 60;
+                          return `${hours}h ${minutes}m`;
+                        })()}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3982,6 +4303,180 @@ export default function App() {
           onSaveTemplate={saveActivityTemplate}
         />
       )}
+      
+      {/* Step 15: Activity Settings Modal */}
+      {activitySettingsModal.isOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold">Activity Settings</h3>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-8 w-8 p-0"
+                  onClick={closeActivitySettings}
+                >
+                  <Icon name="x" className="h-4 w-4" />
+                </Button>
+              </div>
+              
+              {activitySettingsModal.activityData && (
+                <ActivitySettingsForm 
+                  activity={activitySettingsModal.activityData}
+                  onSave={saveActivitySettings}
+                  onDelete={deleteActivityFromSettings}
+                  onCancel={closeActivitySettings}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+// Step 15: Activity Settings Form Component
+const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
+  const [formData, setFormData] = useState({
+    name: activity.name || '',
+    color: activity.color || 'bg-blue-500',
+    duration: activity.duration || 60,
+    timeWindow: activity.timeWindow || '09:00-10:00'
+  });
+
+  const colorOptions = [
+    'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-red-500', 
+    'bg-yellow-500', 'bg-pink-500', 'bg-indigo-500', 'bg-orange-500',
+    'bg-teal-500', 'bg-cyan-500', 'bg-lime-500', 'bg-emerald-500'
+  ];
+
+  const handleSave = () => {
+    if (!formData.name.trim()) return;
+    
+    // Calculate new percentage based on duration
+    const newPercentage = (formData.duration / (24 * 60)) * 100;
+    
+    onSave({
+      ...activity,
+      ...formData,
+      percentage: Math.round(newPercentage * 10) / 10,
+      name: formData.name.trim()
+    });
+  };
+
+  const handleDelete = () => {
+    if (confirm(`Are you sure you want to delete "${activity.name}"?`)) {
+      onDelete(activity.id);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Activity Name */}
+      <div>
+        <Label htmlFor="activity-name" className="text-sm font-medium">Activity Name</Label>
+        <Input
+          id="activity-name"
+          value={formData.name}
+          onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+          placeholder="Enter activity name"
+          className="mt-1"
+        />
+      </div>
+
+      {/* Color Selection */}
+      <div>
+        <Label className="text-sm font-medium">Color</Label>
+        <div className="grid grid-cols-6 gap-2 mt-2">
+          {colorOptions.map((color) => (
+            <button
+              key={color}
+              className={`w-8 h-8 rounded-full border-2 hover:scale-110 transition-transform ${
+                formData.color === color ? 'border-gray-600 ring-2 ring-blue-200' : 'border-gray-300'
+              } ${color}`}
+              onClick={() => setFormData(prev => ({ ...prev, color }))}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Duration */}
+      <div>
+        <Label htmlFor="activity-duration" className="text-sm font-medium">Duration (minutes)</Label>
+        <Input
+          id="activity-duration"
+          type="number"
+          min="5"
+          max="720"
+          value={formData.duration}
+          onChange={(e) => setFormData(prev => ({ ...prev, duration: Number(e.target.value) || 60 }))}
+          className="mt-1"
+        />
+        <div className="text-xs text-gray-500 mt-1">
+          {Math.floor(formData.duration / 60)}h {formData.duration % 60}m 
+          ({Math.round((formData.duration / (24 * 60)) * 100 * 10) / 10}% of day)
+        </div>
+      </div>
+
+      {/* Time Window */}
+      <div>
+        <Label htmlFor="activity-time-window" className="text-sm font-medium">Time Window (optional)</Label>
+        <Input
+          id="activity-time-window"
+          value={formData.timeWindow}
+          onChange={(e) => setFormData(prev => ({ ...prev, timeWindow: e.target.value }))}
+          placeholder="e.g., 09:00-10:30"
+          className="mt-1"
+        />
+        <div className="text-xs text-gray-500 mt-1">
+          Format: HH:MM-HH:MM (e.g., 14:00-16:30)
+        </div>
+      </div>
+
+      {/* Activity Status Info */}
+      <div className="bg-gray-50 p-3 rounded-lg">
+        <div className="text-sm text-gray-600">Current Status</div>
+        <div className="flex items-center gap-2 mt-1">
+          <div className={`w-3 h-3 rounded-full ${activity.color}`}></div>
+          <span className="font-medium">
+            {activity.status === 'completed' ? '✓ Completed' : 
+             activity.status === 'active' ? 'Currently Active' : 'Scheduled'}
+          </span>
+        </div>
+        {activity.timeSpent > 0 && (
+          <div className="text-xs text-gray-500 mt-1">
+            Time spent: {Math.floor(activity.timeSpent / 60)}h {activity.timeSpent % 60}m
+          </div>
+        )}
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex items-center justify-between pt-4 border-t">
+        <Button 
+          variant="outline" 
+          size="sm"
+          onClick={handleDelete}
+          className="text-red-600 border-red-200 hover:bg-red-50"
+        >
+          <Icon name="trash2" className="h-4 w-4 mr-2" />
+          Delete Activity
+        </Button>
+        
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button 
+            size="sm" 
+            onClick={handleSave}
+            disabled={!formData.name.trim()}
+          >
+            Save Changes
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
