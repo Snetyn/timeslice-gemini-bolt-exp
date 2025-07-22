@@ -2192,18 +2192,28 @@ export default function App() {
             
             // Step 13: Auto-complete when time is consumed
             if (totalTimeSpent >= activity.duration) {
-              // Activity completed - stop and mark as completed
-              setTimeout(() => {
-                setActiveDailyActivity(null);
-              }, 100);
-              
-              return { 
-                ...activity, 
-                timeSpent: activity.duration, 
-                status: 'completed',
-                isActive: false,
-                startedAt: null
-              };
+              // Step 16: Handle overtime - continue tracking but mark as overtime
+              if (totalTimeSpent > activity.duration) {
+                return { 
+                  ...activity, 
+                  timeSpent: totalTimeSpent,
+                  status: 'overtime',
+                  overtimeMinutes: totalTimeSpent - activity.duration
+                };
+              } else {
+                // Exactly finished - mark as completed
+                setTimeout(() => {
+                  setActiveDailyActivity(null);
+                }, 100);
+                
+                return { 
+                  ...activity, 
+                  timeSpent: activity.duration, 
+                  status: 'completed',
+                  isActive: false,
+                  startedAt: null
+                };
+              }
             }
             
             return { ...activity, timeSpent: totalTimeSpent };
@@ -2223,12 +2233,28 @@ export default function App() {
     const elapsedMinutes = Math.floor((new Date() - activeActivity.startedAt) / 60000);
     const totalElapsed = activeActivity.timeSpent + elapsedMinutes;
     const consumedPercentage = Math.min((totalElapsed / activeActivity.duration) * 100, 100);
+    
+    // Step 16: Handle overtime - extend beyond normal bounds
+    if (totalElapsed > activeActivity.duration) {
+      const overtimeRatio = (totalElapsed - activeActivity.duration) / activeActivity.duration;
+      const extendedWidth = Math.min(35 + (overtimeRatio * 20), 70); // Can expand up to 70%
+      return { 
+        width: extendedWidth, 
+        consumed: 100,
+        timeRemaining: 0,
+        isOvertime: true,
+        overtimeMinutes: totalElapsed - activeActivity.duration
+      };
+    }
+    
     const remainingWidth = Math.max(35 - (consumedPercentage * 0.35), 5); // Shrinks from 35% to 5%
     
     return { 
       width: remainingWidth, 
       consumed: consumedPercentage,
-      timeRemaining: Math.max(activeActivity.duration - totalElapsed, 0)
+      timeRemaining: Math.max(activeActivity.duration - totalElapsed, 0),
+      isOvertime: false,
+      overtimeMinutes: 0
     };
   };
   
@@ -2784,26 +2810,74 @@ export default function App() {
   const quickAddDailyActivity = (name) => {
     if (!name || !name.trim()) return;
     
-    // Generate random color
-    const colors = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-red-500', 'bg-yellow-500', 'bg-pink-500', 'bg-indigo-500'];
-    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    // Step 17: Smart Auto-Scheduling Algorithm
+    const generateSmartTimeSlot = () => {
+      const colors = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-red-500', 'bg-yellow-500', 'bg-pink-500', 'bg-indigo-500'];
+      const randomColor = colors[Math.floor(Math.random() * colors.length)];
+      
+      // Smart duration based on activity name patterns
+      let smartDuration = 60; // default 1 hour
+      const nameLower = name.toLowerCase();
+      
+      if (nameLower.includes('meeting') || nameLower.includes('call')) {
+        smartDuration = 30; // meetings are usually 30min
+      } else if (nameLower.includes('workout') || nameLower.includes('exercise') || nameLower.includes('gym')) {
+        smartDuration = 90; // workouts are usually 1.5h
+      } else if (nameLower.includes('work') || nameLower.includes('focus') || nameLower.includes('study')) {
+        smartDuration = 120; // work sessions are usually 2h
+      } else if (nameLower.includes('break') || nameLower.includes('rest') || nameLower.includes('lunch')) {
+        smartDuration = 30; // breaks are usually 30min
+      } else if (nameLower.includes('commute') || nameLower.includes('travel')) {
+        smartDuration = 45; // travel time usually 45min
+      }
+      
+      // Find available time slots (avoid conflicts with existing activities)
+      const currentTime = new Date();
+      const currentHour = currentTime.getHours();
+      const existingSlots = dailyActivities.map(activity => {
+        const [start, end] = activity.timeWindow.split('-');
+        return { 
+          start: parseInt(start.split(':')[0]), 
+          end: parseInt(end.split(':')[0])
+        };
+      }).sort((a, b) => a.start - b.start);
+      
+      // Smart time slot selection based on current time and gaps
+      let suggestedStart = Math.max(currentHour, 8); // Don't schedule before 8 AM
+      
+      // Find first available gap
+      for (const slot of existingSlots) {
+        if (suggestedStart < slot.start && suggestedStart + Math.ceil(smartDuration / 60) <= slot.start) {
+          break; // Found a gap
+        }
+        suggestedStart = Math.max(suggestedStart, slot.end);
+      }
+      
+      // Ensure we don't go past 10 PM
+      if (suggestedStart + Math.ceil(smartDuration / 60) > 22) {
+        suggestedStart = Math.max(6, 22 - Math.ceil(smartDuration / 60)); // Schedule earlier if needed
+      }
+      
+      const endHour = Math.min(suggestedStart + Math.ceil(smartDuration / 60), 23);
+      const endMinutes = smartDuration % 60;
+      const timeWindow = `${suggestedStart.toString().padStart(2, '0')}:00-${endHour.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
+      
+      const percentage = (smartDuration / (24 * 60)) * 100;
+      
+      return {
+        color: randomColor,
+        duration: smartDuration,
+        timeWindow,
+        percentage: Math.round(percentage * 10) / 10
+      };
+    };
     
-    // Generate random time slot (1-3 hours)
-    const randomDuration = Math.floor(Math.random() * 120) + 60; // 60-180 minutes
-    const randomPercentage = (randomDuration / (24 * 60)) * 100; // Convert to percentage of day
-    
-    // Generate random time window
-    const startHour = Math.floor(Math.random() * 20) + 4; // Between 4 AM and 11 PM
-    const endHour = Math.min(startHour + Math.floor(randomDuration / 60), 23);
-    const timeWindow = `${startHour.toString().padStart(2, '0')}:00-${endHour.toString().padStart(2, '0')}:00`;
+    const smartSlot = generateSmartTimeSlot();
     
     const newActivity = {
       id: `activity-${Date.now()}`,
       name: name.trim(),
-      color: randomColor,
-      timeWindow,
-      duration: randomDuration,
-      percentage: Math.round(randomPercentage * 10) / 10,
+      ...smartSlot,
       status: 'scheduled',
       isActive: false,
       timeSpent: 0,
@@ -2811,7 +2885,7 @@ export default function App() {
     };
     
     setDailyActivities(prev => [...prev, newActivity]);
-    console.log('Quick added daily activity:', newActivity);
+    console.log('Smart scheduled daily activity:', newActivity);
   };
 
   const startDailyActivity = (activityId) => {
@@ -2890,16 +2964,34 @@ export default function App() {
   // Daily Mode Calculations (Step 10: Dynamic Summary)
   const getDailySummary = () => {
     const totalPlannedMinutes = dailyActivities.reduce((sum, activity) => sum + activity.duration, 0);
-    const activeActivity = dailyActivities.find(activity => activity.status === 'active');
-    const completedMinutes = 0; // This would track actual completed time in the future
-    const remainingMinutes = totalPlannedMinutes - completedMinutes;
+    const totalSpentMinutes = dailyActivities.reduce((sum, activity) => sum + activity.timeSpent, 0);
+    const activeTimeMinutes = dailyActivities
+      .filter(activity => activity.status === 'active' || activity.status === 'overtime')
+      .reduce((sum, activity) => sum + activity.timeSpent, 0);
+    const remainingMinutes = Math.max(0, totalPlannedMinutes - totalSpentMinutes);
+    
+    // Step 18: Enhanced Analytics
+    const completedActivities = dailyActivities.filter(a => a.status === 'completed').length;
+    const overtimeActivities = dailyActivities.filter(a => a.status === 'overtime').length;
+    const totalOvertimeMinutes = dailyActivities
+      .filter(a => a.status === 'overtime')
+      .reduce((sum, activity) => sum + Math.max(0, activity.timeSpent - activity.duration), 0);
+    const completionRate = dailyActivities.length > 0 ? (completedActivities / dailyActivities.length) * 100 : 0;
+    const efficiency = totalPlannedMinutes > 0 ? Math.min(100, (totalSpentMinutes / totalPlannedMinutes) * 100) : 0;
     
     return {
       totalPlannedHours: Math.floor(totalPlannedMinutes / 60),
       totalPlannedMinutes: totalPlannedMinutes % 60,
       totalPlannedPercentage: Math.min(100, (totalPlannedMinutes / (24 * 60)) * 100),
-      activeTimeMinutes: activeActivity ? activeActivity.duration : 0,
-      remainingMinutes: Math.max(0, remainingMinutes)
+      activeTimeMinutes,
+      remainingMinutes,
+      totalSpentMinutes,
+      completedActivities,
+      overtimeActivities,
+      totalOvertimeMinutes,
+      completionRate,
+      efficiency,
+      totalActivities: dailyActivities.length
     };
   };
 
@@ -3757,16 +3849,26 @@ export default function App() {
                         return (
                           <>
                             {/* Active Activity Block (sliding and shrinking in real-time) */}
-                            {dailyActivities.filter(activity => activity.status === 'active').map((activity) => (
+                            {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => (
                               <div 
                                 key={activity.id}
-                                className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium transition-all duration-1000 ease-linear border-l-2 z-10 ${activity.color}`}
+                                className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium transition-all duration-1000 ease-linear border-l-2 z-10 ${
+                                  timelineData.isOvertime ? 'bg-red-500 border-red-600' : activity.color
+                                }`}
                                 style={{ left: '0%', width: `${timelineData.width}%` }}
-                                title={`${activity.name} - ${timelineData.timeRemaining}m remaining (${Math.round(timelineData.consumed)}% consumed)`}
+                                title={
+                                  timelineData.isOvertime 
+                                    ? `${activity.name} - OVERTIME! ${timelineData.overtimeMinutes}m over planned time`
+                                    : `${activity.name} - ${timelineData.timeRemaining}m remaining (${Math.round(timelineData.consumed)}% consumed)`
+                                }
                               >
                                 <div className="font-semibold">{activity.name}</div>
-                                <div className="text-xs opacity-90">{timelineData.timeRemaining}m left</div>
-                                <div className="text-xs opacity-75">{Math.round(timelineData.consumed)}% done</div>
+                                <div className="text-xs opacity-90">
+                                  {timelineData.isOvertime ? `+${timelineData.overtimeMinutes}m OVER` : `${timelineData.timeRemaining}m left`}
+                                </div>
+                                <div className="text-xs opacity-75">
+                                  {timelineData.isOvertime ? 'OVERTIME!' : `${Math.round(timelineData.consumed)}% done`}
+                                </div>
                               </div>
                             ))}
                             
@@ -3866,6 +3968,8 @@ export default function App() {
                       <div key={activity.id} className={`border rounded-lg p-3 cursor-pointer transition-all duration-200 ${
                         activity.status === 'completed'
                           ? 'bg-green-50 border-green-200 hover:bg-green-100'
+                          : activity.status === 'overtime'
+                            ? 'bg-red-50 border-red-300 shadow-md ring-1 ring-red-200'
                           : activity.status === 'active' 
                             ? 'border-blue-400 bg-blue-50 shadow-md ring-1 ring-blue-200' 
                             : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50'
@@ -3875,12 +3979,15 @@ export default function App() {
                           <span className="font-medium">{activity.name}</span>
                           <Badge variant={
                             activity.status === 'completed' ? 'default' :
+                            activity.status === 'overtime' ? 'destructive' :
                             activity.status === 'active' ? 'default' : 'secondary'
                           } className={`text-xs ${
                             activity.status === 'completed' ? 'bg-green-100 text-green-800 border-green-200' :
+                            activity.status === 'overtime' ? 'bg-red-100 text-red-800 border-red-200' :
                             activity.status === 'active' ? 'bg-blue-100 text-blue-800 border-blue-200' : ''
                           }`}>
                             {activity.status === 'completed' ? '✓ Completed' : 
+                             activity.status === 'overtime' ? '⚠ OVERTIME' :
                              activity.status === 'active' ? 'Active' : 'Scheduled'}
                           </Badge>
                           <div className="ml-auto flex items-center gap-2">
@@ -3889,6 +3996,16 @@ export default function App() {
                                 <Icon name="check" className="h-3 w-3 mr-1" />
                                 Done
                               </Badge>
+                            ) : activity.status === 'overtime' ? (
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="h-6 text-xs px-2 bg-red-50 border-red-200 hover:bg-red-100 text-red-700"
+                                onClick={() => stopDailyActivity()}
+                              >
+                                <Icon name="alertTriangle" className="h-3 w-3 mr-1" />
+                                Stop Overtime
+                              </Button>
                             ) : activity.status === 'active' ? (
                               <Button 
                                 size="sm" 
@@ -3940,10 +4057,20 @@ export default function App() {
                             <div className="font-medium">
                               {activity.timeSpent > 0 ? (
                                 <span>
-                                  <span className="text-blue-600">{Math.floor(activity.timeSpent / 60)}h {activity.timeSpent % 60}m</span>
+                                  <span className={activity.status === 'overtime' ? 'text-red-600 font-bold' : 'text-blue-600'}>
+                                    {Math.floor(activity.timeSpent / 60)}h {activity.timeSpent % 60}m
+                                  </span>
                                   <span className="text-gray-400"> / </span>
                                   <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
-                                  <span className="text-xs text-gray-500 block">({Math.floor((activity.timeSpent / activity.duration) * 100)}% complete)</span>
+                                  {activity.status === 'overtime' ? (
+                                    <span className="text-xs text-red-600 font-bold block">
+                                      OVERTIME: +{activity.timeSpent - activity.duration}m over
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-gray-500 block">
+                                      ({Math.floor((activity.timeSpent / activity.duration) * 100)}% complete)
+                                    </span>
+                                  )}
                                 </span>
                               ) : (
                                 <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m ({activity.percentage}%)</span>
@@ -3955,6 +4082,8 @@ export default function App() {
                             <div className="font-medium">
                               {activity.status === 'completed' ? (
                                 <span className="text-green-600">✓ Completed</span>
+                              ) : activity.status === 'overtime' ? (
+                                <span className="text-red-600 font-bold">⚠ OVERTIME!</span>
                               ) : activity.status === 'active' ? (
                                 <span className="text-blue-600">In progress</span>
                               ) : (
@@ -3983,10 +4112,10 @@ export default function App() {
                             }
                           }}
                         />
-                        <Badge variant="outline" className="text-xs text-gray-500">Auto-schedule</Badge>
+                        <Badge variant="outline" className="text-xs text-gray-500">Smart-schedule</Badge>
                       </div>
                       <div className="text-sm text-gray-500">
-                        Type activity name and press Enter to auto-schedule with random time slot
+                        Type activity name and press Enter to smart-schedule based on activity type and available time slots
                       </div>
                     </div>
                   </div>
@@ -3994,8 +4123,8 @@ export default function App() {
 
                 {/* Today's Summary */}
                 <div className="bg-blue-50 rounded-lg p-4">
-                  <h4 className="font-medium text-blue-800 mb-2">Today's Summary</h4>
-                  <div className="grid grid-cols-3 gap-4 text-sm">
+                  <h4 className="font-medium text-blue-800 mb-3">Today's Analytics</h4>
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
                     <div>
                       <div className="text-blue-600">Total Planned</div>
                       <div className="font-semibold text-blue-800">
@@ -4006,26 +4135,72 @@ export default function App() {
                       </div>
                     </div>
                     <div>
-                      <div className="text-blue-600">Active Time</div>
+                      <div className="text-blue-600">Time Spent</div>
                       <div className="font-semibold text-blue-800">
                         {(() => {
                           const summary = getDailySummary();
-                          const hours = Math.floor(summary.activeTimeMinutes / 60);
-                          const minutes = summary.activeTimeMinutes % 60;
-                          return summary.activeTimeMinutes > 0 ? `${hours}h ${minutes}m` : 'None';
+                          const hours = Math.floor(summary.totalSpentMinutes / 60);
+                          const minutes = summary.totalSpentMinutes % 60;
+                          return summary.totalSpentMinutes > 0 ? `${hours}h ${minutes}m` : 'None';
                         })()}
                       </div>
                     </div>
                     <div>
-                      <div className="text-blue-600">Remaining</div>
+                      <div className="text-blue-600">Completion Rate</div>
                       <div className="font-semibold text-blue-800">
                         {(() => {
                           const summary = getDailySummary();
-                          const hours = Math.floor(summary.remainingMinutes / 60);
-                          const minutes = summary.remainingMinutes % 60;
-                          return `${hours}h ${minutes}m`;
+                          return `${Math.round(summary.completionRate)}% (${summary.completedActivities}/${summary.totalActivities})`;
                         })()}
                       </div>
+                    </div>
+                    <div>
+                      <div className="text-blue-600">Efficiency</div>
+                      <div className="font-semibold text-blue-800">
+                        {(() => {
+                          const summary = getDailySummary();
+                          return `${Math.round(summary.efficiency)}%`;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Overtime Warning (if any) */}
+                  {(() => {
+                    const summary = getDailySummary();
+                    if (summary.overtimeActivities > 0) {
+                      return (
+                        <div className="bg-red-100 border border-red-200 rounded-lg p-3 mb-3">
+                          <div className="flex items-center gap-2 text-red-800">
+                            <Icon name="alertTriangle" className="h-4 w-4" />
+                            <span className="font-medium">Overtime Alert</span>
+                          </div>
+                          <div className="text-sm text-red-700 mt-1">
+                            {summary.overtimeActivities} activities went overtime by {Math.floor(summary.totalOvertimeMinutes / 60)}h {summary.totalOvertimeMinutes % 60}m total
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                  
+                  {/* Progress Bar */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs text-blue-600">
+                      <span>Daily Progress</span>
+                      <span>{(() => {
+                        const summary = getDailySummary();
+                        return `${Math.round(summary.efficiency)}%`;
+                      })()}</span>
+                    </div>
+                    <div className="w-full bg-blue-200 rounded-full h-2">
+                      <div 
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${(() => {
+                          const summary = getDailySummary();
+                          return Math.min(100, summary.efficiency);
+                        })()}%` }}
+                      ></div>
                     </div>
                   </div>
                 </div>
