@@ -2433,46 +2433,72 @@ export default function App() {
   // Mode state - 'session' or 'daily'
   const [currentMode, setCurrentMode] = useState('session');
   
-  // Daily Mode State (Step 1: Basic daily activities)
-  const [dailyActivities, setDailyActivities] = useState([
-    {
-      id: 'work-1',
-      name: 'Work',
-      color: 'bg-blue-500',
-      timeWindow: '12:00-16:30',
-      duration: 270, // minutes
-      percentage: 18.8,
-      status: 'scheduled', // 'scheduled', 'active', 'completed'
-      isActive: false,
-      timeSpent: 0,
-      startedAt: null
-    },
-    {
-      id: 'exercise-1', 
-      name: 'Exercise',
-      color: 'bg-green-500',
-      timeWindow: '16:30-18:15',
-      duration: 105,
-      percentage: 7.3,
-      status: 'scheduled',
-      isActive: false,
-      timeSpent: 0,
-      startedAt: null
-    },
-    {
-      id: 'reading-1',
-      name: 'Reading', 
-      color: 'bg-purple-500',
-      timeWindow: '18:15-19:30',
-      duration: 75,
-      percentage: 5.2,
-      status: 'scheduled',
-      isActive: false,
-      timeSpent: 0,
-      startedAt: null
+  // Daily Mode State (Step 1: Basic daily activities) - Load from localStorage
+  const [dailyActivities, setDailyActivities] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceDailyActivities');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Restore Date objects for startedAt
+        return parsed.map((activity: any) => ({
+          ...activity,
+          startedAt: activity.startedAt ? new Date(activity.startedAt) : null
+        }));
+      }
+    } catch (e) {
+      console.error('Failed to load daily activities from localStorage:', e);
     }
-  ]);
-  const [activeDailyActivity, setActiveDailyActivity] = useState(null);
+    
+    // Default activities if nothing saved
+    return [
+      {
+        id: 'work-1',
+        name: 'Work',
+        color: 'bg-blue-500',
+        timeWindow: '12:00-16:30',
+        duration: 270, // minutes
+        percentage: 18.8,
+        status: 'scheduled', // 'scheduled', 'active', 'completed'
+        isActive: false,
+        timeSpent: 0,
+        startedAt: null
+      },
+      {
+        id: 'exercise-1', 
+        name: 'Exercise',
+        color: 'bg-green-500',
+        timeWindow: '16:30-18:15',
+        duration: 105,
+        percentage: 7.3,
+        status: 'scheduled',
+        isActive: false,
+        timeSpent: 0,
+        startedAt: null
+      },
+      {
+        id: 'reading-1',
+        name: 'Reading', 
+        color: 'bg-purple-500',
+        timeWindow: '18:15-19:30',
+        duration: 75,
+        percentage: 5.2,
+        status: 'scheduled',
+        isActive: false,
+        timeSpent: 0,
+        startedAt: null
+      }
+    ];
+  });
+  
+  const [activeDailyActivity, setActiveDailyActivity] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceActiveDailyActivity');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      console.error('Failed to load active daily activity from localStorage:', e);
+      return null;
+    }
+  });
   
   // Step 15: Activity Settings Modal State
   const [activitySettingsModal, setActivitySettingsModal] = useState({
@@ -2831,6 +2857,67 @@ export default function App() {
       console.error("Failed to save settings", e);
     }
   }, [settings]);
+
+  // Save daily activities to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceDailyActivities', JSON.stringify(dailyActivities));
+    } catch (e) {
+      console.error('Failed to save daily activities to localStorage:', e);
+    }
+  }, [dailyActivities]);
+
+  // Save active daily activity to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceActiveDailyActivity', JSON.stringify(activeDailyActivity));
+    } catch (e) {
+      console.error('Failed to save active daily activity to localStorage:', e);
+    }
+  }, [activeDailyActivity]);
+
+  // Restore active daily activity state on app load
+  useEffect(() => {
+    if (activeDailyActivity) {
+      // Check if the saved active activity still exists and is actually active
+      const activeActivity = dailyActivities.find(activity => 
+        activity.id === activeDailyActivity && 
+        (activity.status === 'active' || activity.status === 'overtime') && 
+        activity.startedAt
+      );
+      
+      if (!activeActivity) {
+        // Clear the stale active activity reference
+        setActiveDailyActivity(null);
+      }
+    }
+  }, [dailyActivities, activeDailyActivity]);
+
+  // Check if daily activities need to be reset for a new day
+  useEffect(() => {
+    try {
+      const lastSavedDate = localStorage.getItem('timeSliceDailyActivitiesDate');
+      const today = new Date().toDateString();
+      
+      if (lastSavedDate && lastSavedDate !== today) {
+        // New day detected - reset all daily activities progress
+        setDailyActivities(prev => prev.map(activity => ({
+          ...activity,
+          status: 'scheduled',
+          isActive: false,
+          timeSpent: 0,
+          startedAt: null
+        })));
+        setActiveDailyActivity(null);
+        console.log('Daily activities reset for new day');
+      }
+      
+      // Save current date
+      localStorage.setItem('timeSliceDailyActivitiesDate', today);
+    } catch (e) {
+      console.error('Failed to check/reset daily activities for new day:', e);
+    }
+  }, []); // Run only on mount
 
   useEffect(() => {
     try {
