@@ -2191,21 +2191,23 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
               </button>
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Start Time
-                </label>
-                <select
-                  value={formData.timeWindow.split('-')[0]}
-                  onChange={(e) => handleStartTimeChange(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {timeSlots.map(time => (
-                    <option key={time} value={time}>{time}</option>
-                  ))}
-                </select>
-              </div>
+            <div className={timeInputType === 'duration' ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-2 gap-4'}>
+              {timeInputType === 'endTime' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Start Time
+                  </label>
+                  <select
+                    value={formData.timeWindow.split('-')[0]}
+                    onChange={(e) => handleStartTimeChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {timeSlots.map(time => (
+                      <option key={time} value={time}>{time}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {timeInputType === 'duration' ? (
                 <div>
@@ -2418,6 +2420,9 @@ export default function App() {
       // Daily Mode specific settings
       dailyShowActivityProgress: true, // Show progress bars in daily activity cards
       dailyActivityProgressType: 'fill', // 'fill' or 'drain'
+      // Auto-schedule settings
+      defaultTimeWindow: '09:00-17:00', // Default time window for auto-scheduling
+      autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
     };
     try {
       const saved = localStorage.getItem('timeSliceSettings');
@@ -2499,6 +2504,9 @@ export default function App() {
       return null;
     }
   });
+  
+  // Timeline view toggle state
+  const [timelineViewMode, setTimelineViewMode] = useState('scheduled'); // 'scheduled' or 'full'
   
   // Step 15: Activity Settings Modal State
   const [activitySettingsModal, setActivitySettingsModal] = useState({
@@ -4332,6 +4340,45 @@ export default function App() {
                         </p>
                       </div>
                     )}
+                    
+                    {/* Auto-Schedule Time Window Settings */}
+                    <div className="space-y-3 mt-4 pt-4 border-t border-green-200">
+                      <div>
+                        <Label className="text-sm font-medium text-green-700">Auto-Schedule Settings</Label>
+                        <p className="text-xs text-gray-500 mt-1">Configure time windows for automatic activity placement</p>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label className="text-xs font-medium">Default Time Window for New Activities</Label>
+                        <Input
+                          placeholder="e.g., 09:00-17:00 (work hours)"
+                          className="text-sm h-8"
+                          value={settings.defaultTimeWindow || ''}
+                          onChange={(e) => setSettings(prev => ({ ...prev, defaultTimeWindow: e.target.value }))}
+                        />
+                        <p className="text-xs text-gray-500">
+                          Format: HH:MM-HH:MM. When using auto-schedule, activities will be placed within this time window based on their duration.
+                        </p>
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label className="text-xs font-medium">Break Time Between Activities</Label>
+                        <div className="flex items-center space-x-2">
+                          <Input 
+                            type="number" 
+                            min="0" 
+                            max="60" 
+                            value={settings.autoScheduleBreakMinutes || 15}
+                            onChange={(e) => setSettings(prev => ({ ...prev, autoScheduleBreakMinutes: Number(e.target.value) || 15 }))}
+                            className="w-16 h-8 text-sm"
+                          />
+                          <span className="text-xs text-gray-600">minutes</span>
+                        </div>
+                        <p className="text-xs text-gray-500">
+                          Buffer time added between auto-scheduled activities
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -4399,8 +4446,12 @@ export default function App() {
                 <div className="space-y-4">
                   <h3 className="text-md font-semibold">Daily Timeline</h3>
                   
-                  {/* Improved Timeline Bar */}
-                  <div className="relative h-24 bg-gradient-to-r from-blue-100 to-gray-100 rounded-lg overflow-hidden border-2 border-blue-200">
+                  {/* Improved Timeline Bar - Clickable */}
+                  <div 
+                    className="relative h-24 bg-gradient-to-r from-blue-100 to-gray-100 rounded-lg overflow-hidden border-2 border-blue-200 cursor-pointer hover:border-blue-300 transition-colors"
+                    onClick={() => setTimelineViewMode(prev => prev === 'scheduled' ? 'full' : 'scheduled')}
+                    title={`Click to toggle view: ${timelineViewMode === 'scheduled' ? 'Show full day with unscheduled time' : 'Show only scheduled activities'}`}
+                  >
                     {/* NOW Indicator (Fixed at start) */}
                     <div 
                       className="absolute top-0 w-1 h-full bg-red-500 z-30 shadow-lg"
@@ -4460,133 +4511,232 @@ export default function App() {
                       const now = new Date();
                       const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
                       const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
-                      const plannedPercentageOfDay = Math.min((totalPlannedMinutes / totalRemainingMinutes) * 100, 95);
-                      const unscheduledPercentage = Math.max(100 - plannedPercentageOfDay, 5);
                       
-                      return (
-                        <>
-                          {/* Planned Activities Section */}
-                          <div 
-                            className="absolute top-0 h-full bg-blue-50 border-r-2 border-blue-300 z-5"
-                            style={{ left: '0%', width: `${plannedPercentageOfDay}%` }}
-                            title={`Planned activities: ${Math.floor(totalPlannedMinutes / 60)}h ${totalPlannedMinutes % 60}m`}
-                          >
-                            <div className="absolute top-1 left-1 text-xs font-medium text-blue-700">
-                              Scheduled ({Math.floor(totalPlannedMinutes / 60)}h {totalPlannedMinutes % 60}m)
-                            </div>
-                          </div>
+                      if (timelineViewMode === 'scheduled') {
+                        // Show only scheduled activities, filling the entire bar
+                        if (activeDailyActivity) {
+                          // Active state timeline
+                          const timelineData = getActiveActivityTimelinePosition();
+                          let currentPosition = 0;
                           
-                          {/* Activities within planned section */}
-                          {(() => {
-                            if (activeDailyActivity) {
-                              // Active state timeline
-                              const timelineData = getActiveActivityTimelinePosition();
-                              let currentPosition = 0;
+                          return (
+                            <>
+                              {/* Consumed time */}
+                              <div 
+                                className="absolute top-0 h-full bg-gray-500 opacity-40 z-10"
+                                style={{ left: '0%', width: `${timelineData.consumedWidth || 0}%` }}
+                                title="Time consumed today"
+                              />
                               
-                              return (
-                                <>
-                                  {/* Consumed time */}
-                                  <div 
-                                    className="absolute top-0 h-full bg-gray-500 opacity-40 z-10"
-                                    style={{ left: '0%', width: `${((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay}%` }}
-                                    title="Time consumed today"
-                                  />
-                                  
-                                  {/* Active activity */}
-                                  {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => {
-                                    const activityWidth = (timelineData.width / 100) * plannedPercentageOfDay;
-                                    const activityLeft = ((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay;
-                                    
-                                    return (
-                                      <div 
-                                        key={activity.id}
-                                        className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-2 border-white z-20 ${
-                                          timelineData.isOvertime ? 'bg-red-500 animate-pulse' : activity.color
-                                        }`}
-                                        style={{ left: `${activityLeft}%`, width: `${activityWidth}%` }}
-                                        title={
-                                          timelineData.isOvertime 
-                                            ? `${activity.name} - OVERTIME! ${timelineData.overtimeMinutes}m over`
-                                            : `${activity.name} - ${timelineData.timeRemaining}m remaining`
-                                        }
-                                      >
-                                        <div className="font-bold text-center">{activity.name}</div>
-                                        <div className="text-xs opacity-90">
-                                          {timelineData.isOvertime ? `+${timelineData.overtimeMinutes}m` : `${timelineData.timeRemaining}m left`}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                  
-                                  {/* Remaining scheduled activities */}
-                                  {(() => {
-                                    let pos = ((timelineData.consumedWidth || 0) + timelineData.width) / 100 * plannedPercentageOfDay;
-                                    return dailyActivities.filter(activity => activity.status === 'scheduled').map((activity) => {
-                                      const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
-                                      const element = (
-                                        <div 
-                                          key={activity.id}
-                                          className={`absolute top-0 h-full opacity-60 flex flex-col items-center justify-center text-white text-xs font-medium z-15 ${activity.color}`}
-                                          style={{ left: `${pos}%`, width: `${activityWidth}%` }}
-                                          title={`${activity.name} - ${activity.duration}m planned`}
-                                        >
-                                          <div className="font-medium">{activity.name}</div>
-                                          <div className="text-xs">{activity.duration}m</div>
-                                        </div>
-                                      );
-                                      pos += activityWidth;
-                                      return element;
-                                    });
-                                  })()}
-                                </>
-                              );
-                            } else {
-                              // No active activity - show all planned
-                              let currentPosition = 0;
-                              return dailyActivities.map((activity) => {
-                                const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
-                                const element = (
+                              {/* Active activity */}
+                              {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => {
+                                return (
                                   <div 
                                     key={activity.id}
-                                    className={`absolute top-0 h-full opacity-50 flex flex-col items-center justify-center text-white text-xs font-medium z-15 ${activity.color}`}
-                                    style={{ left: `${currentPosition}%`, width: `${activityWidth}%` }}
-                                    title={`${activity.name} - ${activity.duration}m planned`}
+                                    className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-2 border-white z-20 ${
+                                      activity.status === 'overtime' ? 'animate-pulse' : ''
+                                    }`}
+                                    style={{ 
+                                      left: `${timelineData.consumedWidth || 0}%`, 
+                                      width: `${timelineData.width}%`,
+                                      backgroundColor: activity.color.startsWith('#') ? activity.color : '#3b82f6'
+                                    }}
+                                    title={`${activity.name} - ${activity.status}`}
                                   >
-                                    <div className="font-medium">{activity.name}</div>
-                                    <div className="text-xs">{activity.duration}m</div>
+                                    <div className="truncate px-1">{activity.name}</div>
+                                    <div className="text-xs opacity-90">{activity.status === 'overtime' ? 'OVERTIME' : 'ACTIVE'}</div>
                                   </div>
                                 );
-                                currentPosition += activityWidth;
-                                return element;
-                              });
-                            }
-                          })()}
-                          
-                          {/* Unscheduled Free Time Section */}
-                          <div 
-                            className="absolute top-0 h-full bg-gradient-to-r from-gray-200 to-gray-300 flex items-center justify-center text-gray-600 text-sm font-medium z-5"
-                            style={{ 
-                              left: `${plannedPercentageOfDay}%`, 
-                              width: `${unscheduledPercentage}%` 
-                            }}
-                            title={`Free time: ${Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h until 0:30`}
-                          >
-                            <div className="text-center">
-                              <div className="font-medium">Free Time</div>
-                              <div className="text-xs opacity-75">
-                                {Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h unscheduled
+                              })}
+                              
+                              {/* Remaining scheduled activities */}
+                              {(() => {
+                                let position = (timelineData.consumedWidth || 0) + timelineData.width;
+                                return dailyActivities
+                                  .filter(activity => activity.status === 'scheduled')
+                                  .map((activity) => {
+                                    const activityWidth = (activity.duration / totalPlannedMinutes) * (100 - position);
+                                    const element = (
+                                      <div 
+                                        key={activity.id}
+                                        className="absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-r border-white z-15"
+                                        style={{ 
+                                          left: `${position}%`, 
+                                          width: `${activityWidth}%`,
+                                          backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
+                                        }}
+                                        title={`${activity.name} - ${activity.duration}m planned`}
+                                      >
+                                        <div className="truncate px-1">{activity.name}</div>
+                                        <div className="text-xs opacity-75">{activity.duration}m</div>
+                                      </div>
+                                    );
+                                    position += activityWidth;
+                                    return element;
+                                  });
+                              })()}
+                            </>
+                          );
+                        } else {
+                          // No active activity - show all planned, filling entire bar
+                          let currentPosition = 0;
+                          return dailyActivities.map((activity) => {
+                            const activityWidth = (activity.duration / totalPlannedMinutes) * 100;
+                            const element = (
+                              <div 
+                                key={activity.id}
+                                className="absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-r border-white z-15"
+                                style={{ 
+                                  left: `${currentPosition}%`, 
+                                  width: `${activityWidth}%`,
+                                  backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
+                                }}
+                                title={`${activity.name} - ${activity.duration}m planned`}
+                              >
+                                <div className="truncate px-1">{activity.name}</div>
+                                <div className="text-xs opacity-75">{activity.duration}m</div>
+                              </div>
+                            );
+                            currentPosition += activityWidth;
+                            return element;
+                          });
+                        }
+                      } else {
+                        // Show full day view with unscheduled time
+                        const plannedPercentageOfDay = Math.min((totalPlannedMinutes / totalRemainingMinutes) * 100, 95);
+                        const unscheduledPercentage = Math.max(100 - plannedPercentageOfDay, 5);
+                        
+                        return (
+                          <>
+                            {/* Planned Activities Section */}
+                            <div 
+                              className="absolute top-0 h-full bg-blue-50 border-r-2 border-blue-300 z-5"
+                              style={{ left: '0%', width: `${plannedPercentageOfDay}%` }}
+                              title={`Planned activities: ${Math.floor(totalPlannedMinutes / 60)}h ${totalPlannedMinutes % 60}m`}
+                            >
+                              <div className="absolute top-1 left-1 text-xs font-medium text-blue-700">
+                                Scheduled ({Math.floor(totalPlannedMinutes / 60)}h {totalPlannedMinutes % 60}m)
                               </div>
                             </div>
-                          </div>
-                          
-                          {/* Visual separator between planned and free time */}
-                          <div 
-                            className="absolute top-0 w-1 h-full bg-blue-400 z-25"
-                            style={{ left: `${plannedPercentageOfDay}%` }}
-                            title="Scheduled | Free time boundary"
-                          />
-                        </>
-                      );
+                            
+                            {/* Activities within planned section */}
+                            {(() => {
+                              if (activeDailyActivity) {
+                                // Active state timeline
+                                const timelineData = getActiveActivityTimelinePosition();
+                                let currentPosition = 0;
+                                
+                                return (
+                                  <>
+                                    {/* Consumed time */}
+                                    <div 
+                                      className="absolute top-0 h-full bg-gray-500 opacity-40 z-10"
+                                      style={{ left: '0%', width: `${((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay}%` }}
+                                      title="Time consumed today"
+                                    />
+                                    
+                                    {/* Active activity */}
+                                    {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => {
+                                      const activityWidth = (timelineData.width / 100) * plannedPercentageOfDay;
+                                      const activityLeft = ((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay;
+                                      
+                                      return (
+                                        <div 
+                                          key={activity.id}
+                                          className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-2 border-white z-20 ${
+                                            activity.status === 'overtime' ? 'animate-pulse' : ''
+                                          }`}
+                                          style={{ 
+                                            left: `${activityLeft}%`, 
+                                            width: `${activityWidth}%`,
+                                            backgroundColor: activity.color.startsWith('#') ? activity.color : '#3b82f6'
+                                          }}
+                                          title={`${activity.name} - ${activity.status}`}
+                                        >
+                                          <div className="truncate px-1">{activity.name}</div>
+                                          <div className="text-xs opacity-90">{activity.status === 'overtime' ? 'OVERTIME' : 'ACTIVE'}</div>
+                                        </div>
+                                      );
+                                    })}
+                                    
+                                    {/* Remaining scheduled activities */}
+                                    {(() => {
+                                      let pos = ((timelineData.consumedWidth || 0) + timelineData.width) / 100 * plannedPercentageOfDay;
+                                      return dailyActivities.filter(activity => activity.status === 'scheduled').map((activity) => {
+                                        const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                                        const element = (
+                                          <div 
+                                            key={activity.id}
+                                            className="absolute top-0 h-full opacity-60 flex flex-col items-center justify-center text-white text-xs font-medium z-15"
+                                            style={{ 
+                                              left: `${pos}%`, 
+                                              width: `${activityWidth}%`,
+                                              backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
+                                            }}
+                                            title={`${activity.name} - ${activity.duration}m planned`}
+                                          >
+                                            <div className="font-medium">{activity.name}</div>
+                                            <div className="text-xs">{activity.duration}m</div>
+                                          </div>
+                                        );
+                                        pos += activityWidth;
+                                        return element;
+                                      });
+                                    })()}
+                                  </>
+                                );
+                              } else {
+                                // No active activity - show all planned
+                                let currentPosition = 0;
+                                return dailyActivities.map((activity) => {
+                                  const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                                  const element = (
+                                    <div 
+                                      key={activity.id}
+                                      className="absolute top-0 h-full opacity-50 flex flex-col items-center justify-center text-white text-xs font-medium z-15"
+                                      style={{ 
+                                        left: `${currentPosition}%`, 
+                                        width: `${activityWidth}%`,
+                                        backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
+                                      }}
+                                      title={`${activity.name} - ${activity.duration}m planned`}
+                                    >
+                                      <div className="font-medium">{activity.name}</div>
+                                      <div className="text-xs">{activity.duration}m</div>
+                                    </div>
+                                  );
+                                  currentPosition += activityWidth;
+                                  return element;
+                                });
+                              }
+                            })()}
+                            
+                            {/* Unscheduled Free Time Section */}
+                            <div 
+                              className="absolute top-0 h-full bg-gradient-to-r from-gray-200 to-gray-300 flex items-center justify-center text-gray-600 text-sm font-medium z-5"
+                              style={{ 
+                                left: `${plannedPercentageOfDay}%`, 
+                                width: `${unscheduledPercentage}%` 
+                              }}
+                              title={`Free time: ${Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h until 0:30`}
+                            >
+                              <div className="text-center">
+                                <div className="font-medium">Free Time</div>
+                                <div className="text-xs opacity-75">
+                                  {Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h unscheduled
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {/* Visual separator between planned and free time */}
+                            <div 
+                              className="absolute top-0 w-1 h-full bg-blue-400 z-25"
+                              style={{ left: `${plannedPercentageOfDay}%` }}
+                              title="Scheduled | Free time boundary"
+                            />
+                          </>
+                        );
+                      }
                     })()}
                   </div>
                   
@@ -4600,6 +4750,11 @@ export default function App() {
                       })() : `▶ Click "Start" to begin timeline tracking`}
                     </span>
                     <div className="flex items-center gap-4">
+                      <span className="bg-blue-100 px-2 py-1 rounded text-blue-700 font-medium cursor-pointer" 
+                            onClick={() => setTimelineViewMode(prev => prev === 'scheduled' ? 'full' : 'scheduled')}
+                            title="Click timeline bar or here to toggle view">
+                        📊 View: {timelineViewMode === 'scheduled' ? 'Scheduled Only' : 'Full Day + Free Time'}
+                      </span>
                       <span>
                         {(() => {
                           const now = new Date();
@@ -5451,21 +5606,6 @@ const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
         <div className="text-xs text-gray-500 mt-1">
           {Math.floor(formData.duration / 60)}h {formData.duration % 60}m 
           ({Math.round((formData.duration / (24 * 60)) * 100 * 10) / 10}% of day)
-        </div>
-      </div>
-
-      {/* Time Window */}
-      <div>
-        <Label htmlFor="activity-time-window" className="text-sm font-medium">Time Window (optional)</Label>
-        <Input
-          id="activity-time-window"
-          value={formData.timeWindow}
-          onChange={(e) => setFormData(prev => ({ ...prev, timeWindow: e.target.value }))}
-          placeholder="e.g., 09:00-10:30"
-          className="mt-1"
-        />
-        <div className="text-xs text-gray-500 mt-1">
-          Format: HH:MM-HH:MM (e.g., 14:00-16:30)
         </div>
       </div>
 
