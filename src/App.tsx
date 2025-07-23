@@ -4519,6 +4519,9 @@ export default function App() {
                         return dailyActivities.map((activity) => {
                           const activityWidth = (activity.duration / totalPlannedMinutes) * 100;
                           const isActive = activity.status === 'active' || activity.status === 'overtime';
+                          const realTimeSpent = getRealTimeSpent(activity);
+                          const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                          
                           const element = (
                             <div 
                               key={activity.id}
@@ -4527,29 +4530,27 @@ export default function App() {
                               }`}
                               style={{ 
                                 left: `${currentPosition}%`, 
-                                width: `${activityWidth}%`,
-                                backgroundColor: activity.color,
-                                opacity: 0.3
+                                width: `${activityWidth}%`
                               }}
                               title={`${activity.name} - ${activity.duration}m planned${isActive ? ' (ACTIVE)' : ''}`}
                             >
-                              {/* Progress fill within segment */}
-                              {(() => {
-                                const realTimeSpent = getRealTimeSpent(activity);
-                                const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
-                                return settings.dailyTimelineAnimation ? (
-                                  <div 
-                                    className="absolute top-0 left-0 h-full transition-all duration-1000"
-                                    style={{ 
-                                      width: `${progress}%`,
-                                      backgroundColor: activity.color
-                                    }}
-                                  />
-                                ) : null;
-                              })()}
+                              {/* Background segment with reduced opacity */}
+                              <div 
+                                style={{ backgroundColor: activity.color }} 
+                                className="h-full opacity-30"
+                              />
+                              
+                              {/* Progress fill with full activity color */}
+                              <div 
+                                className="absolute top-0 left-0 h-full transition-all duration-1000"
+                                style={{ 
+                                  width: `${progress}%`,
+                                  backgroundColor: activity.color
+                                }}
+                              />
                               
                               {/* Activity label */}
-                              <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium">
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium z-10">
                                 <div className="truncate px-1">{activity.name}</div>
                                 <div className="text-xs opacity-75">
                                   {isActive && activity.status === 'overtime' ? 'OVERTIME' : 
@@ -4587,6 +4588,9 @@ export default function App() {
                               return dailyActivities.map((activity) => {
                                 const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
                                 const isActive = activity.status === 'active' || activity.status === 'overtime';
+                                const realTimeSpent = getRealTimeSpent(activity);
+                                const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                                
                                 const element = (
                                   <div 
                                     key={activity.id}
@@ -4595,29 +4599,27 @@ export default function App() {
                                     }`}
                                     style={{ 
                                       left: `${currentPosition}%`, 
-                                      width: `${activityWidth}%`,
-                                      backgroundColor: activity.color,
-                                      opacity: 0.6
+                                      width: `${activityWidth}%`
                                     }}
                                     title={`${activity.name} - ${activity.duration}m planned${isActive ? ' (ACTIVE)' : ''}`}
                                   >
-                                    {/* Progress fill within segment */}
-                                    {(() => {
-                                      const realTimeSpent = getRealTimeSpent(activity);
-                                      const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
-                                      return (
-                                        <div 
-                                          className={`absolute top-0 left-0 h-full ${settings.dailyTimelineAnimation ? 'transition-all duration-1000' : ''}`}
-                                          style={{ 
-                                            width: `${progress}%`,
-                                            backgroundColor: activity.color
-                                          }}
-                                        />
-                                      );
-                                    })()}
+                                    {/* Background segment with reduced opacity */}
+                                    <div 
+                                      style={{ backgroundColor: activity.color }} 
+                                      className="h-full opacity-30"
+                                    />
+                                    
+                                    {/* Progress fill with full activity color */}
+                                    <div 
+                                      className="absolute top-0 left-0 h-full transition-all duration-1000"
+                                      style={{ 
+                                        width: `${progress}%`,
+                                        backgroundColor: activity.color
+                                      }}
+                                    />
                                     
                                     {/* Activity label */}
-                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium">
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium z-10">
                                       <div className="font-medium">{activity.name}</div>
                                       <div className="text-xs">
                                         {isActive && activity.status === 'overtime' ? 'OVERTIME' : 
@@ -4778,14 +4780,20 @@ export default function App() {
                     {dailyActivities.map((activity) => {
                       // Calculate activity progress for daily mode with real-time updates
                       const realTimeSpent = getRealTimeSpent(activity);
-                      // For active activities, calculate progress including current seconds
+                      
+                      // Enhanced progress calculation with better persistence
                       let actualProgress = 0;
-                      if (activity.status === 'active' && activity.startedAt) {
-                        const totalSecondsSpent = Math.floor((currentTime.getTime() - activity.startedAt) / 1000) + (activity.timeSpent * 60);
-                        actualProgress = activity.duration > 0 ? (totalSecondsSpent / (activity.duration * 60)) * 100 : 0;
-                      } else {
-                        // For non-active activities, use stored timeSpent (which is in minutes)
-                        actualProgress = activity.duration > 0 ? ((activity.timeSpent || 0) / activity.duration) * 100 : 0;
+                      if (activity.duration > 0) {
+                        if (activity.status === 'active' && activity.startedAt) {
+                          // For active activities, include real-time seconds
+                          const currentSessionSeconds = Math.floor((currentTime.getTime() - activity.startedAt) / 1000);
+                          const totalSecondsSpent = currentSessionSeconds + (activity.timeSpent * 60);
+                          actualProgress = (totalSecondsSpent / (activity.duration * 60)) * 100;
+                        } else {
+                          // For paused/completed activities, use accumulated timeSpent
+                          actualProgress = (realTimeSpent / activity.duration) * 100;
+                        }
+                        actualProgress = Math.min(100, Math.max(0, actualProgress));
                       }
                       
                       // Fix: For drain mode, show remaining progress (100 - filled percentage)
