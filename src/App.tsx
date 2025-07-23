@@ -166,8 +166,20 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
           if (segmentWidth === 0) return null;
 
           return (
-            <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full bg-slate-200 border-r-2 border-slate-500 last:border-r-0">
-              <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full" />
+            <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full relative last:border-r-0">
+              {/* Background segment with activity color at reduced opacity */}
+              <div 
+                style={{ backgroundColor: activity.color }} 
+                className="h-full opacity-30"
+              />
+              {/* Filled progress with full activity color */}
+              <div 
+                style={{ 
+                  width: `${Math.max(0, fillWidth)}%`, 
+                  backgroundColor: activity.color 
+                }} 
+                className="h-full absolute top-0 left-0" 
+              />
             </div>
           );
         })}
@@ -236,33 +248,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
 
   // --- Divider lines for segmented style ---
   const renderSegmentDividers = () => {
-    if (style !== 'segmented' || activities.length <= 1 || totalTime === 0) return null;
-    let accAngle = 0;
-    const lines: React.ReactNode[] = [];
-    for (let i = 0; i < activities.length - 1; i++) {
-      const segmentAngle = ((activities[i].percentage > 0 ? (activities[i].percentage / 100) * totalSessionSeconds : activities[i].duration * 60) / totalTime) * 360;
-      accAngle += segmentAngle;
-      const angleRad = ((accAngle - 90) * Math.PI) / 180;
-      // Draw from inner edge to outer edge of the ring for maximum visibility
-      const rInner = radius - strokeWidth / 2 - 2; // slightly inside
-      const rOuter = radius + strokeWidth / 2 + 2; // slightly outside
-      const x0 = center + rInner * Math.cos(angleRad);
-      const y0 = center + rInner * Math.sin(angleRad);
-      const x1 = center + rOuter * Math.cos(angleRad);
-      const y1 = center + rOuter * Math.sin(angleRad);
-      lines.push(
-        <path
-          key={`divider-${i}`}
-          d={`M${x0},${y0} L${x1},${y1}`}
-          stroke="#222"
-          strokeWidth={3}
-          opacity={0.95}
-          style={{ filter: 'drop-shadow(0 0 2px #fff)' }}
-          shapeRendering="crispEdges"
-        />
-      );
-    }
-    return <g id="segment-dividers">{lines}</g>;
+    // Remove divider lines for cleaner visual appearance
+    return null;
   };
 
   const renderOuterRing = () => {
@@ -315,8 +302,9 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
 
         return (
           <g key={`segment-${activity.id}`} transform={`rotate(${rotation} ${center} ${center})`}>
+            {/* Background segment with activity color at reduced opacity */}
             <circle
-              stroke="#e2e8f0"
+              stroke={activity.color}
               fill="transparent"
               strokeWidth={strokeWidth}
               strokeDasharray={`${segmentArcLength} ${circumference}`}
@@ -324,7 +312,9 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
               cx={center}
               cy={center}
               strokeLinecap="butt"
+              opacity={0.3}
             />
+            {/* Filled progress with full activity color */}
             {fillArcLength > 0 && (
               <circle
                 stroke={activity.color}
@@ -2420,6 +2410,7 @@ export default function App() {
       // Daily Mode specific settings
       dailyShowActivityProgress: true, // Show progress bars in daily activity cards
       dailyActivityProgressType: 'fill', // 'fill' or 'drain'
+      dailyTimelineAnimation: true, // Animate timeline activities (shrink/slide when running)
       // Auto-schedule settings
       defaultTimeWindow: '09:00-17:00', // Default time window for auto-scheduling
       autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
@@ -2544,14 +2535,17 @@ export default function App() {
         if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
           const elapsedSeconds = 1; // Since we run every second
           const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
-          const minutesToAdd = Math.floor(newAccumulated / settings.flowmodoroRatio);
+          // Convert ratio to seconds (ratio is work-minutes : rest-minutes, so multiply by 60)
+          const workSecondsPerRestSecond = settings.flowmodoroRatio * 60;
+          const restSecondsToAdd = Math.floor(newAccumulated / workSecondsPerRestSecond);
           
-          if (minutesToAdd > 0) {
+          if (restSecondsToAdd > 0) {
             setFlowmodoroState(prevFlow => ({
               ...prevFlow,
-              availableRestMinutes: prevFlow.availableRestMinutes + minutesToAdd,
-              availableRestTime: (prevFlow.availableRestMinutes + minutesToAdd) * 60,
-              accumulatedFractionalTime: newAccumulated % settings.flowmodoroRatio
+              availableRestMinutes: Math.floor((prevFlow.availableRestTime + restSecondsToAdd) / 60),
+              availableRestTime: prevFlow.availableRestTime + restSecondsToAdd,
+              totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
+              accumulatedFractionalTime: newAccumulated % workSecondsPerRestSecond
             }));
           } else {
             setFlowmodoroState(prevFlow => ({
@@ -2727,6 +2721,7 @@ export default function App() {
       const saved = localStorage.getItem('timeSliceFlowmodoro');
       const defaultState = {
         availableRestTime: 0, // in seconds
+        availableRestMinutes: 0, // in minutes (calculated from availableRestTime)
         totalEarnedToday: 0, // Total earned rest time today
         cycleCount: 0,
         isOnBreak: false,
@@ -3047,21 +3042,23 @@ export default function App() {
       if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
         // Add elapsed seconds to fractional accumulator and calculate how much rest time to award
         const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
-        const restTimeToAdd = Math.floor(newAccumulated / settings.flowmodoroRatio);
-        const remainingFractional = newAccumulated % settings.flowmodoroRatio;
+        // Convert ratio to seconds (ratio is work-minutes : rest-minutes, so multiply by 60)
+        const workSecondsPerRestSecond = settings.flowmodoroRatio * 60;
+        const restSecondsToAdd = Math.floor(newAccumulated / workSecondsPerRestSecond);
+        const remainingFractional = newAccumulated % workSecondsPerRestSecond;
         
-        if (restTimeToAdd > 0) {
+        if (restSecondsToAdd > 0) {
           setFlowmodoroState(prevFlow => ({
             ...prevFlow,
-            availableRestTime: prevFlow.availableRestTime + restTimeToAdd,
-            totalEarnedToday: prevFlow.totalEarnedToday + restTimeToAdd,
+            availableRestTime: prevFlow.availableRestTime + restSecondsToAdd,
+            totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
+            availableRestMinutes: Math.floor((prevFlow.availableRestTime + restSecondsToAdd) / 60),
             accumulatedFractionalTime: remainingFractional
           }));
         } else {
-          // Just update the fractional accumulator
           setFlowmodoroState(prevFlow => ({
             ...prevFlow,
-            accumulatedFractionalTime: remainingFractional
+            accumulatedFractionalTime: newAccumulated
           }));
         }
       }
@@ -3194,7 +3191,7 @@ export default function App() {
     if (!isTimerActive) return "";
     const totalRemainingSeconds = getTotalRemainingTime();
     const endTime = new Date(Date.now() + totalRemainingSeconds * 1000);
-    return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   };
 
   const addActivity = (customName = null, customColor = null, presetTime = 0, countUp = false) => {
@@ -3260,7 +3257,15 @@ export default function App() {
     
     // Step 17: Smart Auto-Scheduling Algorithm
     const generateSmartTimeSlot = () => {
-      const colors = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-red-500', 'bg-yellow-500', 'bg-pink-500', 'bg-indigo-500'];
+      const colors = [
+        'hsl(220, 70%, 50%)', // blue
+        'hsl(120, 60%, 50%)', // green
+        'hsl(280, 60%, 50%)', // purple
+        'hsl(0, 70%, 50%)',   // red
+        'hsl(60, 80%, 50%)',  // yellow
+        'hsl(320, 60%, 50%)', // pink
+        'hsl(250, 70%, 50%)'  // indigo
+      ];
       const randomColor = colors[Math.floor(Math.random() * colors.length)];
       
       // Smart duration based on activity name patterns
@@ -3338,12 +3343,23 @@ export default function App() {
 
   const startDailyActivity = (activityId) => {
     console.log('Starting daily activity:', activityId);
-    setDailyActivities((prev: any) => prev.map((activity: any) => ({
-      ...activity,
-      isActive: activity.id === activityId,
-      status: activity.id === activityId ? 'active' : (activity.status === 'active' ? 'scheduled' : activity.status),
-      startedAt: activity.id === activityId ? new Date() : activity.startedAt
-    })));
+    setDailyActivities((prev: any) => {
+      const activities = prev.map((activity: any) => ({
+        ...activity,
+        isActive: activity.id === activityId,
+        status: activity.id === activityId ? 'active' : (activity.status === 'active' ? 'scheduled' : activity.status),
+        startedAt: activity.id === activityId ? new Date() : activity.startedAt
+      }));
+      
+      // Move the selected activity to the front
+      const selectedIndex = activities.findIndex(a => a.id === activityId);
+      if (selectedIndex > 0) {
+        const [selectedActivity] = activities.splice(selectedIndex, 1);
+        activities.unshift(selectedActivity);
+      }
+      
+      return activities;
+    });
     setActiveDailyActivity(activityId);
   };
 
@@ -3886,6 +3902,20 @@ export default function App() {
     return (totalElapsedSeconds / totalAllocatedSeconds) * 100;
   };
 
+  const getDailyOverallProgress = () => {
+    if (dailyActivities.length === 0) return 0;
+    
+    const totalPlannedMinutes = dailyActivities.reduce((sum, activity) => sum + activity.duration, 0);
+    if (totalPlannedMinutes === 0) return 0;
+    
+    const totalSpentMinutes = dailyActivities.reduce((sum, activity) => {
+      const realTimeSpent = getRealTimeSpent(activity);
+      return sum + realTimeSpent;
+    }, 0);
+    
+    return Math.min(100, (totalSpentMinutes / totalPlannedMinutes) * 100);
+  };
+
   // Ensure currentActivityIndex is valid and currentActivity exists
   const validCurrentActivityIndex = Math.max(0, Math.min(currentActivityIndex, activities.length - 1));
   const currentActivity = activities[validCurrentActivityIndex] || null;
@@ -4341,6 +4371,19 @@ export default function App() {
                       </div>
                     )}
                     
+                    {/* Timeline Animation Setting */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div>
+                        <Label className="text-sm font-medium">Timeline Animation</Label>
+                        <p className="text-xs text-gray-500 mt-1">Activities shrink and slide when running (like session mode)</p>
+                      </div>
+                      <Switch 
+                        id="daily-timeline-animation"
+                        checked={settings.dailyTimelineAnimation} 
+                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, dailyTimelineAnimation: checked }))}
+                      />
+                    </div>
+                    
                     {/* Auto-Schedule Time Window Settings */}
                     <div className="space-y-3 mt-4 pt-4 border-t border-green-200">
                       <div>
@@ -4358,24 +4401,6 @@ export default function App() {
                         />
                         <p className="text-xs text-gray-500">
                           Format: HH:MM-HH:MM. When using auto-schedule, activities will be placed within this time window based on their duration.
-                        </p>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label className="text-xs font-medium">Break Time Between Activities</Label>
-                        <div className="flex items-center space-x-2">
-                          <Input 
-                            type="number" 
-                            min="0" 
-                            max="60" 
-                            value={settings.autoScheduleBreakMinutes || 15}
-                            onChange={(e) => setSettings(prev => ({ ...prev, autoScheduleBreakMinutes: Number(e.target.value) || 15 }))}
-                            className="w-16 h-8 text-sm"
-                          />
-                          <span className="text-xs text-gray-600">minutes</span>
-                        </div>
-                        <p className="text-xs text-gray-500">
-                          Buffer time added between auto-scheduled activities
                         </p>
                       </div>
                     </div>
@@ -4424,7 +4449,7 @@ export default function App() {
                 {/* Current Time Display */}
                 <div className="text-center p-3 bg-blue-50 rounded-lg">
                   <div className="text-lg font-semibold text-blue-800">
-                    Current Time: {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    Current Time: {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
                   </div>
                   <div className="text-sm text-blue-600">Until Reset (00:30): {Math.floor((24 * 60 - (currentTime.getHours() * 60 + currentTime.getMinutes()) + 30) / 60)}h {(24 * 60 - (currentTime.getHours() * 60 + currentTime.getMinutes()) + 30) % 60}m remaining</div>
                 </div>
@@ -4448,7 +4473,7 @@ export default function App() {
                   
                   {/* Improved Timeline Bar - Clickable */}
                   <div 
-                    className="relative h-24 bg-gradient-to-r from-blue-100 to-gray-100 rounded-lg overflow-hidden border-2 border-blue-200 cursor-pointer hover:border-blue-300 transition-colors"
+                    className="relative h-24 bg-gray-50 rounded-lg overflow-hidden border-2 border-gray-200 cursor-pointer hover:border-gray-300 transition-colors"
                     onClick={() => setTimelineViewMode(prev => prev === 'scheduled' ? 'full' : 'scheduled')}
                     title={`Click to toggle view: ${timelineViewMode === 'scheduled' ? 'Show full day with unscheduled time' : 'Show only scheduled activities'}`}
                   >
@@ -4460,31 +4485,6 @@ export default function App() {
                     >
                       <div className="absolute -top-7 -left-3 text-xs font-bold text-red-600 bg-white px-1 rounded shadow">NOW</div>
                     </div>
-                    
-                    {/* Time Scale Markers */}
-                    {(() => {
-                      const now = new Date();
-                      const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
-                      const markers: any[] = [];
-                      
-                      // Add hour markers for better visual reference
-                      for (let i = 1; i <= Math.min(12, Math.floor(totalRemainingMinutes / 60)); i++) {
-                        const position = (i * 60 / totalRemainingMinutes) * 100;
-                        if (position <= 95) {
-                          markers.push(
-                            <div 
-                              key={i}
-                              className="absolute top-0 w-px h-full bg-gray-300 opacity-50 z-10"
-                              style={{ left: `${position}%` }}
-                              title={`+${i}h`}
-                            >
-                              <div className="absolute -top-6 -left-2 text-xs text-gray-400">{i}h</div>
-                            </div>
-                          );
-                        }
-                      }
-                      return markers;
-                    })()}
                     
                     {/* Flowmodoro Rest Time Bar (if enabled) */}
                     {settings.flowmodoroEnabled && (
@@ -4514,93 +4514,54 @@ export default function App() {
                       
                       if (timelineViewMode === 'scheduled') {
                         // Show only scheduled activities, filling the entire bar
-                        if (activeDailyActivity) {
-                          // Active state timeline
-                          const timelineData = getActiveActivityTimelinePosition();
-                          let currentPosition = 0;
-                          
-                          return (
-                            <>
-                              {/* Consumed time */}
-                              <div 
-                                className="absolute top-0 h-full bg-gray-500 opacity-40 z-10"
-                                style={{ left: '0%', width: `${timelineData.consumedWidth || 0}%` }}
-                                title="Time consumed today"
-                              />
-                              
-                              {/* Active activity */}
-                              {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => {
-                                return (
-                                  <div 
-                                    key={activity.id}
-                                    className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-2 border-white z-20 ${
-                                      activity.status === 'overtime' ? 'animate-pulse' : ''
-                                    }`}
-                                    style={{ 
-                                      left: `${timelineData.consumedWidth || 0}%`, 
-                                      width: `${timelineData.width}%`,
-                                      backgroundColor: activity.color.startsWith('#') ? activity.color : '#3b82f6'
-                                    }}
-                                    title={`${activity.name} - ${activity.status}`}
-                                  >
-                                    <div className="truncate px-1">{activity.name}</div>
-                                    <div className="text-xs opacity-90">{activity.status === 'overtime' ? 'OVERTIME' : 'ACTIVE'}</div>
-                                  </div>
-                                );
-                              })}
-                              
-                              {/* Remaining scheduled activities */}
+                        // Always show consistent view regardless of active state
+                        let currentPosition = 0;
+                        return dailyActivities.map((activity) => {
+                          const activityWidth = (activity.duration / totalPlannedMinutes) * 100;
+                          const isActive = activity.status === 'active' || activity.status === 'overtime';
+                          const element = (
+                            <div 
+                              key={activity.id}
+                              className={`absolute top-0 h-full border-r border-white z-15 ${
+                                isActive ? 'ring-2 ring-yellow-300' : ''
+                              }`}
+                              style={{ 
+                                left: `${currentPosition}%`, 
+                                width: `${activityWidth}%`,
+                                backgroundColor: activity.color,
+                                opacity: 0.3
+                              }}
+                              title={`${activity.name} - ${activity.duration}m planned${isActive ? ' (ACTIVE)' : ''}`}
+                            >
+                              {/* Progress fill within segment */}
                               {(() => {
-                                let position = (timelineData.consumedWidth || 0) + timelineData.width;
-                                return dailyActivities
-                                  .filter(activity => activity.status === 'scheduled')
-                                  .map((activity) => {
-                                    const activityWidth = (activity.duration / totalPlannedMinutes) * (100 - position);
-                                    const element = (
-                                      <div 
-                                        key={activity.id}
-                                        className="absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-r border-white z-15"
-                                        style={{ 
-                                          left: `${position}%`, 
-                                          width: `${activityWidth}%`,
-                                          backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
-                                        }}
-                                        title={`${activity.name} - ${activity.duration}m planned`}
-                                      >
-                                        <div className="truncate px-1">{activity.name}</div>
-                                        <div className="text-xs opacity-75">{activity.duration}m</div>
-                                      </div>
-                                    );
-                                    position += activityWidth;
-                                    return element;
-                                  });
+                                const realTimeSpent = getRealTimeSpent(activity);
+                                const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                                return settings.dailyTimelineAnimation ? (
+                                  <div 
+                                    className="absolute top-0 left-0 h-full transition-all duration-1000"
+                                    style={{ 
+                                      width: `${progress}%`,
+                                      backgroundColor: activity.color
+                                    }}
+                                  />
+                                ) : null;
                               })()}
-                            </>
-                          );
-                        } else {
-                          // No active activity - show all planned, filling entire bar
-                          let currentPosition = 0;
-                          return dailyActivities.map((activity) => {
-                            const activityWidth = (activity.duration / totalPlannedMinutes) * 100;
-                            const element = (
-                              <div 
-                                key={activity.id}
-                                className="absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-r border-white z-15"
-                                style={{ 
-                                  left: `${currentPosition}%`, 
-                                  width: `${activityWidth}%`,
-                                  backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
-                                }}
-                                title={`${activity.name} - ${activity.duration}m planned`}
-                              >
+                              
+                              {/* Activity label */}
+                              <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium">
                                 <div className="truncate px-1">{activity.name}</div>
-                                <div className="text-xs opacity-75">{activity.duration}m</div>
+                                <div className="text-xs opacity-75">
+                                  {isActive && activity.status === 'overtime' ? 'OVERTIME' : 
+                                   isActive ? 'ACTIVE' : 
+                                   `${activity.duration}m`}
+                                </div>
                               </div>
-                            );
-                            currentPosition += activityWidth;
-                            return element;
-                          });
-                        }
+                            </div>
+                          );
+                          currentPosition += activityWidth;
+                          return element;
+                        });
                       } else {
                         // Show full day view with unscheduled time
                         const plannedPercentageOfDay = Math.min((totalPlannedMinutes / totalRemainingMinutes) * 100, 95);
@@ -4621,94 +4582,54 @@ export default function App() {
                             
                             {/* Activities within planned section */}
                             {(() => {
-                              if (activeDailyActivity) {
-                                // Active state timeline
-                                const timelineData = getActiveActivityTimelinePosition();
-                                let currentPosition = 0;
-                                
-                                return (
-                                  <>
-                                    {/* Consumed time */}
-                                    <div 
-                                      className="absolute top-0 h-full bg-gray-500 opacity-40 z-10"
-                                      style={{ left: '0%', width: `${((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay}%` }}
-                                      title="Time consumed today"
-                                    />
-                                    
-                                    {/* Active activity */}
-                                    {dailyActivities.filter(activity => activity.status === 'active' || activity.status === 'overtime').map((activity) => {
-                                      const activityWidth = (timelineData.width / 100) * plannedPercentageOfDay;
-                                      const activityLeft = ((timelineData.consumedWidth || 0) / 100) * plannedPercentageOfDay;
-                                      
+                              // Always show consistent view regardless of active state
+                              let currentPosition = 0;
+                              return dailyActivities.map((activity) => {
+                                const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                                const isActive = activity.status === 'active' || activity.status === 'overtime';
+                                const element = (
+                                  <div 
+                                    key={activity.id}
+                                    className={`absolute top-0 h-full z-15 ${
+                                      isActive ? 'ring-2 ring-yellow-300' : ''
+                                    }`}
+                                    style={{ 
+                                      left: `${currentPosition}%`, 
+                                      width: `${activityWidth}%`,
+                                      backgroundColor: activity.color,
+                                      opacity: 0.6
+                                    }}
+                                    title={`${activity.name} - ${activity.duration}m planned${isActive ? ' (ACTIVE)' : ''}`}
+                                  >
+                                    {/* Progress fill within segment */}
+                                    {(() => {
+                                      const realTimeSpent = getRealTimeSpent(activity);
+                                      const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
                                       return (
                                         <div 
-                                          key={activity.id}
-                                          className={`absolute top-0 h-full flex flex-col items-center justify-center text-white text-xs font-medium border-2 border-white z-20 ${
-                                            activity.status === 'overtime' ? 'animate-pulse' : ''
-                                          }`}
+                                          className={`absolute top-0 left-0 h-full ${settings.dailyTimelineAnimation ? 'transition-all duration-1000' : ''}`}
                                           style={{ 
-                                            left: `${activityLeft}%`, 
-                                            width: `${activityWidth}%`,
-                                            backgroundColor: activity.color.startsWith('#') ? activity.color : '#3b82f6'
+                                            width: `${progress}%`,
+                                            backgroundColor: activity.color
                                           }}
-                                          title={`${activity.name} - ${activity.status}`}
-                                        >
-                                          <div className="truncate px-1">{activity.name}</div>
-                                          <div className="text-xs opacity-90">{activity.status === 'overtime' ? 'OVERTIME' : 'ACTIVE'}</div>
-                                        </div>
+                                        />
                                       );
-                                    })}
-                                    
-                                    {/* Remaining scheduled activities */}
-                                    {(() => {
-                                      let pos = ((timelineData.consumedWidth || 0) + timelineData.width) / 100 * plannedPercentageOfDay;
-                                      return dailyActivities.filter(activity => activity.status === 'scheduled').map((activity) => {
-                                        const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
-                                        const element = (
-                                          <div 
-                                            key={activity.id}
-                                            className="absolute top-0 h-full opacity-60 flex flex-col items-center justify-center text-white text-xs font-medium z-15"
-                                            style={{ 
-                                              left: `${pos}%`, 
-                                              width: `${activityWidth}%`,
-                                              backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
-                                            }}
-                                            title={`${activity.name} - ${activity.duration}m planned`}
-                                          >
-                                            <div className="font-medium">{activity.name}</div>
-                                            <div className="text-xs">{activity.duration}m</div>
-                                          </div>
-                                        );
-                                        pos += activityWidth;
-                                        return element;
-                                      });
                                     })()}
-                                  </>
-                                );
-                              } else {
-                                // No active activity - show all planned
-                                let currentPosition = 0;
-                                return dailyActivities.map((activity) => {
-                                  const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
-                                  const element = (
-                                    <div 
-                                      key={activity.id}
-                                      className="absolute top-0 h-full opacity-50 flex flex-col items-center justify-center text-white text-xs font-medium z-15"
-                                      style={{ 
-                                        left: `${currentPosition}%`, 
-                                        width: `${activityWidth}%`,
-                                        backgroundColor: activity.color.startsWith('#') ? activity.color : '#6b7280'
-                                      }}
-                                      title={`${activity.name} - ${activity.duration}m planned`}
-                                    >
+                                    
+                                    {/* Activity label */}
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium">
                                       <div className="font-medium">{activity.name}</div>
-                                      <div className="text-xs">{activity.duration}m</div>
+                                      <div className="text-xs">
+                                        {isActive && activity.status === 'overtime' ? 'OVERTIME' : 
+                                         isActive ? 'ACTIVE' : 
+                                         `${activity.duration}m`}
+                                      </div>
                                     </div>
-                                  );
-                                  currentPosition += activityWidth;
-                                  return element;
-                                });
-                              }
+                                  </div>
+                                );
+                                currentPosition += activityWidth;
+                                return element;
+                              });
                             })()}
                             
                             {/* Unscheduled Free Time Section */}
@@ -4738,6 +4659,61 @@ export default function App() {
                         );
                       }
                     })()}
+                    
+                    {/* Overall Progress Overlay when animation is disabled - show individual activity progress */}
+                    {!settings.dailyTimelineAnimation && (() => {
+                      const now = new Date();
+                      const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
+                      const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
+                      const plannedPercentageOfDay = (totalPlannedMinutes / totalRemainingMinutes) * 100;
+                      let currentPosition = 0;
+                      
+                      return dailyActivities.map((activity) => {
+                        const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                        const realTimeSpent = getRealTimeSpent(activity);
+                        const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                        const progressWidth = (progress / 100) * activityWidth;
+                        
+                        const element = (
+                          <div 
+                            key={`progress-${activity.id}`}
+                            className="absolute top-0 h-full z-20 transition-all duration-1000"
+                            style={{ 
+                              left: `${currentPosition}%`, 
+                              width: `${progressWidth}%`,
+                              backgroundColor: activity.color,
+                              opacity: 0.8
+                            }}
+                            title={`${activity.name}: ${Math.round(progress)}% complete`}
+                          />
+                        );
+                        currentPosition += activityWidth;
+                        return element;
+                      });
+                    })()}
+                  </div>
+                  
+                  {/* Time Display below Timeline */}
+                  <div className="flex justify-between items-center text-sm font-medium">
+                    <div className="text-blue-600">
+                      Current: {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+                    </div>
+                    <div className="text-gray-600">
+                      {timelineViewMode === 'scheduled' ? (() => {
+                        // For scheduled only mode: show predicted end time
+                        const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
+                        const endTime = new Date(currentTime.getTime() + totalPlannedMinutes * 60000);
+                        return `Predicted End: ${endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+                      })() : (() => {
+                        // For full day mode: show end of activities and end of day
+                        const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
+                        const activitiesEndTime = new Date(currentTime.getTime() + totalPlannedMinutes * 60000);
+                        const endOfDay = new Date();
+                        endOfDay.setHours(0, 30, 0, 0);
+                        endOfDay.setDate(endOfDay.getDate() + 1);
+                        return `Activities End: ${activitiesEndTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })} | Day End: ${endOfDay.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+                      })()}
+                    </div>
                   </div>
                   
                   {/* Timeline Info */}
@@ -4808,7 +4784,8 @@ export default function App() {
                         const totalSecondsSpent = Math.floor((currentTime.getTime() - activity.startedAt) / 1000) + (activity.timeSpent * 60);
                         actualProgress = activity.duration > 0 ? (totalSecondsSpent / (activity.duration * 60)) * 100 : 0;
                       } else {
-                        actualProgress = activity.duration > 0 ? (realTimeSpent / activity.duration) * 100 : 0;
+                        // For non-active activities, use stored timeSpent (which is in minutes)
+                        actualProgress = activity.duration > 0 ? ((activity.timeSpent || 0) / activity.duration) * 100 : 0;
                       }
                       
                       // Fix: For drain mode, show remaining progress (100 - filled percentage)
@@ -4823,13 +4800,23 @@ export default function App() {
                       return (
                       <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-2 transition-all duration-200 ${
                         activity.status === 'completed'
-                          ? 'bg-green-50 border-green-200 hover:bg-green-100 cursor-pointer'
+                          ? 'border-green-200 hover:bg-green-100 cursor-pointer'
                           : activity.status === 'overtime'
-                            ? 'bg-red-50 border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer'
+                            ? 'border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer'
                           : activity.status === 'active' 
-                            ? 'border-blue-400 bg-blue-50 shadow-md ring-1 ring-blue-200 cursor-pointer' 
+                            ? 'border-blue-400 shadow-md ring-1 ring-blue-200 cursor-pointer' 
                             : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer'
+                      } ${
+                        // Add animation effects when enabled and activity is active
+                        settings.dailyTimelineAnimation && activity.status === 'active' 
+                          ? 'transform scale-90 -translate-x-4 shadow-xl transition-all duration-500' 
+                          : 'transition-all duration-300'
                       }`}
+                      style={{
+                        backgroundColor: activity.status === 'completed' ? '#f0fdf4' : 
+                                       activity.status === 'overtime' ? '#fef2f2' :
+                                       activity.status === 'active' ? '#eff6ff' : '#ffffff'
+                      }}
                       onClick={() => {
                         if (activity.status === 'scheduled') {
                           startDailyActivity(activity.id);
@@ -4844,29 +4831,8 @@ export default function App() {
                             className="absolute top-0 left-0 h-full transition-all duration-300 rounded-lg"
                             style={{ 
                               width: `${Math.max(3, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`, 
-                              background: `linear-gradient(90deg, ${
-                                activity.color.startsWith('#') ? activity.color : 
-                                activity.color.includes('blue') ? '#2563eb' :
-                                activity.color.includes('green') ? '#059669' :
-                                activity.color.includes('red') ? '#dc2626' :
-                                activity.color.includes('purple') ? '#7c3aed' :
-                                activity.color.includes('yellow') ? '#d97706' :
-                                activity.color.includes('orange') ? '#ea580c' :
-                                activity.color.includes('pink') ? '#db2777' :
-                                activity.color.includes('indigo') ? '#4f46e5' :
-                                '#6b7280'
-                              }30, ${
-                                activity.color.startsWith('#') ? activity.color : 
-                                activity.color.includes('blue') ? '#2563eb' :
-                                activity.color.includes('green') ? '#059669' :
-                                activity.color.includes('red') ? '#dc2626' :
-                                activity.color.includes('purple') ? '#7c3aed' :
-                                activity.color.includes('yellow') ? '#d97706' :
-                                activity.color.includes('orange') ? '#ea580c' :
-                                activity.color.includes('pink') ? '#db2777' :
-                                activity.color.includes('indigo') ? '#4f46e5' :
-                                '#6b7280'
-                              }60)`
+                              backgroundColor: activity.color,
+                              opacity: 0.8
                             }}
                           />
                         )}
@@ -4877,7 +4843,7 @@ export default function App() {
                             {/* Progress percentage indicator */}
                             {realTimeSpent > 0 && (
                               <div className="absolute top-1 right-1 bg-black bg-opacity-80 text-white text-xs px-1.5 py-0.5 rounded z-20 font-mono">
-                                {Math.round(activityProgress)}%
+                                {Math.round(actualProgress)}%
                                 {settings.dailyActivityProgressType === 'drain' && ' left'}
                               </div>
                             )}
@@ -4895,16 +4861,7 @@ export default function App() {
                                 className="h-full transition-all duration-300 rounded-b-lg"
                                 style={{ 
                                   width: `${Math.max(0, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`,
-                                  backgroundColor: activity.color.startsWith('#') ? activity.color : 
-                                    activity.color.includes('blue') ? '#2563eb' :
-                                    activity.color.includes('green') ? '#059669' :
-                                    activity.color.includes('red') ? '#dc2626' :
-                                    activity.color.includes('purple') ? '#7c3aed' :
-                                    activity.color.includes('yellow') ? '#d97706' :
-                                    activity.color.includes('orange') ? '#ea580c' :
-                                    activity.color.includes('pink') ? '#db2777' :
-                                    activity.color.includes('indigo') ? '#4f46e5' :
-                                    '#6b7280'
+                                  backgroundColor: activity.color
                                 }}
                               />
                             </div>
@@ -4914,7 +4871,7 @@ export default function App() {
                         {/* Card Content - Android Optimized */}
                         <div className="relative z-10">
                         <div className="flex items-center gap-2 mb-2">
-                          <div className={`w-5 h-5 rounded-full ${activity.color} flex-shrink-0`}></div>
+                          <div className="w-6 h-6 rounded-full flex-shrink-0 border-2 border-gray-300" style={{ backgroundColor: activity.color }}></div>
                           <span className="font-medium text-sm leading-tight flex-1 min-w-0 truncate">{activity.name}</span>
                           <Badge variant={
                             activity.status === 'completed' ? 'default' :
