@@ -3795,11 +3795,31 @@ export default function App() {
     if (totalPlannedMinutes === 0) return 0;
     
     const totalSpentMinutes = dailyActivities.reduce((sum, activity) => {
+      // If activity is completed, count it as fully completed regardless of actual time spent
+      if (activity.status === 'completed') {
+        return sum + activity.duration;
+      }
+      // For other activities, use real time spent
       const realTimeSpent = getRealTimeSpent(activity);
       return sum + realTimeSpent;
     }, 0);
     
     return Math.min(100, (totalSpentMinutes / totalPlannedMinutes) * 100);
+  };
+
+  // Helper function to calculate remaining time for incomplete activities
+  const getRemainingPlannedMinutes = () => {
+    return dailyActivities.reduce((sum, activity) => {
+      // Skip completed activities - they don't contribute to remaining time
+      if (activity.status === 'completed') {
+        return sum;
+      }
+      
+      // For active or scheduled activities, calculate remaining time
+      const realTimeSpent = getRealTimeSpent(activity);
+      const remainingTime = Math.max(0, activity.duration - realTimeSpent);
+      return sum + remainingTime;
+    }, 0);
   };
 
   // Ensure currentActivityIndex is valid and currentActivity exists
@@ -4334,7 +4354,15 @@ export default function App() {
 
                 {/* Dynamic Timeline Bar */}
                 <div className="space-y-4">
-                  <h3 className="text-md font-semibold">Daily Timeline</h3>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-md font-semibold">Daily Timeline</h3>
+                    <div className="text-sm text-gray-600">
+                      <span className="font-medium text-emerald-600">
+                        {Math.round(getDailyOverallProgress())}%
+                      </span>
+                      <span className="ml-1">complete</span>
+                    </div>
+                  </div>
                   
                   {/* Improved Timeline Bar - Clickable */}
                   <div 
@@ -4342,6 +4370,17 @@ export default function App() {
                     onClick={() => setTimelineViewMode(prev => prev === 'scheduled' ? 'full' : 'scheduled')}
                     title={`Click to toggle view: ${timelineViewMode === 'scheduled' ? 'Show full day with unscheduled time' : 'Show only scheduled activities'}`}
                   >
+                    {/* Overall Progress Overlay */}
+                    <div 
+                      className={`absolute top-0 left-0 h-full timeline-progress-overlay z-10 ${
+                        activeDailyActivity ? 'active' : ''
+                      }`}
+                      style={{ 
+                        width: `${getDailyOverallProgress()}%`
+                      }}
+                      title={`Daily Progress: ${Math.round(getDailyOverallProgress())}% complete`}
+                    />
+
                     {/* NOW Indicator (Fixed at start) */}
                     <div 
                       className="absolute top-0 w-1 h-full bg-red-500 z-30 shadow-lg"
@@ -4407,7 +4446,9 @@ export default function App() {
                               
                               {/* Progress fill with full activity color */}
                               <div 
-                                className="absolute top-0 left-0 h-full transition-all duration-1000"
+                                className={`absolute top-0 left-0 h-full smooth-progress ${
+                                  isActive ? 'real-time-active' : ''
+                                }`}
                                 style={{ 
                                   width: `${progress}%`,
                                   backgroundColor: activity.color
@@ -4476,7 +4517,9 @@ export default function App() {
                                     
                                     {/* Progress fill with full activity color */}
                                     <div 
-                                      className="absolute top-0 left-0 h-full transition-all duration-1000"
+                                      className={`absolute top-0 left-0 h-full smooth-progress ${
+                                        isActive ? 'real-time-active' : ''
+                                      }`}
                                       style={{ 
                                         width: `${progress}%`,
                                         backgroundColor: activity.color
@@ -4567,14 +4610,14 @@ export default function App() {
                     </div>
                     <div className="text-gray-600">
                       {timelineViewMode === 'scheduled' ? (() => {
-                        // For scheduled only mode: show predicted end time
-                        const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
-                        const endTime = new Date(currentTime.getTime() + totalPlannedMinutes * 60000);
+                        // For scheduled only mode: show predicted end time based on remaining activities
+                        const remainingMinutes = getRemainingPlannedMinutes();
+                        const endTime = new Date(currentTime.getTime() + remainingMinutes * 60000);
                         return `Predicted End: ${endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`;
                       })() : (() => {
                         // For full day mode: show end of activities and end of day
-                        const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
-                        const activitiesEndTime = new Date(currentTime.getTime() + totalPlannedMinutes * 60000);
+                        const remainingMinutes = getRemainingPlannedMinutes();
+                        const activitiesEndTime = new Date(currentTime.getTime() + remainingMinutes * 60000);
                         const endOfDay = new Date();
                         endOfDay.setHours(0, 30, 0, 0);
                         endOfDay.setDate(endOfDay.getDate() + 1);

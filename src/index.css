@@ -104,5 +104,25 @@ input[type="number"], input[type="text"] {
 }
 
 .smooth-progress {
-  transition: width 0.1s linear;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.smooth-progress.real-time-active {
+  animation: progressPulse 2s ease-in-out infinite;
+}
+
+.timeline-progress-overlay {
+  background: linear-gradient(90deg, 
+    rgba(34, 197, 94, 0.15) 0%,
+    rgba(16, 185, 129, 0.2) 50%,
+    rgba(5, 150, 105, 0.25) 100%);
+}
+
+.timeline-progress-overlay.active {
+  animation: progressShimmer 3s ease-in-out infinite;
+}
+
+@keyframes progressShimmer {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.3; }
 }
