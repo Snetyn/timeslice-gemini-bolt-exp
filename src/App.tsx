@@ -2032,20 +2032,16 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
   const [formData, setFormData] = useState({
     name: '',
     color: 'hsl(220, 70%, 50%)', // Use HSL instead of bg-classes
-    timeWindow: '09:00-10:00',
     duration: 60,
     percentage: 4.2,
     status: 'scheduled'
   });
-
-  const [timeInputType, setTimeInputType] = useState('duration'); // 'duration' or 'endTime'
 
   useEffect(() => {
     if (activity) {
       setFormData({
         name: activity.name || '',
         color: activity.color || 'hsl(220, 70%, 50%)', // Use HSL
-        timeWindow: activity.timeWindow || '09:00-10:00',
         duration: activity.duration || 60,
         percentage: activity.percentage || 4.2,
         status: activity.status || 'scheduled'
@@ -2067,36 +2063,11 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
     { name: 'Gray', value: 'hsl(0, 0%, 50%)' }
   ];
 
-  const timeSlots: string[] = [];
-  for (let hour = 6; hour <= 23; hour++) {
-    for (let min = 0; min < 60; min += 30) {
-      const timeStr = `${hour.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}`;
-      timeSlots.push(timeStr);
-    }
-  }
-
-  const generateTimeWindow = (startTime, duration) => {
-    const [hours, minutes] = startTime.split(':').map(Number);
-    const startMinutes = hours * 60 + minutes;
-    const endMinutes = startMinutes + duration;
-    const endHours = Math.floor(endMinutes / 60);
-    const endMins = endMinutes % 60;
-    return `${startTime}-${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
-  };
-
-  const handleStartTimeChange = (startTime) => {
-    const newTimeWindow = generateTimeWindow(startTime, formData.duration);
-    setFormData(prev => ({ ...prev, timeWindow: newTimeWindow }));
-  };
-
   const handleDurationChange = (duration) => {
-    const startTime = formData.timeWindow.split('-')[0];
-    const newTimeWindow = generateTimeWindow(startTime, duration);
     const percentage = ((duration / (24 * 60)) * 100).toFixed(1);
     setFormData(prev => ({ 
       ...prev, 
-      duration, 
-      timeWindow: newTimeWindow,
+      duration,
       percentage: parseFloat(percentage)
     }));
   };
@@ -2170,111 +2141,25 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
             </div>
           </div>
 
-          {/* Time Settings */}
+          {/* Duration Settings */}
           <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <label className="block text-sm font-medium text-gray-700">
-                Time Setup Method:
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Duration (minutes)
               </label>
-              <button
-                type="button"
-                onClick={() => setTimeInputType('duration')}
-                className={`px-3 py-1 text-xs rounded ${
-                  timeInputType === 'duration' 
-                    ? 'bg-blue-500 text-white' 
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                Duration
-              </button>
-              <button
-                type="button"
-                onClick={() => setTimeInputType('endTime')}
-                className={`px-3 py-1 text-xs rounded ${
-                  timeInputType === 'endTime' 
-                    ? 'bg-blue-500 text-white' 
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                End Time
-              </button>
-            </div>
-            
-            <div className={timeInputType === 'duration' ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-2 gap-4'}>
-              {timeInputType === 'endTime' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Start Time
-                  </label>
-                  <select
-                    value={formData.timeWindow.split('-')[0]}
-                    onChange={(e) => handleStartTimeChange(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    {timeSlots.map(time => (
-                      <option key={time} value={time}>{time}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {timeInputType === 'duration' ? (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Duration (minutes)
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.duration}
-                    onChange={(e) => handleDurationChange(parseInt(e.target.value) || 60)}
-                    min="15"
-                    max="480"
-                    step="15"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    End Time
-                  </label>
-                  <select
-                    value={formData.timeWindow.split('-')[1]}
-                    onChange={(e) => {
-                      const startTime = formData.timeWindow.split('-')[0];
-                      const endTime = e.target.value;
-                      const newTimeWindow = `${startTime}-${endTime}`;
-                      const [startHours, startMinutes] = startTime.split(':').map(Number);
-                      const [endHours, endMinutes] = endTime.split(':').map(Number);
-                      const startTotalMinutes = startHours * 60 + startMinutes;
-                      const endTotalMinutes = endHours * 60 + endMinutes;
-                      const duration = endTotalMinutes - startTotalMinutes;
-                      const percentage = ((duration / (24 * 60)) * 100).toFixed(1);
-                      setFormData(prev => ({ 
-                        ...prev, 
-                        duration: Math.max(15, duration), 
-                        timeWindow: newTimeWindow,
-                        percentage: parseFloat(percentage)
-                      }));
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    {timeSlots.map(time => (
-                      <option key={time} value={time}>{time}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Time Window Preview */}
-          <div className="bg-gray-50 rounded-lg p-4">
-            <h4 className="font-medium text-gray-800 mb-2">Time Window Preview</h4>
-            <div className="text-sm text-gray-600">
-              <div>Time Slot: <span className="font-mono">{formData.timeWindow}</span></div>
-              <div>Duration: {Math.floor(formData.duration / 60)}h {formData.duration % 60}m</div>
-              <div>Daily Percentage: {formData.percentage}%</div>
+              <input
+                type="number"
+                value={formData.duration}
+                onChange={(e) => handleDurationChange(parseInt(e.target.value) || 60)}
+                min="15"
+                max="480"
+                step="15"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                {Math.floor(formData.duration / 60)}h {formData.duration % 60}m 
+                ({Math.round((formData.duration / (24 * 60)) * 100 * 10) / 10}% of day)
+              </div>
             </div>
           </div>
 
@@ -2421,7 +2306,6 @@ export default function App() {
       dailyActivityProgressType: 'fill', // 'fill' or 'drain'
       dailyTimelineAnimation: true, // Animate timeline activities (shrink/slide when running)
       // Auto-schedule settings
-      defaultTimeWindow: '09:00-17:00', // Default time window for auto-scheduling
       autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
     };
     try {
@@ -2460,7 +2344,6 @@ export default function App() {
         id: 'work-1',
         name: 'Work',
         color: 'bg-blue-500',
-        timeWindow: '12:00-16:30',
         duration: 270, // minutes
         percentage: 18.8,
         status: 'scheduled', // 'scheduled', 'active', 'completed'
@@ -2472,7 +2355,6 @@ export default function App() {
         id: 'exercise-1', 
         name: 'Exercise',
         color: 'bg-green-500',
-        timeWindow: '16:30-18:15',
         duration: 105,
         percentage: 7.3,
         status: 'scheduled',
@@ -2484,7 +2366,6 @@ export default function App() {
         id: 'reading-1',
         name: 'Reading', 
         color: 'bg-purple-500',
-        timeWindow: '18:15-19:30',
         duration: 75,
         percentage: 5.2,
         status: 'scheduled',
@@ -3270,33 +3151,6 @@ export default function App() {
       // Smart duration based on preset time or default
       let smartDuration = presetTime > 0 ? Math.round(presetTime / 60) : 60; // Convert seconds to minutes or default 1 hour
       
-      // Find available time slots (same as quickAddDailyActivity)
-      const currentTime = new Date();
-      const currentHour = currentTime.getHours();
-      const existingSlots = dailyActivities.map(activity => {
-        const [start, end] = activity.timeWindow.split('-');
-        return { 
-          start: parseInt(start.split(':')[0]), 
-          end: parseInt(end.split(':')[0])
-        };
-      }).sort((a, b) => a.start - b.start);
-      
-      let suggestedStart = Math.max(currentHour, 8);
-      for (const slot of existingSlots) {
-        if (suggestedStart < slot.start && suggestedStart + Math.ceil(smartDuration / 60) <= slot.start) {
-          break;
-        }
-        suggestedStart = Math.max(suggestedStart, slot.end);
-      }
-      
-      if (suggestedStart + Math.ceil(smartDuration / 60) > 22) {
-        suggestedStart = Math.max(6, 22 - Math.ceil(smartDuration / 60));
-      }
-      
-      const endHour = Math.min(suggestedStart + Math.ceil(smartDuration / 60), 23);
-      const endMinutes = smartDuration % 60;
-      const timeWindow = `${suggestedStart.toString().padStart(2, '0')}:00-${endHour.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
-      
       const percentage = (smartDuration / (24 * 60)) * 100;
       
       const newActivity = {
@@ -3304,7 +3158,6 @@ export default function App() {
         name: name.trim(),
         color: activityColor,
         duration: smartDuration,
-        timeWindow,
         percentage: Math.round(percentage * 10) / 10,
         status: 'scheduled',
         isActive: false,
@@ -3324,82 +3177,41 @@ export default function App() {
   const quickAddDailyActivity = (name) => {
     if (!name || !name.trim()) return;
     
-    // Step 17: Smart Auto-Scheduling Algorithm
-    const generateSmartTimeSlot = () => {
-      const colors = [
-        'hsl(220, 70%, 50%)', // blue
-        'hsl(120, 60%, 50%)', // green
-        'hsl(280, 60%, 50%)', // purple
-        'hsl(0, 70%, 50%)',   // red
-        'hsl(60, 80%, 50%)',  // yellow
-        'hsl(320, 60%, 50%)', // pink
-        'hsl(250, 70%, 50%)'  // indigo
-      ];
-      const randomColor = colors[Math.floor(Math.random() * colors.length)];
-      
-      // Smart duration based on activity name patterns
-      let smartDuration = 60; // default 1 hour
-      const nameLower = name.toLowerCase();
-      
-      if (nameLower.includes('meeting') || nameLower.includes('call')) {
-        smartDuration = 30; // meetings are usually 30min
-      } else if (nameLower.includes('workout') || nameLower.includes('exercise') || nameLower.includes('gym')) {
-        smartDuration = 90; // workouts are usually 1.5h
-      } else if (nameLower.includes('work') || nameLower.includes('focus') || nameLower.includes('study')) {
-        smartDuration = 120; // work sessions are usually 2h
-      } else if (nameLower.includes('break') || nameLower.includes('rest') || nameLower.includes('lunch')) {
-        smartDuration = 30; // breaks are usually 30min
-      } else if (nameLower.includes('commute') || nameLower.includes('travel')) {
-        smartDuration = 45; // travel time usually 45min
-      }
-      
-      // Find available time slots (avoid conflicts with existing activities)
-      const currentTime = new Date();
-      const currentHour = currentTime.getHours();
-      const existingSlots = dailyActivities.map(activity => {
-        const [start, end] = activity.timeWindow.split('-');
-        return { 
-          start: parseInt(start.split(':')[0]), 
-          end: parseInt(end.split(':')[0])
-        };
-      }).sort((a, b) => a.start - b.start);
-      
-      // Smart time slot selection based on current time and gaps
-      let suggestedStart = Math.max(currentHour, 8); // Don't schedule before 8 AM
-      
-      // Find first available gap
-      for (const slot of existingSlots) {
-        if (suggestedStart < slot.start && suggestedStart + Math.ceil(smartDuration / 60) <= slot.start) {
-          break; // Found a gap
-        }
-        suggestedStart = Math.max(suggestedStart, slot.end);
-      }
-      
-      // Ensure we don't go past 10 PM
-      if (suggestedStart + Math.ceil(smartDuration / 60) > 22) {
-        suggestedStart = Math.max(6, 22 - Math.ceil(smartDuration / 60)); // Schedule earlier if needed
-      }
-      
-      const endHour = Math.min(suggestedStart + Math.ceil(smartDuration / 60), 23);
-      const endMinutes = smartDuration % 60;
-      const timeWindow = `${suggestedStart.toString().padStart(2, '0')}:00-${endHour.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
-      
-      const percentage = (smartDuration / (24 * 60)) * 100;
-      
-      return {
-        color: randomColor,
-        duration: smartDuration,
-        timeWindow,
-        percentage: Math.round(percentage * 10) / 10
-      };
-    };
+    // Smart duration based on activity name patterns
+    let smartDuration = 60; // default 1 hour
+    const nameLower = name.toLowerCase();
     
-    const smartSlot = generateSmartTimeSlot();
+    if (nameLower.includes('meeting') || nameLower.includes('call')) {
+      smartDuration = 30; // meetings are usually 30min
+    } else if (nameLower.includes('workout') || nameLower.includes('exercise') || nameLower.includes('gym')) {
+      smartDuration = 90; // workouts are usually 1.5h
+    } else if (nameLower.includes('work') || nameLower.includes('focus') || nameLower.includes('study')) {
+      smartDuration = 120; // work sessions are usually 2h
+    } else if (nameLower.includes('break') || nameLower.includes('rest') || nameLower.includes('lunch')) {
+      smartDuration = 30; // breaks are usually 30min
+    } else if (nameLower.includes('commute') || nameLower.includes('travel')) {
+      smartDuration = 45; // travel time usually 45min
+    }
+    
+    const colors = [
+      'hsl(220, 70%, 50%)', // blue
+      'hsl(120, 60%, 50%)', // green
+      'hsl(280, 60%, 50%)', // purple
+      'hsl(0, 70%, 50%)',   // red
+      'hsl(60, 80%, 50%)',  // yellow
+      'hsl(320, 60%, 50%)', // pink
+      'hsl(250, 70%, 50%)'  // indigo
+    ];
+    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    
+    const percentage = (smartDuration / (24 * 60)) * 100;
     
     const newActivity = {
       id: `activity-${Date.now()}`,
       name: name.trim(),
-      ...smartSlot,
+      color: randomColor,
+      duration: smartDuration,
+      percentage: Math.round(percentage * 10) / 10,
       status: 'scheduled',
       isActive: false,
       timeSpent: 0,
@@ -3527,8 +3339,7 @@ export default function App() {
       activityData: {
         id: `activity-${Date.now()}`,
         name: '',
-        color: 'bg-blue-500',
-        timeWindow: '09:00-10:00',
+        color: 'hsl(220, 70%, 50%)',
         duration: 60,
         percentage: 4.2,
         status: 'scheduled',
@@ -4458,27 +4269,6 @@ export default function App() {
                         onCheckedChange={(checked) => setSettings(prev => ({ ...prev, dailyTimelineAnimation: checked }))}
                       />
                     </div>
-                    
-                    {/* Auto-Schedule Time Window Settings */}
-                    <div className="space-y-3 mt-4 pt-4 border-t border-green-200">
-                      <div>
-                        <Label className="text-sm font-medium text-green-700">Auto-Schedule Settings</Label>
-                        <p className="text-xs text-gray-500 mt-1">Configure time windows for automatic activity placement</p>
-                      </div>
-                      
-                      <div className="space-y-2">
-                        <Label className="text-xs font-medium">Default Time Window for New Activities</Label>
-                        <Input
-                          placeholder="e.g., 09:00-17:00 (work hours)"
-                          className="text-sm h-8"
-                          value={settings.defaultTimeWindow || ''}
-                          onChange={(e) => setSettings(prev => ({ ...prev, defaultTimeWindow: e.target.value }))}
-                        />
-                        <p className="text-xs text-gray-500">
-                          Format: HH:MM-HH:MM. When using auto-schedule, activities will be placed within this time window based on their duration.
-                        </p>
-                      </div>
-                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -4832,22 +4622,6 @@ export default function App() {
                     <h3 className="text-md font-semibold">Today's Activities</h3>
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="outline" className="h-8 text-xs">Auto-Schedule</Button>
-                      <Button size="sm" variant="default" className="h-8 text-xs bg-green-600 hover:bg-green-700"
-                        onClick={() => {
-                          const name = prompt('Enter activity name:');
-                          if (name && name.trim()) {
-                            if (currentMode === 'daily') {
-                              quickAddDailyActivity(name);
-                            } else {
-                              // For session mode, use the same addActivity logic but with quick name
-                              addActivity(name);
-                            }
-                          }
-                        }}
-                      >
-                        <Icon name="plus" className="h-3 w-3 mr-1" />
-                        Quick Add
-                      </Button>
                       <Badge variant="default" className="text-xs">
                         Total: {(() => {
                           const summary = getDailySummary();
@@ -4888,7 +4662,7 @@ export default function App() {
                         Math.floor(realTimeSpent / settings.flowmodoroRatio) : 0;
                       
                       return (
-                      <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-2 transition-all duration-200 ${
+                      <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
                         activity.status === 'completed'
                           ? 'border-green-200 hover:bg-green-100 cursor-pointer'
                           : activity.status === 'overtime'
@@ -4927,207 +4701,135 @@ export default function App() {
                           />
                         )}
                         
-                        {/* Mobile-Optimized Progress Indicators */}
-                        {settings.dailyShowActivityProgress && (
-                          <>
-                            {/* Progress percentage indicator */}
-                            {realTimeSpent > 0 && (
-                              <div className="absolute top-1 right-1 bg-black bg-opacity-80 text-white text-xs px-1.5 py-0.5 rounded z-20 font-mono">
-                                {Math.round(actualProgress)}%
-                                {settings.dailyActivityProgressType === 'drain' && ' left'}
-                              </div>
-                            )}
-                            
-                            {/* Flowmodoro rest time earned indicator */}
-                            {settings.flowmodoroEnabled && earnedRestMinutes > 0 && (
-                              <div className="absolute top-1 left-1 bg-purple-600 bg-opacity-90 text-white text-xs px-1.5 py-0.5 rounded z-20 font-mono">
-                                +{earnedRestMinutes}m rest
-                              </div>
-                            )}
-                            
-                            {/* Bottom progress bar for high visibility */}
-                            <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gray-300 rounded-b-lg z-10">
-                              <div 
-                                className="h-full transition-all duration-300 rounded-b-lg"
-                                style={{ 
-                                  width: `${Math.max(0, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`,
-                                  backgroundColor: activity.color
-                                }}
-                              />
-                            </div>
-                          </>
-                        )}
-                        
-                        {/* Card Content - Android Optimized */}
+                        {/* Compact Card Content */}
                         <div className="relative z-10">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-6 h-6 rounded-full flex-shrink-0 border-2 border-gray-300" style={{ backgroundColor: activity.color }}></div>
-                          <span className="font-medium text-sm leading-tight flex-1 min-w-0 truncate">{activity.name}</span>
-                          <Badge variant={
-                            activity.status === 'completed' ? 'default' :
-                            activity.status === 'overtime' ? 'destructive' :
-                            activity.status === 'active' ? 'default' : 'secondary'
-                          } className={`text-xs px-1.5 py-0.5 flex-shrink-0 ${
-                            activity.status === 'completed' ? 'bg-green-100 text-green-800 border-green-200' :
-                            activity.status === 'overtime' ? 'bg-red-100 text-red-800 border-red-200' :
-                            activity.status === 'active' ? 'bg-blue-100 text-blue-800 border-blue-200' : ''
-                          }`}>
-                            {activity.status === 'completed' ? '✓' : 
-                             activity.status === 'overtime' ? '⚠' :
-                             activity.status === 'active' ? '▶' : '⏸'}
-                          </Badge>
-                        </div>
-                        
-                        {/* Action buttons row - Android touch-friendly */}
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-1">
-                            {/* Completion checkbox like session mode */}
-                            <div className="flex items-center gap-2">
+                          {/* Top row: Activity name, status badge, and action buttons */}
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <div className="w-4 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: activity.color }}></div>
+                              <span className="font-medium text-sm truncate flex-1">{activity.name}</span>
+                            </div>
+                            
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              {/* Status badge */}
+                              <Badge variant={
+                                activity.status === 'completed' ? 'default' :
+                                activity.status === 'overtime' ? 'destructive' :
+                                activity.status === 'active' ? 'default' : 'secondary'
+                              } className={`text-xs px-1.5 py-0.5 ${
+                                activity.status === 'completed' ? 'bg-green-100 text-green-800 border-green-200' :
+                                activity.status === 'overtime' ? 'bg-red-100 text-red-800 border-red-200' :
+                                activity.status === 'active' ? 'bg-blue-100 text-blue-800 border-blue-200' : ''
+                              }`}>
+                                {activity.status === 'completed' ? '✓' : 
+                                 activity.status === 'overtime' ? '⚠' :
+                                 activity.status === 'active' ? '▶' : '⏸'}
+                              </Badge>
+                              
+                              {/* Quick action buttons */}
+                              <button 
+                                className="h-6 w-6 text-blue-500 hover:bg-blue-100 rounded-md flex items-center justify-center"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openDailyActivityEdit(activity.id);
+                                }}
+                                title="Edit"
+                              >
+                                <Icon name="edit" className="h-3 w-3" />
+                              </button>
+                              
+                              <button 
+                                className="h-6 w-6 text-red-500 hover:bg-red-50 rounded-md flex items-center justify-center"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeDailyActivity(activity.id);
+                                }}
+                                title="Delete"
+                              >
+                                <Icon name="x" className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
+                          
+                          {/* Bottom row: Compact info display */}
+                          <div className="flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-3">
+                              {/* Duration */}
+                              <div className="flex items-center gap-1">
+                                <span className="text-gray-500">Duration:</span>
+                                <span className="font-medium">
+                                  {Math.floor(activity.duration / 60)}h {activity.duration % 60}m
+                                </span>
+                              </div>
+                              
+                              {/* Progress/Time spent */}
+                              <div className="flex items-center gap-1">
+                                <span className="text-gray-500">Progress:</span>
+                                <span className={`font-medium ${
+                                  activity.status === 'overtime' ? 'text-red-600' : 
+                                  activity.status === 'active' ? 'text-blue-600' : 
+                                  activity.status === 'completed' ? 'text-green-600' : 'text-gray-600'
+                                }`}>
+                                  {(() => {
+                                    const realTimeSpent = getRealTimeSpent(activity);
+                                    if (realTimeSpent > 0) {
+                                      const progress = Math.round((realTimeSpent / activity.duration) * 100);
+                                      return `${Math.floor(realTimeSpent / 60)}h ${realTimeSpent % 60}m (${progress}%)`;
+                                    } else {
+                                      return '0m (0%)';
+                                    }
+                                  })()}
+                                </span>
+                              </div>
+                            </div>
+                            
+                            {/* Completion checkbox */}
+                            <div className="flex items-center gap-1">
                               <input 
                                 type="checkbox" 
-                                className="h-4 w-4 rounded text-green-600 focus:ring-green-500" 
+                                className="h-3 w-3 rounded text-green-600 focus:ring-green-500" 
                                 checked={activity.status === 'completed'} 
                                 onChange={(e) => {
                                   e.stopPropagation();
                                   toggleDailyActivityCompletion(activity.id);
                                 }} 
                               />
-                              {activity.status === 'completed' ? (
-                                <span className="text-xs px-2 py-1 bg-green-50 border border-green-200 text-green-700 rounded-md flex items-center">
-                                  <Icon name="check" className="h-3 w-3 mr-1" />
-                                  Done
-                                </span>
-                              ) : activity.status === 'overtime' ? (
-                                <span className="text-xs px-2 py-1 bg-red-50 border border-red-200 text-red-700 rounded-md flex items-center font-medium">
-                                  Overtime - Tap to Stop
-                                </span>
-                              ) : activity.status === 'active' ? (
-                                <span className="text-xs px-2 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded-md flex items-center font-medium">
-                                  Running - Tap to Stop
-                                </span>
-                              ) : (
-                                <span className="text-xs px-2 py-1 border border-blue-300 bg-blue-50 text-blue-700 rounded-md flex items-center font-medium">
-                                  Ready - Tap to Start
-                                </span>
-                              )}
+                              <span className="text-gray-500">Done</span>
                             </div>
                           </div>
                           
-                          {/* Action buttons - larger touch targets */}
-                          <div className="flex items-center gap-1">
-                            <button 
-                              className="h-7 w-7 text-blue-500 hover:bg-blue-100 rounded-md flex items-center justify-center"
-                              style={{ touchAction: 'manipulation' }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openDailyActivityEdit(activity.id);
-                              }}
-                              title="Edit"
-                            >
-                              <Icon name="edit" className="h-3.5 w-3.5" />
-                            </button>
-                            
-                            <button 
-                              className="h-7 w-7 text-gray-500 hover:bg-gray-100 rounded-md flex items-center justify-center"
-                              style={{ touchAction: 'manipulation' }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openActivitySettings(activity.id);
-                              }}
-                              title="Settings"
-                            >
-                              <Icon name="settings" className="h-3.5 w-3.5" />
-                            </button>
-                            
-                            <button 
-                              className="h-7 w-7 text-red-500 hover:bg-red-50 rounded-md flex items-center justify-center"
-                              style={{ touchAction: 'manipulation' }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeDailyActivity(activity.id);
-                              }}
-                              title="Delete"
-                            >
-                              <Icon name="x" className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                        
-                        {/* Compact info grid */}
-                        <div className="grid grid-cols-3 gap-2 text-xs">
-                          <div>
-                            <div className="text-gray-500 text-xs">Time</div>
-                            <div className="font-medium text-sm truncate">{activity.timeWindow}</div>
-                          </div>
-                          <div>
-                            <div className="text-gray-500 text-xs">Duration</div>
-                            <div className="font-medium text-sm">
+                          {/* Real-time countdown for active activities */}
+                          {activity.status === 'active' && activity.startedAt && (
+                            <div className="mt-1 text-xs">
                               {(() => {
                                 const realTimeSpent = getRealTimeSpent(activity);
-                                const remainingMinutes = Math.max(0, activity.duration - realTimeSpent);
-                                const remainingSeconds = activity.status === 'active' && activity.startedAt ? 
-                                  Math.max(0, (activity.duration * 60) - Math.floor((currentTime.getTime() - activity.startedAt) / 1000)) : 
-                                  remainingMinutes * 60;
+                                const remainingSeconds = Math.max(0, (activity.duration * 60) - Math.floor((currentTime.getTime() - activity.startedAt) / 1000));
                                 
-                                if (realTimeSpent > 0) {
+                                if (remainingSeconds > 0) {
                                   return (
-                                    <div className="space-y-1">
-                                      {/* Time spent / Total time */}
-                                      <div>
-                                        <span className={activity.status === 'overtime' ? 'text-red-600 font-bold' : 'text-blue-600'}>
-                                          {Math.floor(realTimeSpent / 60)}h {realTimeSpent % 60}m
-                                        </span>
-                                        <span className="text-gray-400"> / </span>
-                                        <span className="text-xs">{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
-                                      </div>
-                                      
-                                      {/* Real-time countdown/overtime */}
-                                      {activity.status === 'active' && (
-                                        <div className="text-xs">
-                                          {remainingSeconds > 0 ? (
-                                            <span className="text-blue-600 font-mono">
-                                              -{Math.floor(remainingSeconds / 60)}:{(remainingSeconds % 60).toString().padStart(2, '0')} left
-                                            </span>
-                                          ) : (
-                                            <span className="text-red-600 font-bold font-mono animate-pulse">
-                                              +{Math.floor(Math.abs(remainingSeconds) / 60)}:{(Math.abs(remainingSeconds) % 60).toString().padStart(2, '0')} over
-                                            </span>
-                                          )}
-                                        </div>
-                                      )}
-                                      
-                                      {activity.status === 'overtime' && (
-                                        <div className="text-xs">
-                                          <span className="text-red-600 font-bold">
-                                            OVERTIME: +{realTimeSpent - activity.duration}m over
-                                          </span>
-                                        </div>
-                                      )}
-                                    </div>
+                                    <span className="text-blue-600 font-mono">
+                                      Time left: {Math.floor(remainingSeconds / 60)}:{(remainingSeconds % 60).toString().padStart(2, '0')}
+                                    </span>
                                   );
                                 } else {
                                   return (
-                                    <span>{Math.floor(activity.duration / 60)}h {activity.duration % 60}m</span>
+                                    <span className="text-red-600 font-bold font-mono animate-pulse">
+                                      OVERTIME: +{Math.floor(Math.abs(remainingSeconds) / 60)}:{(Math.abs(remainingSeconds) % 60).toString().padStart(2, '0')}
+                                    </span>
                                   );
                                 }
                               })()}
                             </div>
-                          </div>
-                          <div>
-                            <div className="text-gray-500 text-xs">Status</div>
-                            <div className="font-medium text-sm">
-                              {activity.status === 'completed' ? (
-                                <span className="text-green-600">Complete</span>
-                              ) : activity.status === 'overtime' ? (
-                                <span className="text-red-600 font-bold">OVERTIME</span>
-                              ) : activity.status === 'active' ? (
-                                <span className="text-blue-600">Running</span>
-                              ) : (
-                                <span className="text-gray-600">Ready</span>
-                              )}
+                          )}
+                          
+                          {/* Flowmodoro rest indicator */}
+                          {settings.flowmodoroEnabled && earnedRestMinutes > 0 && (
+                            <div className="mt-1 text-xs">
+                              <span className="text-purple-600 font-medium">
+                                Rest earned: +{earnedRestMinutes}m
+                              </span>
                             </div>
-                          </div>
-                        </div>
+                          )}
                         </div>
                       </div>
                       );
@@ -5591,8 +5293,7 @@ const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
   const [formData, setFormData] = useState({
     name: activity.name || '',
     color: activity.color || 'hsl(220, 70%, 50%)', // Use HSL like the activities
-    duration: activity.duration || 60,
-    timeWindow: activity.timeWindow || '09:00-10:00'
+    duration: activity.duration || 60
   });
 
   // Use HSL colors that match the system
