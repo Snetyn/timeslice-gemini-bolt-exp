@@ -1,5 +1,12 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 
+interface Subtask {
+  id: string;
+  name: string;
+  completed: boolean;
+  createdAt: Date;
+}
+
 interface ActivityTemplate {
   id: string;
   name: string;
@@ -2034,8 +2041,11 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
     color: 'hsl(220, 70%, 50%)', // Use HSL instead of bg-classes
     duration: 60,
     percentage: 4.2,
-    status: 'scheduled'
+    status: 'scheduled',
+    subtasks: []
   });
+
+  const [newSubtaskName, setNewSubtaskName] = useState('');
 
   useEffect(() => {
     if (activity) {
@@ -2044,7 +2054,8 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
         color: activity.color || 'hsl(220, 70%, 50%)', // Use HSL
         duration: activity.duration || 60,
         percentage: activity.percentage || 4.2,
-        status: activity.status || 'scheduled'
+        status: activity.status || 'scheduled',
+        subtasks: activity.subtasks || []
       });
     }
   }, [activity]);
@@ -2069,6 +2080,41 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
       ...prev, 
       duration,
       percentage: parseFloat(percentage)
+    }));
+  };
+
+  const addSubtask = () => {
+    if (!newSubtaskName.trim()) return;
+    
+    const newSubtask = {
+      id: `subtask-${Date.now()}`,
+      name: newSubtaskName.trim(),
+      completed: false,
+      createdAt: new Date()
+    };
+    
+    setFormData(prev => ({
+      ...prev,
+      subtasks: [...prev.subtasks, newSubtask]
+    }));
+    setNewSubtaskName('');
+  };
+
+  const removeSubtask = (subtaskId) => {
+    setFormData(prev => ({
+      ...prev,
+      subtasks: prev.subtasks.filter(subtask => subtask.id !== subtaskId)
+    }));
+  };
+
+  const toggleSubtask = (subtaskId) => {
+    setFormData(prev => ({
+      ...prev,
+      subtasks: prev.subtasks.map(subtask =>
+        subtask.id === subtaskId
+          ? { ...subtask, completed: !subtask.completed }
+          : subtask
+      )
     }));
   };
 
@@ -2160,6 +2206,80 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
                 {Math.floor(formData.duration / 60)}h {formData.duration % 60}m 
                 ({Math.round((formData.duration / (24 * 60)) * 100 * 10) / 10}% of day)
               </div>
+            </div>
+          </div>
+
+          {/* Subtasks Management */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Subtasks ({formData.subtasks.filter(s => s.completed).length}/{formData.subtasks.length} completed)
+            </label>
+            
+            {/* Add new subtask */}
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                value={newSubtaskName}
+                onChange={(e) => setNewSubtaskName(e.target.value)}
+                placeholder="Add a subtask..."
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addSubtask();
+                  }
+                }}
+              />
+              <Button
+                onClick={addSubtask}
+                disabled={!newSubtaskName.trim()}
+                size="sm"
+                className="px-4"
+              >
+                <Icon name="plus" className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Subtasks list */}
+            <div className="space-y-2 max-h-32 overflow-y-auto">
+              {formData.subtasks.map((subtask) => (
+                <div
+                  key={subtask.id}
+                  className={`flex items-center gap-2 p-2 rounded-lg border ${
+                    subtask.completed
+                      ? 'bg-green-50 border-green-200'
+                      : 'bg-gray-50 border-gray-200'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={subtask.completed}
+                    onChange={() => toggleSubtask(subtask.id)}
+                    className="h-4 w-4 rounded text-green-600 focus:ring-green-500"
+                  />
+                  <span
+                    className={`flex-1 text-sm ${
+                      subtask.completed
+                        ? 'line-through text-green-700'
+                        : 'text-gray-700'
+                    }`}
+                  >
+                    {subtask.name}
+                  </span>
+                  <button
+                    onClick={() => removeSubtask(subtask.id)}
+                    className="text-red-500 hover:text-red-700 p-1"
+                    title="Remove subtask"
+                  >
+                    <Icon name="x" className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+              {formData.subtasks.length === 0 && (
+                <div className="text-sm text-gray-500 italic p-2 text-center">
+                  No subtasks added yet
+                </div>
+              )}
             </div>
           </div>
 
@@ -2328,10 +2448,11 @@ export default function App() {
       const saved = localStorage.getItem('timeSliceDailyActivities');
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Restore Date objects for startedAt
+        // Restore Date objects for startedAt and ensure subtasks array exists
         return parsed.map((activity: any) => ({
           ...activity,
-          startedAt: activity.startedAt ? new Date(activity.startedAt) : null
+          startedAt: activity.startedAt ? new Date(activity.startedAt) : null,
+          subtasks: activity.subtasks || []
         }));
       }
     } catch (e) {
@@ -2349,7 +2470,8 @@ export default function App() {
         status: 'scheduled', // 'scheduled', 'active', 'completed'
         isActive: false,
         timeSpent: 0,
-        startedAt: null
+        startedAt: null,
+        subtasks: []
       },
       {
         id: 'exercise-1', 
@@ -2360,7 +2482,8 @@ export default function App() {
         status: 'scheduled',
         isActive: false,
         timeSpent: 0,
-        startedAt: null
+        startedAt: null,
+        subtasks: []
       },
       {
         id: 'reading-1',
@@ -2371,7 +2494,8 @@ export default function App() {
         status: 'scheduled',
         isActive: false,
         timeSpent: 0,
-        startedAt: null
+        startedAt: null,
+        subtasks: []
       }
     ];
   });
@@ -3215,7 +3339,8 @@ export default function App() {
       status: 'scheduled',
       isActive: false,
       timeSpent: 0,
-      startedAt: null
+      startedAt: null,
+      subtasks: [] // Add subtasks array
     };
     
     setDailyActivities(prev => [...prev, newActivity]);
@@ -3247,9 +3372,21 @@ export default function App() {
   const toggleDailyActivityCompletion = (activityId: string) => {
     setDailyActivities(prev => prev.map(activity => {
       if (activity.id === activityId) {
-        // If currently completed, mark as scheduled. If not completed, mark as completed.
-        const newStatus = activity.status === 'completed' ? 'scheduled' : 'completed';
-        return { ...activity, status: newStatus };
+        // If currently completed, mark as scheduled and reset all subtasks
+        if (activity.status === 'completed') {
+          return { 
+            ...activity, 
+            status: 'scheduled',
+            subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: false }))
+          };
+        } else {
+          // If not completed, mark as completed and complete all subtasks
+          return { 
+            ...activity, 
+            status: 'completed',
+            subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: true }))
+          };
+        }
       }
       return activity;
     }));
@@ -3285,6 +3422,76 @@ export default function App() {
     if (activeDailyActivity === activityId) {
       setActiveDailyActivity(null);
     }
+  };
+
+  // Subtask management functions
+  const addSubtaskToActivity = (activityId: string, subtaskName: string) => {
+    if (!subtaskName.trim()) return;
+    
+    const newSubtask: Subtask = {
+      id: `subtask-${Date.now()}`,
+      name: subtaskName.trim(),
+      completed: false,
+      createdAt: new Date()
+    };
+    
+    setDailyActivities(prev => prev.map(activity => {
+      if (activity.id === activityId) {
+        return {
+          ...activity,
+          subtasks: [...(activity.subtasks || []), newSubtask]
+        };
+      }
+      return activity;
+    }));
+  };
+
+  const toggleSubtaskCompletion = (activityId: string, subtaskId: string) => {
+    setDailyActivities(prev => prev.map(activity => {
+      if (activity.id === activityId) {
+        const updatedSubtasks = (activity.subtasks || []).map(subtask =>
+          subtask.id === subtaskId
+            ? { ...subtask, completed: !subtask.completed }
+            : subtask
+        );
+        
+        // Check if all subtasks are completed and auto-complete activity
+        const allSubtasksCompleted = updatedSubtasks.length > 0 && 
+          updatedSubtasks.every(subtask => subtask.completed);
+        
+        return {
+          ...activity,
+          subtasks: updatedSubtasks,
+          status: allSubtasksCompleted ? 'completed' : 
+                 (activity.status === 'completed' && !allSubtasksCompleted) ? 'scheduled' : 
+                 activity.status
+        };
+      }
+      return activity;
+    }));
+  };
+
+  const removeSubtaskFromActivity = (activityId: string, subtaskId: string) => {
+    setDailyActivities(prev => prev.map(activity => {
+      if (activity.id === activityId) {
+        const updatedSubtasks = (activity.subtasks || []).filter(subtask => subtask.id !== subtaskId);
+        
+        // Check if all remaining subtasks are completed
+        const allSubtasksCompleted = updatedSubtasks.length > 0 && 
+          updatedSubtasks.every(subtask => subtask.completed);
+        
+        return {
+          ...activity,
+          subtasks: updatedSubtasks,
+          status: updatedSubtasks.length === 0 ? 
+                 (activity.status === 'completed' ? 'scheduled' : activity.status) :
+                 allSubtasksCompleted ? 'completed' : 
+                 (activity.status === 'completed' && !allSubtasksCompleted) ? 'scheduled' : 
+                 activity.status
+        };
+      }
+      return activity;
+    }));
   };
 
   // Step 15: Activity Settings Functions
@@ -4907,6 +5114,89 @@ export default function App() {
                               </span>
                             </div>
                           )}
+
+                          {/* Subtasks Display */}
+                          {activity.subtasks && activity.subtasks.length > 0 && (
+                            <div className="mt-2 space-y-1">
+                              <div className="text-xs text-gray-500 mb-1">
+                                Subtasks ({activity.subtasks.filter(s => s.completed).length}/{activity.subtasks.length})
+                              </div>
+                              <div className="space-y-1 max-h-20 overflow-y-auto">
+                                {activity.subtasks.map((subtask) => (
+                                  <div
+                                    key={subtask.id}
+                                    className="flex items-center gap-2 text-xs"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={subtask.completed}
+                                      onChange={(e) => {
+                                        e.stopPropagation();
+                                        toggleSubtaskCompletion(activity.id, subtask.id);
+                                      }}
+                                      className="h-3 w-3 rounded text-green-600 focus:ring-green-500"
+                                    />
+                                    <span
+                                      className={`flex-1 ${
+                                        subtask.completed
+                                          ? 'line-through text-green-600'
+                                          : 'text-gray-700'
+                                      }`}
+                                    >
+                                      {subtask.name}
+                                    </span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        removeSubtaskFromActivity(activity.id, subtask.id);
+                                      }}
+                                      className="text-red-500 hover:text-red-700 p-0.5"
+                                      title="Remove subtask"
+                                    >
+                                      <Icon name="x" className="h-2.5 w-2.5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Quick Add Subtask */}
+                          <div className="mt-2 text-xs">
+                            <div className="flex gap-1">
+                              <input
+                                type="text"
+                                placeholder="Add subtask..."
+                                className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                onKeyPress={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.stopPropagation();
+                                    const target = e.target as HTMLInputElement;
+                                    if (target.value.trim()) {
+                                      addSubtaskToActivity(activity.id, target.value);
+                                      target.value = '';
+                                    }
+                                  }
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const input = e.currentTarget.previousElementSibling as HTMLInputElement;
+                                  if (input.value.trim()) {
+                                    addSubtaskToActivity(activity.id, input.value);
+                                    input.value = '';
+                                  }
+                                }}
+                                className="px-2 py-1 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded"
+                                title="Add subtask"
+                              >
+                                <Icon name="plus" className="h-3 w-3" />
+                              </button>
+                            </div>
+                          </div>
                         </div>
                       </div>
                       );
