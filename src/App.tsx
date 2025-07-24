@@ -782,17 +782,28 @@ interface AddActivityModalProps {
   onClose: () => void;
   onAdd: (name: string, color: string, presetTime?: number, countUp?: boolean) => void;
   templates: ActivityTemplate[];
-  onSaveTemplate: (name: string) => void;
+  onSaveTemplate: (name: string, color: string) => void;
 }
 
 const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTemplate }: AddActivityModalProps) => {
-  const [activityName, setActivityName] = React.useState("");
-  const [selectedTemplate, setSelectedTemplate] = React.useState<ActivityTemplate | null>(null);
-  const [showTemplates, setShowTemplates] = React.useState(false);
-  const [presetMinutes, setPresetMinutes] = React.useState(0);
-  const [presetSeconds, setPresetSeconds] = React.useState(0);
-  const [usePresetTime, setUsePresetTime] = React.useState(false);
-  const [useCountUp, setUseCountUp] = React.useState(false);
+  const [activityName, setActivityName] = useState("");
+  const [selectedTemplate, setSelectedTemplate] = useState<ActivityTemplate | null>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [presetMinutes, setPresetMinutes] = useState(0);
+  const [presetSeconds, setPresetSeconds] = useState(0);
+  const [usePresetTime, setUsePresetTime] = useState(false);
+  const [useCountUp, setUseCountUp] = useState(false);
+  
+  // Predefined color palette (same as quickAddDailyActivity) - for reference only
+  const colorPalette = [
+    'hsl(220, 70%, 50%)', // blue
+    'hsl(120, 60%, 50%)', // green
+    'hsl(280, 60%, 50%)', // purple
+    'hsl(0, 70%, 50%)',   // red
+    'hsl(60, 80%, 50%)',  // yellow
+    'hsl(320, 60%, 50%)', // pink
+    'hsl(250, 70%, 50%)'  // indigo
+  ];
 
   if (!isOpen) return null;
 
@@ -803,7 +814,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
     
     if (selectedTemplate) {
       name = selectedTemplate.name;
-      color = selectedTemplate.color;
+      color = selectedTemplate.color; // ✅ Use template's saved color (like UI test 5)
     } else if (!name) {
       name = "New Activity";
     }
@@ -825,8 +836,10 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
 
   const handleSaveAsTemplate = () => {
     const name = activityName.trim();
+    // Use the same random color logic as UI test 5
+    const color = `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`;
     if (name && onSaveTemplate) {
-      onSaveTemplate(name);
+      onSaveTemplate(name, color);
       setActivityName("");
     }
   };
@@ -880,6 +893,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
                       onClick={() => {
                         setSelectedTemplate(template);
                         setActivityName(template.name);
+                        // Remove color selection - colors are now random
                       }}
                       className="h-8 text-xs justify-start"
                     >
@@ -904,6 +918,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
                 onChange={e => {
                   setActivityName(e.target.value);
                   setSelectedTemplate(null); // Clear template selection when typing
+                  // Remove color clearing - colors are now random
                 }}
                 onKeyPress={handleKeyPress}
                 autoFocus
@@ -2014,22 +2029,22 @@ const FlowmodoroActivity = ({ flowState, settings, onTakeBreak, onSkipBreak, onR
 
 // Daily Activity Edit Modal Component
 const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, isNewActivity }) => {
-  const [formData, setFormData] = React.useState({
+  const [formData, setFormData] = useState({
     name: '',
-    color: 'bg-blue-500',
+    color: 'hsl(220, 70%, 50%)', // Use HSL instead of bg-classes
     timeWindow: '09:00-10:00',
     duration: 60,
     percentage: 4.2,
     status: 'scheduled'
   });
 
-  const [timeInputType, setTimeInputType] = React.useState('duration'); // 'duration' or 'endTime'
+  const [timeInputType, setTimeInputType] = useState('duration'); // 'duration' or 'endTime'
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (activity) {
       setFormData({
         name: activity.name || '',
-        color: activity.color || 'bg-blue-500',
+        color: activity.color || 'hsl(220, 70%, 50%)', // Use HSL
         timeWindow: activity.timeWindow || '09:00-10:00',
         duration: activity.duration || 60,
         percentage: activity.percentage || 4.2,
@@ -2038,17 +2053,18 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
     }
   }, [activity]);
 
+  // Use HSL colors that match the system
   const colorOptions = [
-    { name: 'Blue', value: 'bg-blue-500' },
-    { name: 'Green', value: 'bg-green-500' },
-    { name: 'Purple', value: 'bg-purple-500' },
-    { name: 'Red', value: 'bg-red-500' },
-    { name: 'Orange', value: 'bg-orange-500' },
-    { name: 'Pink', value: 'bg-pink-500' },
-    { name: 'Indigo', value: 'bg-indigo-500' },
-    { name: 'Yellow', value: 'bg-yellow-500' },
-    { name: 'Teal', value: 'bg-teal-500' },
-    { name: 'Gray', value: 'bg-gray-500' }
+    { name: 'Blue', value: 'hsl(220, 70%, 50%)' },
+    { name: 'Green', value: 'hsl(120, 60%, 50%)' },
+    { name: 'Purple', value: 'hsl(280, 60%, 50%)' },
+    { name: 'Red', value: 'hsl(0, 70%, 50%)' },
+    { name: 'Orange', value: 'hsl(30, 80%, 50%)' },
+    { name: 'Pink', value: 'hsl(320, 60%, 50%)' },
+    { name: 'Indigo', value: 'hsl(250, 70%, 50%)' },
+    { name: 'Yellow', value: 'hsl(60, 80%, 50%)' },
+    { name: 'Teal', value: 'hsl(180, 60%, 50%)' },
+    { name: 'Gray', value: 'hsl(0, 0%, 50%)' }
   ];
 
   const timeSlots: string[] = [];
@@ -2144,7 +2160,10 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
-                  <div className={`w-6 h-6 rounded-full ${color.value} mx-auto mb-1`}></div>
+                  <div 
+                    className="w-6 h-6 rounded-full mx-auto mb-1"
+                    style={{ backgroundColor: color.value }}
+                  ></div>
                   <div className="text-xs text-gray-600">{color.name}</div>
                 </button>
               ))}
@@ -2373,18 +2392,8 @@ export default function App() {
   const [isPaused, setIsPaused] = useState(false);
   const [currentActivityIndex, setCurrentActivityIndex] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
-  const [colorPickerState, setColorPickerState] = useState({ isOpen: false, activityId: "", currentColor: "" });
-  const [favoriteColors, setFavoriteColors] = useState(() => {
-    const defaultValue = [
-      "hsl(220, 70%, 50%)", "hsl(120, 60%, 50%)", "hsl(0, 70%, 50%)", "hsl(280, 60%, 50%)", "hsl(40, 80%, 50%)",
-    ];
-    try {
-      const saved = localStorage.getItem('timeSliceFavColors');
-      return saved ? JSON.parse(saved) : defaultValue;
-    } catch (e) {
-      return defaultValue;
-    }
-  });
+  // Removed colorPickerState - using simple random colors instead
+  // Removed favoriteColors state - using simple random colors instead
 
   const [settings, setSettings] = useState(() => {
     const defaultValue = {
@@ -2924,14 +2933,6 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('timeSliceFavColors', JSON.stringify(favoriteColors));
-    } catch (e) {
-      console.error("Failed to save favorite colors", e);
-    }
-  }, [favoriteColors]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem('timeSliceTotalHours', JSON.stringify(totalHours));
     } catch (e) {
       console.error("Failed to save total hours", e);
@@ -3194,10 +3195,11 @@ export default function App() {
     return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   };
 
-  const addActivity = (customName = null, customColor = null, presetTime = 0, countUp = false) => {
+  const addActivity = (customName: string | null = null, customColor: string | null = null, presetTime = 0, countUp = false) => {
     // Always open modal if no custom name provided - this ensures all activity creation goes through naming dialog
     // This is especially important for mobile users who shouldn't need to click into input fields to rename
     if (customName === null || customName === undefined || customName === '') {
+      // Simple modal opening - no complex color conflicts to worry about
       setAddActivityModalState({ isOpen: true });
       return;
     }
@@ -3212,7 +3214,7 @@ export default function App() {
       }
     }
 
-    // Use provided color or generate random one
+    // Use provided color or generate random one (like UI test 5)
     const activityColor = customColor || `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`;
 
     const newActivity = {
@@ -3248,7 +3250,74 @@ export default function App() {
   };
 
   const handleAddActivityWithName = (name, color, presetTime = 0, countUp = false) => {
-    addActivity(name, color, presetTime, countUp);
+    console.log('handleAddActivityWithName called with:', { name, color, presetTime, countUp, currentMode });
+    
+    if (currentMode === 'daily') {
+      // Use the same working logic as quickAddDailyActivity but with custom parameters
+      if (!name || !name.trim()) return;
+      
+      const colorPalette = [
+        'hsl(220, 70%, 50%)', // blue
+        'hsl(120, 60%, 50%)', // green
+        'hsl(280, 60%, 50%)', // purple
+        'hsl(0, 70%, 50%)',   // red
+        'hsl(60, 80%, 50%)',  // yellow
+        'hsl(320, 60%, 50%)', // pink
+        'hsl(250, 70%, 50%)'  // indigo
+      ];
+      const activityColor = color || colorPalette[Math.floor(Math.random() * colorPalette.length)];
+      
+      // Smart duration based on preset time or default
+      let smartDuration = presetTime > 0 ? Math.round(presetTime / 60) : 60; // Convert seconds to minutes or default 1 hour
+      
+      // Find available time slots (same as quickAddDailyActivity)
+      const currentTime = new Date();
+      const currentHour = currentTime.getHours();
+      const existingSlots = dailyActivities.map(activity => {
+        const [start, end] = activity.timeWindow.split('-');
+        return { 
+          start: parseInt(start.split(':')[0]), 
+          end: parseInt(end.split(':')[0])
+        };
+      }).sort((a, b) => a.start - b.start);
+      
+      let suggestedStart = Math.max(currentHour, 8);
+      for (const slot of existingSlots) {
+        if (suggestedStart < slot.start && suggestedStart + Math.ceil(smartDuration / 60) <= slot.start) {
+          break;
+        }
+        suggestedStart = Math.max(suggestedStart, slot.end);
+      }
+      
+      if (suggestedStart + Math.ceil(smartDuration / 60) > 22) {
+        suggestedStart = Math.max(6, 22 - Math.ceil(smartDuration / 60));
+      }
+      
+      const endHour = Math.min(suggestedStart + Math.ceil(smartDuration / 60), 23);
+      const endMinutes = smartDuration % 60;
+      const timeWindow = `${suggestedStart.toString().padStart(2, '0')}:00-${endHour.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`;
+      
+      const percentage = (smartDuration / (24 * 60)) * 100;
+      
+      const newActivity = {
+        id: `activity-${Date.now()}`,
+        name: name.trim(),
+        color: activityColor,
+        duration: smartDuration,
+        timeWindow,
+        percentage: Math.round(percentage * 10) / 10,
+        status: 'scheduled',
+        isActive: false,
+        timeSpent: 0,
+        startedAt: null
+      };
+      
+      setDailyActivities(prev => [...prev, newActivity]);
+      console.log('Added daily activity via modal:', newActivity);
+    } else {
+      // Session mode - use existing addActivity function
+      addActivity(name, color, presetTime, countUp);
+    }
   };
 
   // Daily Mode Functions (Step 2: Quick Add)
@@ -3532,11 +3601,11 @@ export default function App() {
     };
   };
 
-  const saveActivityTemplate = (name) => {
+  const saveActivityTemplate = (name, color) => {
     const newTemplate = {
       id: Date.now().toString(),
       name: name.trim(),
-      color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`
+      color: color
     };
     
     // Check if template with same name already exists
@@ -3678,7 +3747,29 @@ export default function App() {
   };
 
   const updateActivityColor = (id, color) => {
-    setActivities((prev) => prev.map((activity) => (activity.id === id ? { ...activity, color } : activity)));
+    console.log('updateActivityColor called with:', { id, color, currentMode });
+    
+    // Prevent multiple simultaneous updates
+    if (!id || !color) {
+      console.warn('Invalid parameters for updateActivityColor:', { id, color });
+      return;
+    }
+    
+    if (currentMode === 'daily') {
+      // Update daily activities
+      setDailyActivities((prev) => {
+        const updated = prev.map((activity) => (activity.id === id ? { ...activity, color } : activity));
+        console.log('Updated daily activities with new color:', updated.find(a => a.id === id));
+        return updated;
+      });
+    } else {
+      // Update session activities  
+      setActivities((prev) => {
+        const updated = prev.map((activity) => (activity.id === id ? { ...activity, color } : activity));
+        console.log('Updated session activities with new color:', updated.find(a => a.id === id));
+        return updated;
+      });
+    }
   };
 
   const startSession = () => {
@@ -3777,25 +3868,9 @@ export default function App() {
     setBorrowModalState({ isOpen: false, activityId: '' });
   };
 
-  const openColorPicker = (activityId, currentColor) => {
-    setColorPickerState({ isOpen: true, activityId, currentColor });
-  };
+  // Removed complex color picker system - using simple random colors like quick add works perfectly
 
-  const closeColorPicker = () => {
-    setColorPickerState({ isOpen: false, activityId: "", currentColor: "" });
-  };
-
-  const handleColorChange = React.useCallback((color) => {
-    if (colorPickerState.activityId) {
-      updateActivityColor(colorPickerState.activityId, color);
-    }
-  }, [colorPickerState.activityId]);
-
-  const addFavoriteColor = (color) => {
-    if (!favoriteColors.includes(color)) {
-      setFavoriteColors([...favoriteColors, color]);
-    }
-  };
+  // Removed addFavoriteColor function - using simple random colors instead
 
   const handleBarDrag = useCallback((e) => {
     const bar = e.currentTarget;
@@ -4760,7 +4835,14 @@ export default function App() {
                       <Button size="sm" variant="default" className="h-8 text-xs bg-green-600 hover:bg-green-700"
                         onClick={() => {
                           const name = prompt('Enter activity name:');
-                          if (name) quickAddDailyActivity(name);
+                          if (name && name.trim()) {
+                            if (currentMode === 'daily') {
+                              quickAddDailyActivity(name);
+                            } else {
+                              // For session mode, use the same addActivity logic but with quick name
+                              addActivity(name);
+                            }
+                          }
                         }}
                       >
                         <Icon name="plus" className="h-3 w-3 mr-1" />
@@ -5293,7 +5375,20 @@ export default function App() {
                     <button 
                       className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0" 
                       style={{ backgroundColor: activity.color }} 
-                      onClick={() => openColorPicker(activity.id, activity.color)} 
+                      onClick={() => {
+                        // Simple random color change - no complex picker
+                        const colorPalette = [
+                          'hsl(220, 70%, 50%)', // blue
+                          'hsl(120, 60%, 50%)', // green
+                          'hsl(280, 60%, 50%)', // purple
+                          'hsl(0, 70%, 50%)',   // red
+                          'hsl(60, 80%, 50%)',  // yellow
+                          'hsl(320, 60%, 50%)', // pink
+                          'hsl(250, 70%, 50%)'  // indigo
+                        ];
+                        const newColor = colorPalette[Math.floor(Math.random() * colorPalette.length)];
+                        updateActivityColor(activity.id, newColor);
+                      }} 
                     />
 
                     <Input 
@@ -5414,7 +5509,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans">
       {mainContent}
-      <ColorPicker isOpen={colorPickerState.isOpen} onClose={closeColorPicker} currentColor={colorPickerState.currentColor} onColorChange={handleColorChange} favorites={favoriteColors} onAddFavorite={addFavoriteColor} />
+      {/* Removed ColorPicker - using simple random colors instead */}
       {borrowModalState.isOpen && (
         <BorrowTimeModal
           isOpen={borrowModalState.isOpen}
@@ -5495,15 +5590,25 @@ export default function App() {
 const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
   const [formData, setFormData] = useState({
     name: activity.name || '',
-    color: activity.color || 'bg-blue-500',
+    color: activity.color || 'hsl(220, 70%, 50%)', // Use HSL like the activities
     duration: activity.duration || 60,
     timeWindow: activity.timeWindow || '09:00-10:00'
   });
 
+  // Use HSL colors that match the system
   const colorOptions = [
-    'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-red-500', 
-    'bg-yellow-500', 'bg-pink-500', 'bg-indigo-500', 'bg-orange-500',
-    'bg-teal-500', 'bg-cyan-500', 'bg-lime-500', 'bg-emerald-500'
+    { name: 'Blue', value: 'hsl(220, 70%, 50%)' },
+    { name: 'Green', value: 'hsl(120, 60%, 50%)' },
+    { name: 'Purple', value: 'hsl(280, 60%, 50%)' },
+    { name: 'Red', value: 'hsl(0, 70%, 50%)' },
+    { name: 'Yellow', value: 'hsl(60, 80%, 50%)' },
+    { name: 'Pink', value: 'hsl(320, 60%, 50%)' },
+    { name: 'Indigo', value: 'hsl(250, 70%, 50%)' },
+    { name: 'Orange', value: 'hsl(30, 80%, 50%)' },
+    { name: 'Teal', value: 'hsl(180, 60%, 50%)' },
+    { name: 'Cyan', value: 'hsl(200, 70%, 50%)' },
+    { name: 'Lime', value: 'hsl(90, 60%, 50%)' },
+    { name: 'Emerald', value: 'hsl(160, 60%, 50%)' }
   ];
 
   const handleSave = () => {
@@ -5544,13 +5649,15 @@ const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
       <div>
         <Label className="text-sm font-medium">Color</Label>
         <div className="grid grid-cols-6 gap-2 mt-2">
-          {colorOptions.map((color) => (
+          {colorOptions.map((colorOption) => (
             <button
-              key={color}
+              key={colorOption.value}
               className={`w-8 h-8 rounded-full border-2 hover:scale-110 transition-transform ${
-                formData.color === color ? 'border-gray-600 ring-2 ring-blue-200' : 'border-gray-300'
-              } ${color}`}
-              onClick={() => setFormData(prev => ({ ...prev, color }))}
+                formData.color === colorOption.value ? 'border-gray-600 ring-2 ring-blue-200' : 'border-gray-300'
+              }`}
+              style={{ backgroundColor: colorOption.value }}
+              onClick={() => setFormData(prev => ({ ...prev, color: colorOption.value }))}
+              title={colorOption.name}
             />
           ))}
         </div>
@@ -5578,7 +5685,10 @@ const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
       <div className="bg-gray-50 p-3 rounded-lg">
         <div className="text-sm text-gray-600">Current Status</div>
         <div className="flex items-center gap-2 mt-1">
-          <div className={`w-3 h-3 rounded-full ${activity.color}`}></div>
+          <div 
+            className="w-3 h-3 rounded-full" 
+            style={{ backgroundColor: activity.color }}
+          ></div>
           <span className="font-medium">
             {activity.status === 'completed' ? '✓ Completed' : 
              activity.status === 'active' ? 'Currently Active' : 'Scheduled'}
