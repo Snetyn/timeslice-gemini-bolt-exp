@@ -4664,7 +4664,7 @@ export default function App() {
                       return (
                       <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
                         activity.status === 'completed'
-                          ? 'border-green-200 hover:bg-green-100 cursor-pointer'
+                          ? 'border-green-200 hover:bg-green-100 cursor-pointer completion-glow'
                           : activity.status === 'overtime'
                             ? 'border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer'
                           : activity.status === 'active' 
@@ -4679,7 +4679,8 @@ export default function App() {
                       style={{
                         backgroundColor: activity.status === 'completed' ? '#f0fdf4' : 
                                        activity.status === 'overtime' ? '#fef2f2' :
-                                       activity.status === 'active' ? '#eff6ff' : '#ffffff'
+                                       activity.status === 'active' ? '#eff6ff' : '#ffffff',
+                        boxShadow: activity.status === 'completed' ? '0 0 15px rgba(34, 197, 94, 0.3)' : undefined
                       }}
                       onClick={() => {
                         if (activity.status === 'scheduled') {
@@ -4689,16 +4690,49 @@ export default function App() {
                         }
                       }}
                       >
-                        {/* Progress Bar Background - Android Compatible */}
+                        {/* Enhanced Real-time Progress Bar */}
                         {settings.dailyShowActivityProgress && (
                           <div 
-                            className="absolute top-0 left-0 h-full transition-all duration-300 rounded-lg"
+                            className={`absolute top-0 left-0 h-full rounded-lg smooth-progress ${
+                              activity.status === 'active' ? 'real-time-fill progress-pulse' : 
+                              activity.status === 'completed' ? 'completion-glow' : ''
+                            }`}
                             style={{ 
                               width: `${Math.max(3, Math.min(100, activity.status === 'completed' ? 100 : displayProgress))}%`, 
-                              backgroundColor: activity.color,
-                              opacity: 0.8
+                              backgroundColor: activity.status === 'completed' ? '#22c55e' : activity.color,
+                              opacity: activity.status === 'completed' ? 0.9 : 
+                                      activity.status === 'active' ? 0.85 : 0.8,
+                              transition: activity.status === 'active' ? 'width 0.1s linear, opacity 0.3s ease' : 'all 0.3s ease'
                             }}
                           />
+                        )}
+                        
+                        {/* Completion burst effect */}
+                        {activity.status === 'completed' && settings.dailyShowActivityProgress && (
+                          <div 
+                            className="absolute inset-0 completion-burst rounded-lg pointer-events-none"
+                            style={{ 
+                              backgroundColor: 'transparent',
+                              border: '2px solid #22c55e'
+                            }}
+                          />
+                        )}
+                        
+                        {/* Real-time progress indicator for active activities */}
+                        {activity.status === 'active' && activity.startedAt && (
+                          <div className="absolute top-1 right-1 z-20">
+                            <div className="flex items-center gap-1 bg-blue-600 bg-opacity-90 text-white text-xs px-2 py-1 rounded-md">
+                              <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
+                              <span className="font-mono">
+                                {(() => {
+                                  const currentSessionSeconds = Math.floor((currentTime.getTime() - activity.startedAt) / 1000);
+                                  const totalSecondsSpent = currentSessionSeconds + (activity.timeSpent * 60);
+                                  const progress = Math.min(100, (totalSecondsSpent / (activity.duration * 60)) * 100);
+                                  return `${Math.round(progress)}%`;
+                                })()}
+                              </span>
+                            </div>
+                          </div>
                         )}
                         
                         {/* Compact Card Content */}

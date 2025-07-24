@@ -38,3 +38,71 @@ input[type="number"], input[type="text"] {
   min-height: 44px;
   min-width: 44px;
 }
+
+/* Real-time Activity Progress Animations */
+@keyframes realTimeFill {
+  0% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes completionBurst {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 15px rgba(34, 197, 94, 0.3);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 30px rgba(34, 197, 94, 0);
+  }
+}
+
+@keyframes completionGlow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(34, 197, 94, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(34, 197, 94, 0.8);
+  }
+}
+
+@keyframes progressPulse {
+  0%, 100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(1.02);
+  }
+}
+
+/* Progress Animation Classes */
+.real-time-fill {
+  animation: realTimeFill 2s ease-in-out infinite;
+}
+
+.progress-pulse {
+  animation: progressPulse 3s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+.completion-burst {
+  animation: completionBurst 1.5s ease-out;
+}
+
+.completion-glow {
+  animation: completionGlow 2s ease-in-out infinite;
+}
+
+.smooth-progress {
+  transition: width 0.1s linear;
+}
