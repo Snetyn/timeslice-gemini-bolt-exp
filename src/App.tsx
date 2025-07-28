@@ -2934,9 +2934,42 @@ export default function App() {
     } catch (e) { return 0; }
   });
 
-  const [isTimerActive, setIsTimerActive] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [currentActivityIndex, setCurrentActivityIndex] = useState(0);
+  const [isTimerActive, setIsTimerActive] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceSessionState');
+      if (saved) {
+        const sessionState = JSON.parse(saved);
+        return sessionState.isTimerActive || false;
+      }
+    } catch (e) {
+      console.error('Failed to load session state from localStorage:', e);
+    }
+    return false;
+  });
+  const [isPaused, setIsPaused] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceSessionState');
+      if (saved) {
+        const sessionState = JSON.parse(saved);
+        return sessionState.isPaused || false;
+      }
+    } catch (e) {
+      console.error('Failed to load session state from localStorage:', e);
+    }
+    return false;
+  });
+  const [currentActivityIndex, setCurrentActivityIndex] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceSessionState');
+      if (saved) {
+        const sessionState = JSON.parse(saved);
+        return sessionState.currentActivityIndex || 0;
+      }
+    } catch (e) {
+      console.error('Failed to load session state from localStorage:', e);
+    }
+    return 0;
+  });
   const [showSettings, setShowSettings] = useState(false);
   // Removed colorPickerState - using simple random colors instead
   // Removed favoriteColors state - using simple random colors instead
@@ -3434,6 +3467,21 @@ export default function App() {
     }
   }, [activities]);
 
+  // Save session state to localStorage
+  useEffect(() => {
+    try {
+      const sessionState = {
+        isTimerActive,
+        isPaused,
+        currentActivityIndex,
+        lastActiveTimestamp: isTimerActive && !isPaused ? Date.now() : null
+      };
+      localStorage.setItem('timeSliceSessionState', JSON.stringify(sessionState));
+    } catch (e) {
+      console.error('Failed to save session state to localStorage:', e);
+    }
+  }, [isTimerActive, isPaused, currentActivityIndex]);
+
   // Save flowmodoro state to localStorage
   useEffect(() => {
     try {
@@ -3485,6 +3533,74 @@ export default function App() {
       }
     }
   }, [dailyActivities, activeDailyActivity]);
+
+  // Restore session state and handle time gap on app load
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceSessionState');
+      if (saved) {
+        const sessionState = JSON.parse(saved);
+        
+        // If the session was active when the user left, handle the time gap
+        if (sessionState.isTimerActive && !sessionState.isPaused && sessionState.lastActiveTimestamp) {
+          const timeGapMs = Date.now() - sessionState.lastActiveTimestamp;
+          const timeGapSeconds = Math.floor(timeGapMs / 1000);
+          
+          // Only process time gap if it's reasonable (less than 24 hours)
+          if (timeGapSeconds > 0 && timeGapSeconds < 86400) {
+            console.log(`Resuming session after ${Math.floor(timeGapSeconds / 60)}m ${timeGapSeconds % 60}s gap`);
+            
+            // Apply the time gap to activities
+            setActivities(prev => {
+              let remainingGapSeconds = timeGapSeconds;
+              let newActivities = [...prev];
+              let currentIndex = sessionState.currentActivityIndex || 0;
+              
+              while (remainingGapSeconds > 0 && currentIndex < newActivities.length) {
+                const current = newActivities[currentIndex];
+                
+                if (!current || current.isCompleted) {
+                  currentIndex++;
+                  continue;
+                }
+                
+                if (current.countUp) {
+                  // For count-up activities, add all remaining time
+                  current.timeRemaining += remainingGapSeconds;
+                  remainingGapSeconds = 0;
+                } else {
+                  // For regular activities, subtract time
+                  const timeToSubtract = Math.min(remainingGapSeconds, current.timeRemaining);
+                  current.timeRemaining -= timeToSubtract;
+                  remainingGapSeconds -= timeToSubtract;
+                  
+                  if (current.timeRemaining <= 0) {
+                    current.isCompleted = true;
+                    currentIndex++;
+                  }
+                }
+              }
+              
+              // Update current activity index
+              if (currentIndex !== sessionState.currentActivityIndex) {
+                setTimeout(() => setCurrentActivityIndex(currentIndex), 0);
+              }
+              
+              // If all activities are completed, stop the timer
+              const allCompleted = newActivities.every(a => a.isCompleted);
+              if (allCompleted) {
+                setTimeout(() => setIsTimerActive(false), 0);
+              }
+              
+              return newActivities;
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Failed to restore session state:', e);
+    }
+  }, []); // Run only once on mount
 
   // Check if daily activities need to be reset for a new day
   useEffect(() => {
@@ -3688,6 +3804,12 @@ export default function App() {
                   setCurrentActivityIndex(nextIndex);
                 } else {
                   setIsTimerActive(false);
+                  // Clear session state when session ends naturally
+                  try {
+                    localStorage.removeItem('timeSliceSessionState');
+                  } catch (e) {
+                    console.error('Failed to clear session state:', e);
+                  }
                 }
               }
               secondsToProcess = 0; // Stop processing after completion
@@ -4579,6 +4701,13 @@ export default function App() {
       })),
     );
     setCurrentActivityIndex(0);
+    
+    // Clear session state from localStorage
+    try {
+      localStorage.removeItem('timeSliceSessionState');
+    } catch (e) {
+      console.error('Failed to clear session state from localStorage:', e);
+    }
   }, [calculateTotalSessionMinutes]);
 
   const switchToActivity = (index) => {
@@ -4620,6 +4749,12 @@ export default function App() {
     const allCompleted = updatedActivities.every(a => a.isCompleted);
     if (allCompleted) {
       setIsTimerActive(false);
+      // Clear session state when all activities are completed
+      try {
+        localStorage.removeItem('timeSliceSessionState');
+      } catch (e) {
+        console.error('Failed to clear session state:', e);
+      }
       return;
     }
 
@@ -4629,6 +4764,12 @@ export default function App() {
         setCurrentActivityIndex(nextIndex);
       } else {
         setIsTimerActive(false);
+        // Clear session state when no more activities
+        try {
+          localStorage.removeItem('timeSliceSessionState');
+        } catch (e) {
+          console.error('Failed to clear session state:', e);
+        }
       }
     }
   };
