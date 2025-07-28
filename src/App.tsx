@@ -13,6 +13,22 @@ interface ActivityTemplate {
   color: string;
   category?: string;
   tags?: string[];
+  // Time window scheduling properties
+  isAllDay?: boolean;
+  startTime?: string; // Time in HH:MM format (24-hour)
+  endTime?: string; // Time in HH:MM format (24-hour)
+  presetDuration?: number; // Duration in minutes for auto-created activities
+  // Recurring schedule properties
+  recurring?: {
+    type: 'none' | 'every-day' | 'specific-days-week' | 'specific-days-month' | 'specific-days-year' | 'interval' | 'repeat';
+    daysOfWeek?: number[]; // 0-6 (Sunday-Saturday)
+    daysOfMonth?: number[]; // 1-31
+    daysOfYear?: string[]; // MM-DD format
+    intervalDays?: number; // For interval type (e.g., every 2 days)
+    repeatDays?: number; // For repeat type (e.g., every 3 days)
+    isFlexible?: boolean; // Show each day until completed
+    alternatesDays?: boolean; // For alternate days option
+  };
 }
 
 // RPG Stats interfaces
@@ -1667,7 +1683,26 @@ const ActivityManagementPage = ({
     setEditingTemplate(template);
   };
 
-  const handleSaveTemplate = (templateData: { name: string; color: string; category?: string; tags?: string[] }) => {
+  const handleSaveTemplate = (templateData: { 
+    name: string; 
+    color: string; 
+    category?: string; 
+    tags?: string[];
+    isAllDay?: boolean;
+    startTime?: string;
+    endTime?: string;
+    presetDuration?: number;
+    recurring?: {
+      type: 'none' | 'every-day' | 'specific-days-week' | 'specific-days-month' | 'specific-days-year' | 'interval' | 'repeat';
+      daysOfWeek?: number[];
+      daysOfMonth?: number[];
+      daysOfYear?: string[];
+      intervalDays?: number;
+      repeatDays?: number;
+      isFlexible?: boolean;
+      alternatesDays?: boolean;
+    };
+  }) => {
     if (editingTemplate && editingTemplate.id) {
       // Update existing template
       setActivityTemplates(prev => 
@@ -1694,7 +1729,16 @@ const ActivityManagementPage = ({
       name: '',
       color: `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`,
       category: undefined,
-      tags: undefined
+      tags: undefined,
+      isAllDay: false,
+      startTime: undefined,
+      endTime: undefined,
+      presetDuration: 60, // Default 1 hour
+      recurring: {
+        type: 'none',
+        isFlexible: false,
+        alternatesDays: false
+      }
     });
   };
 
@@ -1955,6 +1999,60 @@ const ActivityManagementPage = ({
                           ))}
                         </div>
                       )}
+                      
+                      {/* Time Window Indicator */}
+                      {(template.isAllDay || (template.startTime && template.endTime)) && (
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded">
+                            <Icon name="clock" className="h-3 w-3" />
+                            {template.isAllDay ? (
+                              <span>All Day</span>
+                            ) : (
+                              <span>{template.startTime} - {template.endTime}</span>
+                            )}
+                          </div>
+                          {template.presetDuration && (
+                            <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                              <Icon name="timer" className="h-3 w-3" />
+                              <span>Default: {Math.floor(template.presetDuration / 60)}h {template.presetDuration % 60}m</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Recurring Schedule Indicator */}
+                      {template.recurring && template.recurring.type !== 'none' && (
+                        <div className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
+                          <Icon name="refresh-cw" className="h-3 w-3" />
+                          <span>
+                            {(() => {
+                              switch (template.recurring.type) {
+                                case 'every-day':
+                                  return template.recurring.isFlexible ? 'Daily (Flexible)' : 'Every Day';
+                                case 'specific-days-week':
+                                  const weekDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                                  const selectedDays = template.recurring.daysOfWeek
+                                    ?.map(day => weekDays[day])
+                                    .join(', ') || '';
+                                  return `${selectedDays}${template.recurring.isFlexible ? ' (Flex)' : ''}`;
+                                case 'specific-days-month':
+                                  const monthDays = template.recurring.daysOfMonth?.slice(0, 3).join(', ') || '';
+                                  const hasMore = (template.recurring.daysOfMonth?.length || 0) > 3;
+                                  return `${monthDays}${hasMore ? '...' : ''}${template.recurring.isFlexible ? ' (Flex)' : ''}`;
+                                case 'specific-days-year':
+                                  return `Yearly${template.recurring.isFlexible ? ' (Flex)' : ''}`;
+                                case 'interval':
+                                  return `Every ${template.recurring.intervalDays}d${template.recurring.isFlexible ? ' (Flex)' : ''}`;
+                                case 'repeat':
+                                  return `${template.recurring.repeatCount}x${template.recurring.isFlexible ? ' (Flex)' : ''}`;
+                                default:
+                                  return 'Recurring';
+                              }
+                            })()}
+                          </span>
+                        </div>
+                      )}
+                      
                       <div className="flex items-center space-x-2">
                         <Button
                           size="sm"
@@ -2149,6 +2247,262 @@ const ActivityManagementPage = ({
                 </div>
                 <p className="text-xs text-gray-500 mt-1">Separate tags with commas or click suggestions above</p>
               </div>
+
+              {/* Time Window Configuration */}
+              <div className="border-t pt-4">
+                <Label className="text-xs sm:text-sm font-medium">Time Window Scheduling</Label>
+                <p className="text-xs text-gray-500 mb-3">Set when this activity should automatically appear in session and daily modes</p>
+                
+                <div className="space-y-3">
+                  {/* All Day Toggle */}
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="template-allday"
+                      checked={editingTemplate.isAllDay || false}
+                      onChange={(e) => setEditingTemplate(prev => prev ? ({ 
+                        ...prev, 
+                        isAllDay: e.target.checked,
+                        // Clear time windows if setting to all day
+                        startTime: e.target.checked ? undefined : prev.startTime,
+                        endTime: e.target.checked ? undefined : prev.endTime
+                      }) : null)}
+                      className="rounded"
+                    />
+                    <Label htmlFor="template-allday" className="text-xs sm:text-sm">
+                      All Day Activity
+                    </Label>
+                  </div>
+
+                  {/* Time Window Inputs */}
+                  {!editingTemplate.isAllDay && (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label htmlFor="template-starttime" className="text-xs">Start Time</Label>
+                          <Input
+                            id="template-starttime"
+                            type="time"
+                            value={editingTemplate.startTime || ''}
+                            onChange={(e) => setEditingTemplate(prev => prev ? ({ 
+                              ...prev, 
+                              startTime: e.target.value || undefined
+                            }) : null)}
+                            className="h-8 text-xs mt-1"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="template-endtime" className="text-xs">End Time</Label>
+                          <Input
+                            id="template-endtime"
+                            type="time"
+                            value={editingTemplate.endTime || ''}
+                            onChange={(e) => setEditingTemplate(prev => prev ? ({ 
+                              ...prev, 
+                              endTime: e.target.value || undefined
+                            }) : null)}
+                            className="h-8 text-xs mt-1"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        Activity will automatically appear when current time is within this window
+                      </p>
+                    </div>
+                  )}
+
+                  {editingTemplate.isAllDay && (
+                    <p className="text-xs text-gray-500 bg-blue-50 p-2 rounded">
+                      This activity will always appear in both session and daily modes
+                    </p>
+                  )}
+
+                  {/* Preset Duration Setting */}
+                  <div className="space-y-2 pt-2 border-t">
+                    <Label htmlFor="template-duration" className="text-xs sm:text-sm font-medium">Default Duration</Label>
+                    <div className="flex items-center space-x-2">
+                      <Input
+                        id="template-duration"
+                        type="number"
+                        min="15"
+                        max="480"
+                        step="15"
+                        value={editingTemplate.presetDuration || 60}
+                        onChange={(e) => setEditingTemplate(prev => prev ? ({ 
+                          ...prev, 
+                          presetDuration: parseInt(e.target.value) || 60
+                        }) : null)}
+                        className="h-8 text-xs flex-1"
+                      />
+                      <span className="text-xs text-gray-500">minutes</span>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Duration for activities auto-created from this template 
+                      ({Math.floor((editingTemplate.presetDuration || 60) / 60)}h {(editingTemplate.presetDuration || 60) % 60}m - {Math.round(((editingTemplate.presetDuration || 60) / (24 * 60)) * 100 * 10) / 10}% of day)
+                    </p>
+                  </div>
+
+                  {/* Recurring Schedule Settings */}
+                  <div className="space-y-3 pt-3 border-t">
+                    <Label className="text-xs sm:text-sm font-medium">Recurring Schedule</Label>
+                    <p className="text-xs text-gray-500 mb-3">Set how often this activity should automatically appear</p>
+                    
+                    <div className="space-y-2">
+                      {/* Recurring Type Selection */}
+                      <div className="space-y-2">
+                        {[
+                          { value: 'none', label: 'No repeat (manual only)' },
+                          { value: 'every-day', label: 'Every day' },
+                          { value: 'specific-days-week', label: 'Specific days of the week' },
+                          { value: 'specific-days-month', label: 'Specific days of the month' },
+                          { value: 'specific-days-year', label: 'Specific days of the year' },
+                          { value: 'interval', label: 'Some days per period' },
+                          { value: 'repeat', label: 'Repeat' }
+                        ].map(option => (
+                          <div key={option.value} className="flex items-center space-x-2">
+                            <input
+                              type="radio"
+                              id={`recurring-${option.value}`}
+                              name="recurringType"
+                              value={option.value}
+                              checked={(editingTemplate.recurring?.type || 'none') === option.value}
+                              onChange={(e) => setEditingTemplate(prev => prev ? ({
+                                ...prev,
+                                recurring: {
+                                  ...prev.recurring,
+                                  type: e.target.value as any,
+                                  // Reset other properties when type changes
+                                  daysOfWeek: e.target.value === 'specific-days-week' ? [1, 2, 3, 4, 5] : undefined,
+                                  daysOfMonth: e.target.value === 'specific-days-month' ? [1] : undefined,
+                                  daysOfYear: e.target.value === 'specific-days-year' ? ['01-01'] : undefined,
+                                  intervalDays: e.target.value === 'interval' ? 2 : undefined,
+                                  repeatDays: e.target.value === 'repeat' ? 2 : undefined,
+                                  isFlexible: false,
+                                  alternatesDays: false
+                                }
+                              }) : null)}
+                              className="rounded"
+                            />
+                            <Label htmlFor={`recurring-${option.value}`} className="text-xs sm:text-sm cursor-pointer">
+                              {option.label}
+                            </Label>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Specific Days of Week */}
+                      {editingTemplate.recurring?.type === 'specific-days-week' && (
+                        <div className="space-y-2 pl-4 border-l-2 border-blue-200">
+                          <Label className="text-xs font-medium">Days of the Week</Label>
+                          <div className="grid grid-cols-4 gap-2">
+                            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => (
+                              <div key={day} className="flex items-center space-x-1">
+                                <input
+                                  type="checkbox"
+                                  id={`day-${index}`}
+                                  checked={editingTemplate.recurring?.daysOfWeek?.includes(index) || false}
+                                  onChange={(e) => {
+                                    const currentDays = editingTemplate.recurring?.daysOfWeek || [];
+                                    const newDays = e.target.checked 
+                                      ? [...currentDays, index].sort()
+                                      : currentDays.filter(d => d !== index);
+                                    setEditingTemplate(prev => prev ? ({
+                                      ...prev,
+                                      recurring: { 
+                                        type: prev.recurring?.type || 'specific-days-week',
+                                        ...prev.recurring, 
+                                        daysOfWeek: newDays 
+                                      }
+                                    }) : null);
+                                  }}
+                                  className="rounded"
+                                />
+                                <Label htmlFor={`day-${index}`} className="text-xs cursor-pointer">{day}</Label>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Repeat Interval */}
+                      {editingTemplate.recurring?.type === 'repeat' && (
+                        <div className="space-y-2 pl-4 border-l-2 border-green-200">
+                          <Label className="text-xs font-medium">Repeat Interval</Label>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs">Every</span>
+                            <Input
+                              type="number"
+                              min="1"
+                              max="30"
+                              value={editingTemplate.recurring?.repeatDays || 2}
+                              onChange={(e) => setEditingTemplate(prev => prev ? ({
+                                ...prev,
+                                recurring: { 
+                                  type: prev.recurring?.type || 'repeat',
+                                  ...prev.recurring, 
+                                  repeatDays: parseInt(e.target.value) || 2 
+                                }
+                              }) : null)}
+                              className="h-6 w-16 text-xs"
+                            />
+                            <span className="text-xs">days</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Flexible Option */}
+                      {editingTemplate.recurring?.type !== 'none' && (
+                        <div className="space-y-2 pl-4 border-l-2 border-purple-200">
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id="flexible-recurring"
+                              checked={editingTemplate.recurring?.isFlexible || false}
+                              onChange={(e) => setEditingTemplate(prev => prev ? ({
+                                ...prev,
+                                recurring: { 
+                                  type: prev.recurring?.type || 'none',
+                                  ...prev.recurring, 
+                                  isFlexible: e.target.checked 
+                                }
+                              }) : null)}
+                              className="rounded"
+                            />
+                            <Label htmlFor="flexible-recurring" className="text-xs sm:text-sm cursor-pointer font-medium text-purple-700">
+                              Flexible
+                            </Label>
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            It will be shown each day until completed.
+                          </p>
+                          
+                          {editingTemplate.recurring?.type === 'repeat' && (
+                            <div className="flex items-center space-x-2 mt-2">
+                              <input
+                                type="checkbox"
+                                id="alternate-days"
+                                checked={editingTemplate.recurring?.alternatesDays || false}
+                                onChange={(e) => setEditingTemplate(prev => prev ? ({
+                                  ...prev,
+                                  recurring: { 
+                                    type: prev.recurring?.type || 'repeat',
+                                    ...prev.recurring, 
+                                    alternatesDays: e.target.checked 
+                                  }
+                                }) : null)}
+                                className="rounded"
+                              />
+                              <Label htmlFor="alternate-days" className="text-xs cursor-pointer">
+                                Alternate days
+                              </Label>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
               
               <div className="flex justify-end space-x-2 pt-2 sm:pt-4">
                 <Button variant="outline" onClick={() => setEditingTemplate(null)} className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4">
@@ -2159,7 +2513,12 @@ const ActivityManagementPage = ({
                     name: editingTemplate.name,
                     color: editingTemplate.color,
                     category: editingTemplate.category,
-                    tags: editingTemplate.tags
+                    tags: editingTemplate.tags,
+                    isAllDay: editingTemplate.isAllDay,
+                    startTime: editingTemplate.startTime,
+                    endTime: editingTemplate.endTime,
+                    presetDuration: editingTemplate.presetDuration,
+                    recurring: editingTemplate.recurring
                   })}
                   disabled={!editingTemplate.name.trim()}
                   className="h-8 sm:h-9 text-xs sm:text-sm px-3 sm:px-4"
@@ -3108,16 +3467,6 @@ export default function App() {
   
   // Daily Mode Time State (Step 9: Live Time)
   const [currentTime, setCurrentTime] = useState(new Date());
-  
-  // Update current time every second for Daily Mode
-  useEffect(() => {
-    if (currentMode === 'daily') {
-      const interval = setInterval(() => {
-        setCurrentTime(new Date());
-      }, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [currentMode]);
 
   // Step 12: Update time spent for active activities + Flowmodoro accumulation
   useEffect(() => {
@@ -3312,6 +3661,182 @@ export default function App() {
       console.error('Failed to save RPG tags to localStorage:', e);
     }
   }, [rpgTags]);
+
+  // Helper function to check if a template should be active based on recurring schedule
+  const isTemplateActiveToday = useCallback((template: ActivityTemplate, currentDate: Date) => {
+    // If no recurring schedule, only check time windows
+    if (!template.recurring || template.recurring.type === 'none') {
+      return false;
+    }
+
+    const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 6 = Saturday
+    const dayOfMonth = currentDate.getDate();
+    const monthDay = `${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(dayOfMonth).padStart(2, '0')}`;
+
+    switch (template.recurring.type) {
+      case 'every-day':
+        return true;
+
+      case 'specific-days-week':
+        return template.recurring.daysOfWeek?.includes(dayOfWeek) || false;
+
+      case 'specific-days-month':
+        return template.recurring.daysOfMonth?.includes(dayOfMonth) || false;
+
+      case 'specific-days-year':
+        return template.recurring.daysOfYear?.includes(monthDay) || false;
+
+      case 'interval':
+        // Simple interval logic - could be enhanced with a start date
+        const daysSinceEpoch = Math.floor(currentDate.getTime() / (1000 * 60 * 60 * 24));
+        return daysSinceEpoch % (template.recurring.intervalDays || 1) === 0;
+
+      case 'repeat':
+        // Similar to interval but with different semantics
+        const daysSinceEpoch2 = Math.floor(currentDate.getTime() / (1000 * 60 * 60 * 24));
+        const interval = template.recurring.repeatDays || 2;
+        
+        if (template.recurring.alternatesDays) {
+          // Alternate days logic
+          return daysSinceEpoch2 % 2 === 0;
+        }
+        
+        return daysSinceEpoch2 % interval === 0;
+
+      default:
+        return false;
+    }
+  }, []);
+
+  // Time window activity syncing function
+  const syncTimeWindowActivities = useCallback(() => {
+    const now = new Date();
+    const currentTimeStr = now.toTimeString().slice(0, 5); // HH:MM format
+    
+    // Check which templates should be active now based on both time windows and recurring schedules
+    const activeTemplates = activityTemplates.filter(template => {
+      // First check if it's scheduled for today based on recurring pattern
+      const isScheduledToday = isTemplateActiveToday(template, now);
+      
+      // If it has time windows, also check if current time is within the window
+      if (template.startTime && template.endTime && !template.isAllDay) {
+        const start = template.startTime;
+        const end = template.endTime;
+        let isInTimeWindow = false;
+        
+        if (start <= end) {
+          // Same day window (e.g., 09:00 - 17:00)
+          isInTimeWindow = currentTimeStr >= start && currentTimeStr <= end;
+        } else {
+          // Overnight window (e.g., 22:00 - 06:00)
+          isInTimeWindow = currentTimeStr >= start || currentTimeStr <= end;
+        }
+        
+        return isScheduledToday && isInTimeWindow;
+      }
+      
+      // For all-day activities or activities without time windows, just check if scheduled today
+      if (template.isAllDay || (!template.startTime && !template.endTime)) {
+        return isScheduledToday;
+      }
+      
+      return false;
+    });
+
+    // For session mode - add missing templates to activities
+    if (currentMode === 'session') {
+      const existingActivityNames = activities.map(a => a.name.toLowerCase());
+      
+      activeTemplates.forEach(template => {
+        const templateNameLower = template.name.toLowerCase();
+        if (!existingActivityNames.includes(templateNameLower)) {
+          // Add template as new activity to session
+          const duration = template.presetDuration || 60; // Use preset duration or default 1 hour
+          const newActivity = {
+            id: `activity-${Date.now()}-${Math.random()}`,
+            name: template.name,
+            color: template.color,
+            duration: duration,
+            percentage: 0,
+            timeRemaining: duration * 60, // Convert minutes to seconds
+            isCompleted: false,
+            isLocked: false,
+            countUp: false,
+            tags: template.tags
+          };
+          
+          setActivities(prev => [...prev, newActivity]);
+          console.log(`Auto-added recurring activity from template: ${template.name} (${duration}m)`);
+        }
+      });
+    }
+
+    // For daily mode - add missing templates to daily activities
+    if (currentMode === 'daily') {
+      const existingDailyActivityNames = dailyActivities.map(a => a.name.toLowerCase());
+      
+      activeTemplates.forEach(template => {
+        const templateNameLower = template.name.toLowerCase();
+        if (!existingDailyActivityNames.includes(templateNameLower)) {
+          // Check if this is a flexible recurring activity that was already completed today
+          const wasCompletedToday = template.recurring?.isFlexible && 
+            dailyActivities.some(a => 
+              a.name.toLowerCase() === templateNameLower && 
+              a.status === 'completed'
+            );
+          
+          // Skip adding if it was already completed today and is flexible
+          if (wasCompletedToday) {
+            return;
+          }
+          
+          // Add template as new daily activity
+          const duration = template.presetDuration || (template.isAllDay ? 120 : 60); // Use preset or smart default
+          const percentage = (duration / (24 * 60)) * 100;
+          
+          const newDailyActivity = {
+            id: `activity-${Date.now()}-${Math.random()}`,
+            name: template.name,
+            color: template.color,
+            duration: duration,
+            percentage: Math.round(percentage * 10) / 10,
+            status: 'scheduled',
+            isActive: false,
+            timeSpent: 0,
+            startedAt: null,
+            subtasks: [],
+            tags: template.tags
+          };
+          
+          setDailyActivities(prev => [...prev, newDailyActivity]);
+          console.log(`Auto-added recurring daily activity from template: ${template.name} (${duration}m)`);
+        }
+      });
+    }
+  }, [activityTemplates, activities, dailyActivities, currentMode, isTemplateActiveToday]);
+
+  // Update current time every second for Daily Mode and sync time-window activities
+  useEffect(() => {
+    if (currentMode === 'daily') {
+      const interval = setInterval(() => {
+        setCurrentTime(new Date());
+        // Check for time-window activities every minute (when seconds are 0)
+        const now = new Date();
+        if (now.getSeconds() === 0) {
+          syncTimeWindowActivities();
+        }
+      }, 1000);
+      return () => clearInterval(interval);
+    } else if (currentMode === 'session') {
+      // For session mode, check time-window activities once when switching to session mode
+      // and then every 5 minutes
+      syncTimeWindowActivities();
+      const interval = setInterval(() => {
+        syncTimeWindowActivities();
+      }, 5 * 60 * 1000); // Every 5 minutes
+      return () => clearInterval(interval);
+    }
+  }, [currentMode, syncTimeWindowActivities]);
 
   // Helper function to check if flowmodoro should reset
   const checkIfShouldReset = (currentTime, lastResetTime) => {
