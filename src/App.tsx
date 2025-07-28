@@ -15,6 +15,33 @@ interface ActivityTemplate {
   tags?: string[];
 }
 
+// RPG Stats interfaces
+interface RPGTag {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
+  createdAt: Date;
+}
+
+interface RPGStat {
+  tagId: string;
+  tagName: string;
+  totalMinutes: number;
+  sessionMinutes: number;
+  dailyMinutes: number;
+  weeklyMinutes: number;
+  level: number;
+  experience: number;
+  color: string;
+}
+
+interface RPGBalance {
+  current: RPGStat[];
+  suggested: RPGStat[];
+  balanceScore: number;
+}
+
 // --- Self-Contained UI Components ---
 
 const Icon = ({ name, className }) => {
@@ -120,6 +147,519 @@ const Card = ({ className = '', children }) => <div className={`rounded-lg borde
 const CardHeader = ({ className = '', children }) => <div className={`flex flex-col space-y-1.5 p-6 ${className}`}>{children}</div>;
 const CardTitle = ({ className = '', children }) => <h3 className={`text-2xl font-semibold leading-none tracking-tight ${className}`}>{children}</h3>;
 const CardContent = ({ className = '', children }) => <div className={`p-6 pt-0 ${className}`}>{children}</div>;
+
+// RPG Stats Radar Chart Component
+const RPGStatsChart = ({ stats, suggestedStats, size = 400 }) => {
+  const center = size / 2;
+  const maxRadius = center - 60;
+  const rings = 5; // Number of concentric circles
+  
+  // Calculate angle for each stat
+  const angleStep = (2 * Math.PI) / stats.length;
+  
+  // Generate ring paths
+  const ringPaths = Array.from({ length: rings }, (_, i) => {
+    const radius = (maxRadius / rings) * (i + 1);
+    const points = stats.map((_, index) => {
+      const angle = index * angleStep - Math.PI / 2; // Start from top
+      const x = center + Math.cos(angle) * radius;
+      const y = center + Math.sin(angle) * radius;
+      return `${x},${y}`;
+    });
+    return `M ${points.join(' L ')} Z`;
+  });
+  
+  // Generate current stats path
+  const currentPath = stats.map((stat, index) => {
+    const angle = index * angleStep - Math.PI / 2;
+    const normalizedValue = Math.min(stat.level / 20, 1); // Cap at level 20
+    const radius = maxRadius * normalizedValue;
+    const x = center + Math.cos(angle) * radius;
+    const y = center + Math.sin(angle) * radius;
+    return `${x},${y}`;
+  });
+  
+  // Generate suggested stats path
+  const suggestedPath = suggestedStats.map((stat, index) => {
+    const angle = index * angleStep - Math.PI / 2;
+    const normalizedValue = Math.min(stat.level / 20, 1);
+    const radius = maxRadius * normalizedValue;
+    const x = center + Math.cos(angle) * radius;
+    const y = center + Math.sin(angle) * radius;
+    return `${x},${y}`;
+  });
+  
+  return (
+    <div className="flex flex-col items-center">
+      <svg width={size} height={size} className="bg-slate-50 rounded-lg border">
+        {/* Grid circles */}
+        {Array.from({ length: rings }).map((_, i) => (
+          <circle
+            key={i}
+            cx={center}
+            cy={center}
+            r={(maxRadius / rings) * (i + 1)}
+            fill="none"
+            stroke="#e2e8f0"
+            strokeWidth="1"
+          />
+        ))}
+        
+        {/* Grid lines */}
+        {stats.map((_, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const x = center + Math.cos(angle) * maxRadius;
+          const y = center + Math.sin(angle) * maxRadius;
+          return (
+            <line
+              key={index}
+              x1={center}
+              y1={center}
+              x2={x}
+              y2={y}
+              stroke="#e2e8f0"
+              strokeWidth="1"
+            />
+          );
+        })}
+        
+        {/* Suggested stats area (lighter opacity) */}
+        <path
+          d={`M ${suggestedPath.join(' L ')} Z`}
+          fill="rgba(59, 130, 246, 0.2)"
+          stroke="rgba(59, 130, 246, 0.4)"
+          strokeWidth="2"
+          strokeDasharray="5,5"
+        />
+        
+        {/* Current stats area */}
+        <path
+          d={`M ${currentPath.join(' L ')} Z`}
+          fill="rgba(59, 130, 246, 0.3)"
+          stroke="#3b82f6"
+          strokeWidth="3"
+        />
+        
+        {/* Stat points */}
+        {stats.map((stat, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const normalizedValue = Math.min(stat.level / 20, 1);
+          const radius = maxRadius * normalizedValue;
+          const x = center + Math.cos(angle) * radius;
+          const y = center + Math.sin(angle) * radius;
+          
+          return (
+            <circle
+              key={stat.tagId}
+              cx={x}
+              cy={y}
+              r="6"
+              fill={stat.color}
+              stroke="white"
+              strokeWidth="2"
+            />
+          );
+        })}
+        
+        {/* Labels */}
+        {stats.map((stat, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const labelRadius = maxRadius + 30;
+          const x = center + Math.cos(angle) * labelRadius;
+          const y = center + Math.sin(angle) * labelRadius;
+          
+          return (
+            <text
+              key={`label-${stat.tagId}`}
+              x={x}
+              y={y}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="text-sm font-medium fill-slate-700"
+            >
+              {stat.tagName}
+            </text>
+          );
+        })}
+        
+        {/* Level indicators */}
+        {stats.map((stat, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const labelRadius = maxRadius + 50;
+          const x = center + Math.cos(angle) * labelRadius;
+          const y = center + Math.sin(angle) * labelRadius + 15;
+          
+          return (
+            <text
+              key={`level-${stat.tagId}`}
+              x={x}
+              y={y}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="text-xs fill-slate-500"
+            >
+              Lv.{stat.level}
+            </text>
+          );
+        })}
+      </svg>
+      
+      {/* Legend */}
+      <div className="mt-4 flex flex-wrap gap-4 justify-center">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-blue-500 rounded"></div>
+          <span className="text-sm">Current Stats</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 border-2 border-blue-400 border-dashed bg-blue-200 rounded"></div>
+          <span className="text-sm">Suggested Balance</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// RPG Stats Page Component
+const RPGStatsPage = ({ 
+  rpgBalance, 
+  rpgTags, 
+  activities, 
+  dailyActivities, 
+  onBackToTimer, 
+  onAddTag, 
+  onUpdateTag, 
+  onRemoveTag,
+  onAddTagToActivity,
+  onRemoveTagFromActivity 
+}) => {
+  const [activeTab, setActiveTab] = useState('overview');
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#3b82f6');
+  const [newTagDescription, setNewTagDescription] = useState('');
+
+  const handleAddTag = () => {
+    if (newTagName.trim()) {
+      onAddTag(newTagName, newTagColor, newTagDescription);
+      setNewTagName('');
+      setNewTagDescription('');
+    }
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">🎮 RPG Life Stats</h1>
+          <p className="text-gray-600">Track your life balance and level up different areas</p>
+        </div>
+        <Button onClick={onBackToTimer} variant="outline">
+          ← Back to Timer
+        </Button>
+      </div>
+
+      {/* Balance Score */}
+      <Card>
+        <CardContent className="p-6">
+          <div className="text-center">
+            <div className="text-4xl font-bold text-blue-600 mb-2">
+              {rpgBalance.balanceScore}%
+            </div>
+            <div className="text-lg text-gray-600 mb-4">Life Balance Score</div>
+            <div className="w-full bg-gray-200 rounded-full h-3">
+              <div 
+                className="bg-gradient-to-r from-blue-500 to-green-500 h-3 rounded-full transition-all duration-300"
+                style={{ width: `${rpgBalance.balanceScore}%` }}
+              ></div>
+            </div>
+            <p className="text-sm text-gray-500 mt-2">
+              {rpgBalance.balanceScore >= 80 ? "🌟 Excellent balance!" :
+               rpgBalance.balanceScore >= 60 ? "✨ Good balance" :
+               rpgBalance.balanceScore >= 40 ? "⚡ Room for improvement" :
+               "🔥 Focus needed"}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Navigation Tabs */}
+      <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+        <button
+          onClick={() => setActiveTab('overview')}
+          className={`flex-1 py-2 px-4 text-sm font-medium rounded-md transition-colors ${
+            activeTab === 'overview' 
+              ? 'bg-white text-blue-600 shadow-sm' 
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          📊 Overview
+        </button>
+        <button
+          onClick={() => setActiveTab('tags')}
+          className={`flex-1 py-2 px-4 text-sm font-medium rounded-md transition-colors ${
+            activeTab === 'tags' 
+              ? 'bg-white text-blue-600 shadow-sm' 
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          🏷️ Manage Tags
+        </button>
+        <button
+          onClick={() => setActiveTab('activities')}
+          className={`flex-1 py-2 px-4 text-sm font-medium rounded-md transition-colors ${
+            activeTab === 'activities' 
+              ? 'bg-white text-blue-600 shadow-sm' 
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          🎯 Tag Activities
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'overview' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Radar Chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Life Areas Radar</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <RPGStatsChart 
+                stats={rpgBalance.current} 
+                suggestedStats={rpgBalance.suggested}
+                size={350}
+              />
+            </CardContent>
+          </Card>
+
+          {/* Stats List */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Area Details</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {rpgBalance.current.map(stat => (
+                  <div key={stat.tagId} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center space-x-3">
+                      <div 
+                        className="w-4 h-4 rounded-full"
+                        style={{ backgroundColor: stat.color }}
+                      ></div>
+                      <div>
+                        <div className="font-medium">{stat.tagName}</div>
+                        <div className="text-sm text-gray-500">
+                          {stat.totalMinutes}m total • Session: {stat.sessionMinutes}m • Daily: {stat.dailyMinutes}m
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-bold text-lg">Lv.{stat.level}</div>
+                      <div className="text-xs text-gray-500">{stat.experience}/60 XP</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {activeTab === 'tags' && (
+        <div className="space-y-6">
+          {/* Add New Tag */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Add New Life Area Tag</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <Input
+                  placeholder="Tag name (e.g., Fitness)"
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                />
+                <input
+                  type="color"
+                  value={newTagColor}
+                  onChange={(e) => setNewTagColor(e.target.value)}
+                  className="h-10 w-full rounded border border-gray-300 cursor-pointer"
+                />
+                <Input
+                  placeholder="Description (optional)"
+                  value={newTagDescription}
+                  onChange={(e) => setNewTagDescription(e.target.value)}
+                />
+                <Button onClick={handleAddTag} disabled={!newTagName.trim()}>
+                  Add Tag
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Existing Tags */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Existing Life Area Tags</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {rpgTags.map(tag => (
+                  <div key={tag.id} className="p-4 border rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center space-x-2">
+                        <div 
+                          className="w-4 h-4 rounded-full"
+                          style={{ backgroundColor: tag.color }}
+                        ></div>
+                        <span className="font-medium">{tag.name}</span>
+                      </div>
+                      <Button 
+                        size="sm" 
+                        variant="destructive"
+                        onClick={() => onRemoveTag(tag.id)}
+                      >
+                        <Icon name="trash2" className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    {tag.description && (
+                      <p className="text-sm text-gray-600">{tag.description}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {activeTab === 'activities' && (
+        <div className="space-y-6">
+          {/* Session Activities */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Session Activities</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {activities.map(activity => (
+                  <ActivityTagManager
+                    key={activity.id}
+                    activity={activity}
+                    rpgTags={rpgTags}
+                    onAddTag={(tagId) => onAddTagToActivity(activity.id, tagId, false)}
+                    onRemoveTag={(tagId) => onRemoveTagFromActivity(activity.id, tagId, false)}
+                  />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Daily Activities */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Daily Activities</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {dailyActivities.map(activity => (
+                  <ActivityTagManager
+                    key={activity.id}
+                    activity={activity}
+                    rpgTags={rpgTags}
+                    onAddTag={(tagId) => onAddTagToActivity(activity.id, tagId, true)}
+                    onRemoveTag={(tagId) => onRemoveTagFromActivity(activity.id, tagId, true)}
+                  />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Activity Tag Manager Component
+const ActivityTagManager = ({ activity, rpgTags, onAddTag, onRemoveTag }) => {
+  const [showTagDropdown, setShowTagDropdown] = useState(false);
+  
+  const assignedTags = activity.tags || [];
+  const availableTags = rpgTags.filter(tag => !assignedTags.includes(tag.id));
+
+  return (
+    <div className="p-4 border rounded-lg">
+      <div className="flex items-center justify-between mb-3">
+        <span className="font-medium">{activity.name}</span>
+        <div className="text-sm text-gray-500">
+          {activity.duration || activity.timeSpent || 0}m
+        </div>
+      </div>
+      
+      {/* Assigned Tags */}
+      <div className="flex flex-wrap gap-2 mb-3">
+        {assignedTags.map(tagId => {
+          const tag = rpgTags.find(t => t.id === tagId);
+          if (!tag) return null;
+          
+          return (
+            <div 
+              key={tagId}
+              className="flex items-center space-x-1 px-2 py-1 rounded-full text-sm"
+              style={{ backgroundColor: tag.color, color: 'white' }}
+            >
+              <span>{tag.name}</span>
+              <button
+                onClick={() => onRemoveTag(tagId)}
+                className="hover:bg-black hover:bg-opacity-20 rounded-full p-0.5"
+              >
+                <Icon name="x" className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })}
+        
+        {assignedTags.length === 0 && (
+          <span className="text-sm text-gray-500 italic">No tags assigned</span>
+        )}
+      </div>
+
+      {/* Add Tag Dropdown */}
+      <div className="relative">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setShowTagDropdown(!showTagDropdown)}
+          disabled={availableTags.length === 0}
+        >
+          + Add Tag
+        </Button>
+        
+        {showTagDropdown && availableTags.length > 0 && (
+          <div className="absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg z-10 min-w-48">
+            {availableTags.map(tag => (
+              <button
+                key={tag.id}
+                onClick={() => {
+                  onAddTag(tag.id);
+                  setShowTagDropdown(false);
+                }}
+                className="w-full flex items-center space-x-2 px-3 py-2 hover:bg-gray-50 text-left"
+              >
+                <div 
+                  className="w-3 h-3 rounded-full"
+                  style={{ backgroundColor: tag.color }}
+                ></div>
+                <span>{tag.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const Separator = ({ className = '' }) => <hr className={`-mx-6 border-slate-200 ${className}`} />;
 
@@ -2042,7 +2582,7 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
     duration: 60,
     percentage: 4.2,
     status: 'scheduled',
-    subtasks: []
+    subtasks: [] as Subtask[]
   });
 
   const [newSubtaskName, setNewSubtaskName] = useState('');
@@ -2353,7 +2893,8 @@ export default function App() {
             timeRemaining: Number(activity.timeRemaining || 0),
             isCompleted: Boolean(activity.isCompleted),
             isLocked: Boolean(activity.isLocked),
-            countUp: Boolean(activity.countUp || false)
+            countUp: Boolean(activity.countUp || false),
+            tags: activity.tags || [] // Ensure tags array exists
           }));
         }
       }
@@ -2361,8 +2902,8 @@ export default function App() {
       console.error("Failed to load activities from localStorage", e);
     }
     return [
-      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false },
-      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false },
+      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false, tags: ['1'] },
+      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false, tags: ['2'] },
     ];
   });
 
@@ -2452,7 +2993,8 @@ export default function App() {
         return parsed.map((activity: any) => ({
           ...activity,
           startedAt: activity.startedAt ? new Date(activity.startedAt) : null,
-          subtasks: activity.subtasks || []
+          subtasks: activity.subtasks || [],
+          tags: activity.tags || [] // Ensure tags array exists
         }));
       }
     } catch (e) {
@@ -2471,7 +3013,8 @@ export default function App() {
         isActive: false,
         timeSpent: 0,
         startedAt: null,
-        subtasks: []
+        subtasks: [],
+        tags: ['1'] // Default to Work tag
       },
       {
         id: 'exercise-1', 
@@ -2483,7 +3026,8 @@ export default function App() {
         isActive: false,
         timeSpent: 0,
         startedAt: null,
-        subtasks: []
+        subtasks: [],
+        tags: ['2'] // Default to Health tag
       },
       {
         id: 'reading-1',
@@ -2495,7 +3039,8 @@ export default function App() {
         isActive: false,
         timeSpent: 0,
         startedAt: null,
-        subtasks: []
+        subtasks: [],
+        tags: ['3'] // Default to Learning tag
       }
     ];
   });
@@ -2675,7 +3220,29 @@ export default function App() {
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
 
   // Navigation State for Activity Management Page
-  const [currentPage, setCurrentPage] = useState('timer'); // 'timer' or 'manage-activities'
+  const [currentPage, setCurrentPage] = useState('timer'); // 'timer', 'manage-activities', or 'rpg-stats'
+
+  // RPG Tags State (NEW)
+  const [rpgTags, setRpgTags] = useState<RPGTag[]>(() => {
+    const defaultTags: RPGTag[] = [
+      { id: '1', name: 'Work', color: '#3b82f6', description: 'Professional development and career', createdAt: new Date() },
+      { id: '2', name: 'Health', color: '#10b981', description: 'Physical and mental wellbeing', createdAt: new Date() },
+      { id: '3', name: 'Learning', color: '#8b5cf6', description: 'Education and skill development', createdAt: new Date() },
+      { id: '4', name: 'Social', color: '#f59e0b', description: 'Relationships and social activities', createdAt: new Date() },
+      { id: '5', name: 'Creative', color: '#ef4444', description: 'Art, music, and creative pursuits', createdAt: new Date() },
+      { id: '6', name: 'Spiritual', color: '#06b6d4', description: 'Meditation, reflection, and spiritual growth', createdAt: new Date() }
+    ];
+    
+    try {
+      const saved = localStorage.getItem('timeSliceRPGTags');
+      return saved ? JSON.parse(saved).map(tag => ({
+        ...tag,
+        createdAt: new Date(tag.createdAt)
+      })) : defaultTags;
+    } catch (e) {
+      return defaultTags;
+    }
+  });
 
   // Activity Templates State (NEW)
   const [activityTemplates, setActivityTemplates] = useState<ActivityTemplate[]>(() => {
@@ -2703,6 +3270,15 @@ export default function App() {
       console.error('Failed to save activity templates to localStorage:', e);
     }
   }, [activityTemplates]);
+
+  // Save RPG tags to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceRPGTags', JSON.stringify(rpgTags));
+    } catch (e) {
+      console.error('Failed to save RPG tags to localStorage:', e);
+    }
+  }, [rpgTags]);
 
   // Helper function to check if flowmodoro should reset
   const checkIfShouldReset = (currentTime, lastResetTime) => {
@@ -3446,6 +4022,12 @@ export default function App() {
     }));
   };
 
+  // Helper function to check if all subtasks are completed
+  const areAllSubtasksCompleted = (activity) => {
+    if (!activity.subtasks || activity.subtasks.length === 0) return true; // No subtasks = can complete
+    return activity.subtasks.every(subtask => subtask.completed);
+  };
+
   const toggleSubtaskCompletion = (activityId: string, subtaskId: string) => {
     setDailyActivities(prev => prev.map(activity => {
       if (activity.id === activityId) {
@@ -3455,16 +4037,16 @@ export default function App() {
             : subtask
         );
         
-        // Check if all subtasks are completed and auto-complete activity
+        // REMOVED: Auto-completion logic - now user must manually complete main task
+        // If the main task was completed but now subtasks are not all done, uncheck main task
         const allSubtasksCompleted = updatedSubtasks.length > 0 && 
           updatedSubtasks.every(subtask => subtask.completed);
         
         return {
           ...activity,
           subtasks: updatedSubtasks,
-          status: allSubtasksCompleted ? 'completed' : 
-                 (activity.status === 'completed' && !allSubtasksCompleted) ? 'scheduled' : 
-                 activity.status
+          // Only auto-uncheck main task if it was completed but subtasks are now incomplete
+          status: (activity.status === 'completed' && !allSubtasksCompleted) ? 'scheduled' : activity.status
         };
       }
       return activity;
@@ -3476,18 +4058,16 @@ export default function App() {
       if (activity.id === activityId) {
         const updatedSubtasks = (activity.subtasks || []).filter(subtask => subtask.id !== subtaskId);
         
-        // Check if all remaining subtasks are completed
+        // REMOVED: Auto-completion logic when removing subtasks
+        // If the main task was completed but now subtasks exist and aren't all done, uncheck main task
         const allSubtasksCompleted = updatedSubtasks.length > 0 && 
           updatedSubtasks.every(subtask => subtask.completed);
         
         return {
           ...activity,
           subtasks: updatedSubtasks,
-          status: updatedSubtasks.length === 0 ? 
-                 (activity.status === 'completed' ? 'scheduled' : activity.status) :
-                 allSubtasksCompleted ? 'completed' : 
-                 (activity.status === 'completed' && !allSubtasksCompleted) ? 'scheduled' : 
-                 activity.status
+          // Only auto-uncheck main task if it was completed but subtasks are now incomplete
+          status: (activity.status === 'completed' && updatedSubtasks.length > 0 && !allSubtasksCompleted) ? 'scheduled' : activity.status
         };
       }
       return activity;
@@ -3617,6 +4197,184 @@ export default function App() {
       efficiency,
       totalActivities: dailyActivities.length
     };
+  };
+
+  // RPG Stats Calculation Functions
+  const calculateRPGStats = (): RPGStat[] => {
+    // Combine time from both session and daily activities based on their tags
+    const tagStats = new Map<string, { totalMinutes: number; sessionMinutes: number; dailyMinutes: number; }>();
+    
+    // Initialize all tags with 0 minutes
+    rpgTags.forEach(tag => {
+      tagStats.set(tag.id, { totalMinutes: 0, sessionMinutes: 0, dailyMinutes: 0 });
+    });
+    
+    // Process session activities
+    activities.forEach(activity => {
+      if (activity.tags && activity.tags.length > 0) {
+        const sessionMinutes = Math.max(0, activity.duration);
+        activity.tags.forEach(tagId => {
+          const existing = tagStats.get(tagId);
+          if (existing) {
+            existing.sessionMinutes += sessionMinutes;
+            existing.totalMinutes += sessionMinutes;
+          }
+        });
+      }
+    });
+    
+    // Process daily activities
+    dailyActivities.forEach(activity => {
+      if (activity.tags && activity.tags.length > 0) {
+        const dailyMinutes = activity.timeSpent || 0;
+        activity.tags.forEach(tagId => {
+          const existing = tagStats.get(tagId);
+          if (existing) {
+            existing.dailyMinutes += dailyMinutes;
+            existing.totalMinutes += dailyMinutes;
+          }
+        });
+      }
+    });
+    
+    // Convert to RPGStat format with levels and experience
+    return rpgTags.map(tag => {
+      const stats = tagStats.get(tag.id) || { totalMinutes: 0, sessionMinutes: 0, dailyMinutes: 0 };
+      const level = Math.floor(stats.totalMinutes / 60) + 1; // 1 hour = 1 level
+      const experience = stats.totalMinutes % 60; // Remaining minutes as XP
+      
+      return {
+        tagId: tag.id,
+        tagName: tag.name,
+        totalMinutes: stats.totalMinutes,
+        sessionMinutes: stats.sessionMinutes,
+        dailyMinutes: stats.dailyMinutes,
+        weeklyMinutes: stats.totalMinutes, // TODO: Add weekly calculation
+        level,
+        experience,
+        color: tag.color
+      };
+    });
+  };
+
+  const calculateBalancedSuggestion = (currentStats: RPGStat[]): RPGStat[] => {
+    // Calculate suggested balance based on creating harmony between all areas
+    const totalMinutes = currentStats.reduce((sum, stat) => sum + stat.totalMinutes, 0);
+    const averageMinutes = totalMinutes / currentStats.length;
+    const targetMinutes = Math.max(averageMinutes, 120); // Minimum 2 hours per area
+    
+    return currentStats.map(stat => {
+      const suggestedTotal = targetMinutes;
+      const suggestedLevel = Math.floor(suggestedTotal / 60) + 1;
+      const suggestedExperience = suggestedTotal % 60;
+      
+      return {
+        ...stat,
+        totalMinutes: suggestedTotal,
+        level: suggestedLevel,
+        experience: suggestedExperience
+      };
+    });
+  };
+
+  const calculateBalanceScore = (currentStats: RPGStat[]): number => {
+    if (currentStats.length === 0) return 100;
+    
+    const levels = currentStats.map(stat => stat.level);
+    const maxLevel = Math.max(...levels);
+    const minLevel = Math.min(...levels);
+    const variance = levels.reduce((sum, level) => {
+      const avgLevel = levels.reduce((a, b) => a + b, 0) / levels.length;
+      return sum + Math.pow(level - avgLevel, 2);
+    }, 0) / levels.length;
+    
+    // Balance score: 100 = perfect balance, lower = more unbalanced
+    const balanceScore = Math.max(0, 100 - variance * 10 - (maxLevel - minLevel) * 5);
+    return Math.round(balanceScore);
+  };
+
+  const getRPGBalance = (): RPGBalance => {
+    const current = calculateRPGStats();
+    const suggested = calculateBalancedSuggestion(current);
+    const balanceScore = calculateBalanceScore(current);
+    
+    return { current, suggested, balanceScore };
+  };
+
+  // RPG Tag Management Functions
+  const addRPGTag = (name: string, color: string, description?: string) => {
+    const newTag: RPGTag = {
+      id: Date.now().toString(),
+      name: name.trim(),
+      color,
+      description: description?.trim(),
+      createdAt: new Date()
+    };
+    
+    setRpgTags(prev => [...prev, newTag]);
+  };
+
+  const updateRPGTag = (tagId: string, updates: Partial<RPGTag>) => {
+    setRpgTags(prev => prev.map(tag => 
+      tag.id === tagId ? { ...tag, ...updates } : tag
+    ));
+  };
+
+  const removeRPGTag = (tagId: string) => {
+    // Remove tag from all activities first
+    setActivities(prev => prev.map(activity => ({
+      ...activity,
+      tags: activity.tags?.filter(id => id !== tagId) || []
+    })));
+    
+    setDailyActivities(prev => prev.map(activity => ({
+      ...activity,
+      tags: activity.tags?.filter(id => id !== tagId) || []
+    })));
+    
+    // Remove the tag itself
+    setRpgTags(prev => prev.filter(tag => tag.id !== tagId));
+  };
+
+  // Function to add tags to activities
+  const addTagToActivity = (activityId: string, tagId: string, isDaily: boolean = false) => {
+    if (isDaily) {
+      setDailyActivities(prev => prev.map(activity => {
+        if (activity.id === activityId) {
+          const currentTags = activity.tags || [];
+          if (!currentTags.includes(tagId)) {
+            return { ...activity, tags: [...currentTags, tagId] };
+          }
+        }
+        return activity;
+      }));
+    } else {
+      setActivities(prev => prev.map(activity => {
+        if (activity.id === activityId) {
+          const currentTags = activity.tags || [];
+          if (!currentTags.includes(tagId)) {
+            return { ...activity, tags: [...currentTags, tagId] };
+          }
+        }
+        return activity;
+      }));
+    }
+  };
+
+  const removeTagFromActivity = (activityId: string, tagId: string, isDaily: boolean = false) => {
+    if (isDaily) {
+      setDailyActivities(prev => prev.map(activity => 
+        activity.id === activityId 
+          ? { ...activity, tags: (activity.tags || []).filter(id => id !== tagId) }
+          : activity
+      ));
+    } else {
+      setActivities(prev => prev.map(activity => 
+        activity.id === activityId 
+          ? { ...activity, tags: (activity.tags || []).filter(id => id !== tagId) }
+          : activity
+      ));
+    }
   };
 
   const saveActivityTemplate = (name, color) => {
@@ -4059,6 +4817,19 @@ export default function App() {
       setActivities={setActivities}
       onBackToTimer={() => setCurrentPage('timer')}
     />
+  ) : currentPage === 'rpg-stats' ? (
+    <RPGStatsPage
+      rpgBalance={getRPGBalance()}
+      rpgTags={rpgTags}
+      activities={activities}
+      dailyActivities={dailyActivities}
+      onBackToTimer={() => setCurrentPage('timer')}
+      onAddTag={addRPGTag}
+      onUpdateTag={updateRPGTag}
+      onRemoveTag={removeRPGTag}
+      onAddTagToActivity={addTagToActivity}
+      onRemoveTagFromActivity={removeTagFromActivity}
+    />
   ) : isTimerActive ? (
     <div className="max-w-2xl mx-auto">
       <Card>
@@ -4228,6 +4999,10 @@ export default function App() {
               <Button variant="outline" size="sm" onClick={() => setCurrentPage('manage-activities')} className="flex-1 sm:flex-none h-9 text-sm">
                 <Icon name="settings" className="h-4 w-4 mr-2" />
                 Manage Activities
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage('rpg-stats')} className="flex-1 sm:flex-none h-9 text-sm">
+                🎮
+                RPG Stats
               </Button>
               <Button variant="outline" size="sm" onClick={() => {
                 console.log("showSettings before toggle:", showSettings);
@@ -5071,14 +5846,29 @@ export default function App() {
                             <div className="flex items-center gap-1">
                               <input 
                                 type="checkbox" 
-                                className="h-3 w-3 rounded text-green-600 focus:ring-green-500" 
+                                className={`h-3 w-3 rounded text-green-600 focus:ring-green-500 ${
+                                  !areAllSubtasksCompleted(activity) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                                }`} 
                                 checked={activity.status === 'completed'} 
+                                disabled={!areAllSubtasksCompleted(activity)}
                                 onChange={(e) => {
                                   e.stopPropagation();
-                                  toggleDailyActivityCompletion(activity.id);
+                                  if (areAllSubtasksCompleted(activity)) {
+                                    toggleDailyActivityCompletion(activity.id);
+                                  }
                                 }} 
+                                title={
+                                  !areAllSubtasksCompleted(activity) 
+                                    ? "Complete all subtasks first to unlock main task completion" 
+                                    : "Mark this activity as completed"
+                                }
                               />
-                              <span className="text-gray-500">Done</span>
+                              <span className={`text-gray-500 ${!areAllSubtasksCompleted(activity) ? 'opacity-50' : ''}`}>
+                                Done {!areAllSubtasksCompleted(activity) && activity.subtasks && activity.subtasks.length > 0 ? 
+                                  `(${activity.subtasks.filter(s => s.completed).length}/${activity.subtasks.length} subtasks)` : 
+                                  ''
+                                }
+                              </span>
                             </div>
                           </div>
                           
