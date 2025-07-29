@@ -4149,17 +4149,34 @@ export default function App() {
     if (!updatedActivity.sharedId) return;
     
     if (isSessionActivity) {
-      // Update corresponding daily activity
+      // Update corresponding daily activity by accumulating ALL session activities with same sharedId
       setDailyActivities(prev => prev.map(dailyActivity => {
         if (dailyActivity.sharedId === updatedActivity.sharedId) {
-          const sessionProgress = updatedActivity.isCompleted ? 100 : 
-            ((updatedActivity.duration - (updatedActivity.timeRemaining || 0)) / updatedActivity.duration) * 100;
+          // Find ALL session activities that share this ID
+          const relatedSessionActivities = activities.filter(
+            sessionActivity => sessionActivity.sharedId === updatedActivity.sharedId
+          );
+          
+          // Calculate total time spent across all related session activities
+          const totalSessionTimeSpent = relatedSessionActivities.reduce((total, sessionActivity) => {
+            const sessionTimeSpentMinutes = sessionActivity.duration > 0 ? 
+              (sessionActivity.duration * 60 - (sessionActivity.timeRemaining || 0)) / 60 : 0;
+            
+            // For completed activities, use the full session duration as time spent
+            const actualTimeSpent = sessionActivity.isCompleted ? 
+              sessionActivity.duration : sessionTimeSpentMinutes;
+              
+            return total + actualTimeSpent;
+          }, 0);
+          
+          // Only mark daily activity as completed if it has actually reached its full duration
+          const isFullyCompleted = totalSessionTimeSpent >= dailyActivity.duration;
           
           return {
             ...dailyActivity,
-            timeSpent: Math.round((sessionProgress / 100) * dailyActivity.duration),
-            status: updatedActivity.isCompleted ? 'completed' : 
-                   sessionProgress > 0 ? 'active' : dailyActivity.status
+            timeSpent: Math.round(totalSessionTimeSpent),
+            status: isFullyCompleted ? 'completed' : 
+                   totalSessionTimeSpent > 0 ? 'active' : dailyActivity.status
           };
         }
         return dailyActivity;
@@ -4175,13 +4192,13 @@ export default function App() {
             ...sessionActivity,
             isCompleted: updatedActivity.status === 'completed',
             timeRemaining: updatedActivity.status === 'completed' ? 0 : 
-              Math.max(0, (sessionActivity.duration || 0) - Math.round((dailyProgress / 100) * (sessionActivity.duration || 0)))
+              Math.max(0, (sessionActivity.duration || 0) * 60 - Math.round((dailyProgress / 100) * (sessionActivity.duration || 0) * 60))
           };
         }
         return sessionActivity;
       }));
     }
-  }, []);
+  }, [activities]);
 
   // Helper function to check if a template should be active based on recurring schedule
   const isTemplateActiveToday = useCallback((template: ActivityTemplate, currentDate: Date) => {
@@ -4867,6 +4884,25 @@ export default function App() {
     });
   }, [currentActivityIndex, settings.overtimeType, settings.flowmodoroEnabled, settings.flowmodoroRatio, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining, flowmodoroState.lastResetDate, checkIfShouldReset]);
 
+  // Sync shared progress when session activities change during active timer
+  useEffect(() => {
+    if (isTimerActive && !isPaused) {
+      const currentActivity = activities[currentActivityIndex];
+      if (currentActivity && currentActivity.sharedId) {
+        syncSharedProgress(currentActivity, true);
+      }
+    }
+  }, [activities, currentActivityIndex, isTimerActive, isPaused, syncSharedProgress]);
+
+  // Sync shared progress for completed activities (separate from timer sync)
+  useEffect(() => {
+    activities.forEach(activity => {
+      if (activity.sharedId && activity.isCompleted) {
+        syncSharedProgress(activity, true);
+      }
+    });
+  }, [activities, syncSharedProgress]);
+
   // Main timer loop
   useEffect(() => {
     if (isTimerActive && !isPaused) {
@@ -4980,11 +5016,43 @@ export default function App() {
   };
 
   const handleAddToBoth = (template: ActivityTemplate) => {
-    const sharedId = `shared-${Date.now()}`;
+    // Check if there's already a daily activity for this template
+    const existingDailyActivity = dailyActivities.find(
+      activity => activity.templateId === template.id && activity.sharedId
+    );
     
-    // Add to session
+    let sharedId: string;
+    
+    if (existingDailyActivity) {
+      // Use existing shared activity
+      sharedId = existingDailyActivity.sharedId!;
+    } else {
+      // Create new shared pair
+      sharedId = `shared-${Date.now()}`;
+      
+      // Add to daily
+      const dailyActivity = {
+        id: sharedId + '-daily',
+        name: template.name,
+        color: template.color,
+        duration: template.presetDuration || 30,
+        percentage: 0,
+        status: 'scheduled' as const,
+        isActive: false,
+        timeSpent: 0,
+        startedAt: null,
+        subtasks: [],
+        tags: template.tags || [],
+        templateId: template.id,
+        sharedId: sharedId // Link for shared progress
+      };
+      
+      setDailyActivities(prev => [...prev, dailyActivity]);
+    }
+    
+    // Always add a new session activity that links to the shared daily activity
     const sessionActivity = {
-      id: sharedId + '-session',
+      id: `${sharedId}-session-${Date.now()}`, // Unique session ID but same sharedId
       name: template.name,
       color: template.color,
       percentage: 10,
@@ -4997,25 +5065,7 @@ export default function App() {
       sharedId: sharedId // Link for shared progress
     };
     
-    // Add to daily
-    const dailyActivity = {
-      id: sharedId + '-daily',
-      name: template.name,
-      color: template.color,
-      duration: template.presetDuration || 30,
-      percentage: 0,
-      status: 'scheduled' as const,
-      isActive: false,
-      timeSpent: 0,
-      startedAt: null,
-      subtasks: [],
-      tags: template.tags || [],
-      templateId: template.id,
-      sharedId: sharedId // Link for shared progress
-    };
-    
     setActivities(prev => [...prev, sessionActivity]);
-    setDailyActivities(prev => [...prev, dailyActivity]);
   };
 
   const addActivity = (customName: string | null = null, customColor: string | null = null, presetTime = 0, countUp = false) => {
@@ -5876,10 +5926,7 @@ export default function App() {
 
     setActivities(updatedActivities);
 
-    // Sync progress with shared daily activity if it exists
-    if (completedActivity && (completedActivity as Activity).sharedId) {
-      syncSharedProgress(completedActivity as Activity, true);
-    }
+    // Shared progress sync will be handled by useEffect
 
     const allCompleted = updatedActivities.every(a => a.isCompleted);
     if (allCompleted) {
