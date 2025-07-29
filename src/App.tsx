@@ -7,6 +7,26 @@ interface Subtask {
   createdAt: Date;
 }
 
+interface Activity {
+  id: string;
+  name: string;
+  color: string;
+  percentage?: number;
+  duration: number;
+  timeRemaining?: number;
+  isCompleted?: boolean;
+  isLocked?: boolean;
+  tags?: string[];
+  templateId?: string;
+  sharedId?: string; // For linking session and daily activities
+  // Daily activity specific properties
+  status?: 'scheduled' | 'active' | 'completed' | 'overtime';
+  isActive?: boolean;
+  timeSpent?: number;
+  startedAt?: Date | null;
+  subtasks?: Subtask[];
+}
+
 interface ActivityTemplate {
   id: string;
   name: string;
@@ -164,61 +184,280 @@ const CardHeader = ({ className = '', children }) => <div className={`flex flex-
 const CardTitle = ({ className = '', children }) => <h3 className={`text-2xl font-semibold leading-none tracking-tight ${className}`}>{children}</h3>;
 const CardContent = ({ className = '', children }) => <div className={`p-6 pt-0 ${className}`}>{children}</div>;
 
-// RPG Stats Radar Chart Component
-const RPGStatsChart = ({ stats, suggestedStats, size = 400 }) => {
+// RPG Stats Radar Chart Component with Enhanced Today's Tasks Display
+const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dailyActivities = [] }: {
+  stats: any[];
+  suggestedStats: any[];
+  size?: number;
+  activities?: any[];
+  dailyActivities?: any[];
+}) => {
+  const [displayMode, setDisplayMode] = useState('overview'); // 'overview', 'today-tasks', 'progress', 'balance'
+  const [showToggles, setShowToggles] = useState(true);
+  
   const center = size / 2;
-  const maxRadius = center - 60;
-  const rings = 5; // Number of concentric circles
+  const maxRadius = center - 100; // Increased padding for toggles
+  
+  // Calculate today's task data per tag
+  const calculateTodayTaskData = () => {
+    const today = new Date();
+    const todayStr = today.toDateString();
+    
+    const tagData = new Map();
+    stats.forEach(stat => {
+      tagData.set(stat.tagId, {
+        tagName: stat.tagName,
+        color: stat.color,
+        plannedToday: 0,
+        completedToday: 0,
+        progressToday: 0,
+        totalPlanned: 0
+      });
+    });
+    
+    // Process daily activities for today's data
+    dailyActivities.forEach(activity => {
+      if (activity.tags && activity.tags.length > 0) {
+        activity.tags.forEach(tagId => {
+          const data = tagData.get(tagId);
+          if (data) {
+            data.totalPlanned += activity.duration;
+            data.plannedToday += activity.duration;
+            
+            if (activity.status === 'completed') {
+              data.completedToday += activity.duration;
+            }
+            
+            data.progressToday += activity.timeSpent || 0;
+          }
+        });
+      }
+    });
+    
+    // Process session activities
+    activities.forEach(activity => {
+      if (activity.tags && activity.tags.length > 0) {
+        const activityProgress = activity.duration - (activity.timeRemaining / 60);
+        activity.tags.forEach(tagId => {
+          const data = tagData.get(tagId);
+          if (data) {
+            data.progressToday += Math.max(0, activityProgress);
+          }
+        });
+      }
+    });
+    
+    return Array.from(tagData.values());
+  };
+  
+  const todayTaskData = calculateTodayTaskData();
+  
+  // Calculate dynamic scaling based on current stats
+  const maxLevel = Math.max(...stats.map(s => s.level), 1);
+  const minLevel = Math.min(...stats.map(s => s.level));
+  
+  // Dynamic ring calculation for better representation
+  const calculateOptimalRings = () => {
+    if (maxLevel <= 5) return 5;
+    if (maxLevel <= 10) return Math.max(5, Math.ceil(maxLevel / 2));
+    if (maxLevel <= 20) return Math.max(8, Math.ceil(maxLevel / 3));
+    return Math.max(10, Math.ceil(maxLevel / 4));
+  };
+  
+  const rings = calculateOptimalRings();
+  
+  // Dynamic scaling factor for better visual representation
+  const calculateScalingFactor = () => {
+    if (maxLevel <= 3) return 2.5;
+    if (maxLevel <= 5) return 2.0;
+    if (maxLevel <= 10) return 1.5;
+    if (maxLevel <= 15) return 1.2;
+    return 1.0;
+  };
+  
+  const scalingFactor = calculateScalingFactor();
+  const effectiveMaxLevel = Math.max(maxLevel * scalingFactor, rings);
   
   // Calculate angle for each stat
   const angleStep = (2 * Math.PI) / stats.length;
   
-  // Generate ring paths
+  // Generate dynamic ring paths with adaptive scaling
   const ringPaths = Array.from({ length: rings }, (_, i) => {
+    const ringLevel = (effectiveMaxLevel / rings) * (i + 1);
     const radius = (maxRadius / rings) * (i + 1);
     const points = stats.map((_, index) => {
-      const angle = index * angleStep - Math.PI / 2; // Start from top
+      const angle = index * angleStep - Math.PI / 2;
       const x = center + Math.cos(angle) * radius;
       const y = center + Math.sin(angle) * radius;
       return `${x},${y}`;
     });
-    return `M ${points.join(' L ')} Z`;
+    return { 
+      path: `M ${points.join(' L ')} Z`,
+      level: Math.round(ringLevel * 10) / 10,
+      radius
+    };
   });
   
-  // Generate current stats path
-  const currentPath = stats.map((stat, index) => {
-    const angle = index * angleStep - Math.PI / 2;
-    const normalizedValue = Math.min(stat.level / 20, 1); // Cap at level 20
-    const radius = maxRadius * normalizedValue;
-    const x = center + Math.cos(angle) * radius;
-    const y = center + Math.sin(angle) * radius;
-    return `${x},${y}`;
-  });
+  // Generate paths based on display mode
+  const generateDisplayPaths = () => {
+    switch (displayMode) {
+      case 'today-tasks':
+        const maxPlanned = Math.max(...todayTaskData.map(d => d.plannedToday), 1);
+        return todayTaskData.map((data, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const normalizedValue = Math.min(data.plannedToday / maxPlanned, 1);
+          const radius = maxRadius * normalizedValue;
+          const x = center + Math.cos(angle) * radius;
+          const y = center + Math.sin(angle) * radius;
+          return `${x},${y}`;
+        });
+        
+      case 'progress':
+        const maxProgress = Math.max(...todayTaskData.map(d => d.progressToday), 1);
+        return todayTaskData.map((data, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const normalizedValue = Math.min(data.progressToday / maxProgress, 1);
+          const radius = maxRadius * normalizedValue;
+          const x = center + Math.cos(angle) * radius;
+          const y = center + Math.sin(angle) * radius;
+          return `${x},${y}`;
+        });
+        
+      case 'balance':
+        return suggestedStats.map((stat, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const scaledLevel = stat.level * scalingFactor;
+          const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
+          const radius = maxRadius * normalizedValue;
+          const x = center + Math.cos(angle) * radius;
+          const y = center + Math.sin(angle) * radius;
+          return `${x},${y}`;
+        });
+        
+      default: // overview
+        return stats.map((stat, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const scaledLevel = stat.level * scalingFactor;
+          const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
+          const radius = maxRadius * normalizedValue;
+          const x = center + Math.cos(angle) * radius;
+          const y = center + Math.sin(angle) * radius;
+          return `${x},${y}`;
+        });
+    }
+  };
+  
+  const displayPath = generateDisplayPaths();
   
   // Generate suggested stats path
   const suggestedPath = suggestedStats.map((stat, index) => {
     const angle = index * angleStep - Math.PI / 2;
-    const normalizedValue = Math.min(stat.level / 20, 1);
+    const scaledLevel = stat.level * scalingFactor;
+    const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
     const radius = maxRadius * normalizedValue;
     const x = center + Math.cos(angle) * radius;
     const y = center + Math.sin(angle) * radius;
     return `${x},${y}`;
   });
   
+  const getDisplayColor = () => {
+    switch (displayMode) {
+      case 'today-tasks': return '#10b981'; // green
+      case 'progress': return '#f59e0b'; // amber  
+      case 'balance': return '#8b5cf6'; // purple
+      default: return '#3b82f6'; // blue
+    }
+  };
+  
+  const getDisplayLabel = () => {
+    switch (displayMode) {
+      case 'today-tasks': return 'Today\'s Planned Tasks';
+      case 'progress': return 'Today\'s Progress';
+      case 'balance': return 'Suggested Balance';
+      default: return 'Current Stats';
+    }
+  };
+  
   return (
     <div className="flex flex-col items-center">
-      <svg width={size} height={size} className="bg-slate-50 rounded-lg border">
-        {/* Grid circles */}
-        {Array.from({ length: rings }).map((_, i) => (
-          <circle
-            key={i}
-            cx={center}
-            cy={center}
-            r={(maxRadius / rings) * (i + 1)}
-            fill="none"
-            stroke="#e2e8f0"
-            strokeWidth="1"
-          />
+      {/* Toggle Controls */}
+      <div className="mb-4 flex flex-wrap gap-2 justify-center">
+        <button
+          onClick={() => setDisplayMode('overview')}
+          className={`px-3 py-1 text-xs rounded-full transition-all ${
+            displayMode === 'overview' 
+              ? 'bg-blue-500 text-white shadow-md' 
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          📊 Overview
+        </button>
+        <button
+          onClick={() => setDisplayMode('today-tasks')}
+          className={`px-3 py-1 text-xs rounded-full transition-all ${
+            displayMode === 'today-tasks' 
+              ? 'bg-green-500 text-white shadow-md' 
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          📅 Today's Tasks
+        </button>
+        <button
+          onClick={() => setDisplayMode('progress')}
+          className={`px-3 py-1 text-xs rounded-full transition-all ${
+            displayMode === 'progress' 
+              ? 'bg-amber-500 text-white shadow-md' 
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          ⏱️ Progress
+        </button>
+        <button
+          onClick={() => setDisplayMode('balance')}
+          className={`px-3 py-1 text-xs rounded-full transition-all ${
+            displayMode === 'balance' 
+              ? 'bg-purple-500 text-white shadow-md' 
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          ⚖️ Balance
+        </button>
+      </div>
+      
+      <div className="mb-2 text-center">
+        <div className="text-xs text-slate-500">
+          Showing: {getDisplayLabel()} • 
+          Dynamic Scale: {scalingFactor > 1 ? `${scalingFactor}x Enhanced` : 'Standard'} • 
+          {rings} Rings • Range: Lv.{minLevel}-{maxLevel}
+        </div>
+      </div>
+      
+      <svg width={size} height={size} className="bg-slate-50 rounded-lg border transition-all duration-500 ease-in-out">
+        {/* Dynamic grid circles with level indicators */}
+        {ringPaths.map((ring, i) => (
+          <g key={i}>
+            <circle
+              cx={center}
+              cy={center}
+              r={ring.radius}
+              fill="none"
+              stroke={i === rings - 1 ? "#94a3b8" : "#e2e8f0"}
+              strokeWidth={i === rings - 1 ? "2" : "1"}
+              strokeDasharray={i % 2 === 0 ? "none" : "3,3"}
+              opacity={0.6 + (i / rings) * 0.4}
+            />
+            {/* Ring level labels */}
+            <text
+              x={center + ring.radius + 8}
+              y={center - 2}
+              className="text-xs fill-slate-400"
+              dominantBaseline="middle"
+            >
+              {displayMode === 'today-tasks' ? `${Math.round(ring.level)}m` : 
+               displayMode === 'progress' ? `${Math.round(ring.level)}m` :
+               ring.level}
+            </text>
+          </g>
         ))}
         
         {/* Grid lines */}
@@ -235,102 +474,233 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400 }) => {
               y2={y}
               stroke="#e2e8f0"
               strokeWidth="1"
+              opacity="0.5"
             />
           );
         })}
         
-        {/* Suggested stats area (lighter opacity) */}
-        <path
-          d={`M ${suggestedPath.join(' L ')} Z`}
-          fill="rgba(59, 130, 246, 0.2)"
-          stroke="rgba(59, 130, 246, 0.4)"
-          strokeWidth="2"
-          strokeDasharray="5,5"
-        />
+        {/* Suggested stats area (shown in balance mode or as reference) */}
+        {(displayMode === 'balance' || displayMode === 'overview') && (
+          <path
+            d={`M ${suggestedPath.join(' L ')} Z`}
+            fill="rgba(139, 92, 246, 0.12)"
+            stroke="rgba(139, 92, 246, 0.35)"
+            strokeWidth="2"
+            strokeDasharray="8,4"
+            opacity="0.8"
+          />
+        )}
         
-        {/* Current stats area */}
+        {/* Main display area with dynamic styling */}
         <path
-          d={`M ${currentPath.join(' L ')} Z`}
-          fill="rgba(59, 130, 246, 0.3)"
-          stroke="#3b82f6"
+          d={`M ${displayPath.join(' L ')} Z`}
+          fill={`${getDisplayColor()}20`}
+          stroke={getDisplayColor()}
           strokeWidth="3"
+          style={{
+            transformOrigin: `${center}px ${center}px`,
+            animation: 'pulse 2s ease-in-out infinite alternate'
+          }}
         />
         
-        {/* Stat points */}
+        {/* Data points for each stat */}
         {stats.map((stat, index) => {
           const angle = index * angleStep - Math.PI / 2;
-          const normalizedValue = Math.min(stat.level / 20, 1);
-          const radius = maxRadius * normalizedValue;
+          const data = todayTaskData[index] || {};
+          
+          let radius, pointData;
+          
+          switch (displayMode) {
+            case 'today-tasks':
+              const maxPlanned = Math.max(...todayTaskData.map(d => d.plannedToday), 1);
+              radius = maxRadius * Math.min(data.plannedToday / maxPlanned, 1);
+              pointData = `${data.plannedToday}m planned`;
+              break;
+            case 'progress':
+              const maxProgress = Math.max(...todayTaskData.map(d => d.progressToday), 1);
+              radius = maxRadius * Math.min(data.progressToday / maxProgress, 1);
+              pointData = `${Math.round(data.progressToday)}m done`;
+              break;
+            case 'balance':
+              const scaledLevel = suggestedStats[index]?.level * scalingFactor;
+              radius = maxRadius * Math.min(scaledLevel / effectiveMaxLevel, 1);
+              pointData = `Suggested Lv.${suggestedStats[index]?.level}`;
+              break;
+            default:
+              const currentScaledLevel = stat.level * scalingFactor;
+              radius = maxRadius * Math.min(currentScaledLevel / effectiveMaxLevel, 1);
+              pointData = `Lv.${stat.level} (${stat.experience}/60)`;
+          }
+          
           const x = center + Math.cos(angle) * radius;
           const y = center + Math.sin(angle) * radius;
           
           return (
-            <circle
-              key={stat.tagId}
-              cx={x}
-              cy={y}
-              r="6"
-              fill={stat.color}
-              stroke="white"
-              strokeWidth="2"
-            />
+            <g key={stat.tagId}>
+              {/* Completion indicator for today-tasks mode */}
+              {displayMode === 'today-tasks' && data.completedToday > 0 && (
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={8 + (data.completedToday / data.plannedToday) * 8}
+                  fill="none"
+                  stroke="#10b981"
+                  strokeWidth="3"
+                  opacity="0.6"
+                />
+              )}
+              
+              {/* Main data point */}
+              <circle
+                cx={x}
+                cy={y}
+                r={displayMode === 'overview' ? Math.min(6 + stat.level * 0.5, 12) : 8}
+                fill={displayMode === 'overview' ? stat.color : getDisplayColor()}
+                stroke="white"
+                strokeWidth="2"
+                style={{
+                  transition: 'all 0.3s ease-in-out',
+                  filter: (displayMode === 'overview' && stat.level >= 10) ? 'drop-shadow(0px 0px 4px rgba(59, 130, 246, 0.5))' : 'none'
+                }}
+              />
+              
+              {/* Special indicators */}
+              {displayMode === 'today-tasks' && data.completedToday === data.plannedToday && data.plannedToday > 0 && (
+                <text x={x} y={y + 1} textAnchor="middle" dominantBaseline="middle" className="text-xs font-bold fill-white">✓</text>
+              )}
+              
+              {displayMode === 'overview' && stat.level >= 10 && (
+                <text x={x} y={y + 1} textAnchor="middle" dominantBaseline="middle" className="text-xs font-bold fill-white">
+                  {stat.level}
+                </text>
+              )}
+            </g>
           );
         })}
         
-        {/* Labels */}
-        {stats.map((stat, index) => {
-          const angle = index * angleStep - Math.PI / 2;
-          const labelRadius = maxRadius + 30;
-          const x = center + Math.cos(angle) * labelRadius;
-          const y = center + Math.sin(angle) * labelRadius;
-          
-          return (
-            <text
-              key={`label-${stat.tagId}`}
-              x={x}
-              y={y}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              className="text-sm font-medium fill-slate-700"
-            >
-              {stat.tagName}
-            </text>
-          );
-        })}
-        
-        {/* Level indicators */}
+        {/* Enhanced labels with mode-specific information */}
         {stats.map((stat, index) => {
           const angle = index * angleStep - Math.PI / 2;
           const labelRadius = maxRadius + 50;
           const x = center + Math.cos(angle) * labelRadius;
-          const y = center + Math.sin(angle) * labelRadius + 15;
+          const y = center + Math.sin(angle) * labelRadius;
+          const data = todayTaskData[index] || {};
+          
+          let labelText = stat.tagName;
+          let subText = `Lv.${stat.level} (${stat.experience}/60)`;
+          
+          if (displayMode === 'today-tasks') {
+            subText = `${data.plannedToday}m planned • ${data.completedToday}m done`;
+          } else if (displayMode === 'progress') {
+            subText = `${Math.round(data.progressToday)}m progress today`;
+          } else if (displayMode === 'balance') {
+            subText = `Target: Lv.${suggestedStats[index]?.level}`;
+          }
           
           return (
-            <text
-              key={`level-${stat.tagId}`}
-              x={x}
-              y={y}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              className="text-xs fill-slate-500"
-            >
-              Lv.{stat.level}
-            </text>
+            <g key={`label-${stat.tagId}`}>
+              {/* Label background for better readability */}
+              <rect
+                x={x - 30}
+                y={y - 18}
+                width="60"
+                height="36"
+                fill="rgba(255, 255, 255, 0.95)"
+                stroke="#e2e8f0"
+                strokeWidth="1"
+                rx="4"
+                opacity="0.95"
+              />
+              <text
+                x={x}
+                y={y - 4}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                className="text-sm font-medium fill-slate-700"
+              >
+                {labelText}
+              </text>
+              <text
+                x={x}
+                y={y + 10}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                className="text-xs fill-slate-500"
+                style={{ fontWeight: stat.level >= 5 ? 'bold' : 'normal' }}
+              >
+                {subText}
+              </text>
+            </g>
           );
         })}
+        
+        {/* Center indicator showing current mode */}
+        <circle
+          cx={center}
+          cy={center}
+          r="4"
+          fill={getDisplayColor()}
+          style={{
+            animation: scalingFactor > 1 ? 'pulse 1.5s ease-in-out infinite' : 'none'
+          }}
+        />
+        <text
+          x={center}
+          y={center + 22}
+          textAnchor="middle"
+          className="text-xs fill-slate-400 font-medium"
+        >
+          {getDisplayLabel()}
+        </text>
       </svg>
       
-      {/* Legend */}
-      <div className="mt-4 flex flex-wrap gap-4 justify-center">
+      {/* Enhanced legend with mode-specific info */}
+      <div className="mt-4 flex flex-wrap gap-4 justify-center text-sm">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-blue-500 rounded"></div>
-          <span className="text-sm">Current Stats</span>
+          <div className="w-4 h-4 rounded" style={{ backgroundColor: getDisplayColor() }}></div>
+          <span>{getDisplayLabel()}</span>
         </div>
+        
+        {(displayMode === 'balance' || displayMode === 'overview') && (
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 border-2 border-purple-400 border-dashed bg-purple-200 rounded"></div>
+            <span>Suggested Balance</span>
+          </div>
+        )}
+        
+        {displayMode === 'today-tasks' && (
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-green-300"></div>
+            <span>Completed Today</span>
+          </div>
+        )}
+        
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-blue-400 border-dashed bg-blue-200 rounded"></div>
-          <span className="text-sm">Suggested Balance</span>
+          <div className="w-4 h-4 bg-slate-400 rounded-full"></div>
+          <span>{rings} Dynamic Rings</span>
         </div>
+        
+        {scalingFactor > 1 && (
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-amber-400 rounded animate-pulse"></div>
+            <span>Enhanced Scale Active</span>
+          </div>
+        )}
       </div>
+      
+      {/* Add CSS animations */}
+      <style>{`
+        @keyframes pulse {
+          0% { opacity: 0.8; transform: scale(1); }
+          100% { opacity: 1; transform: scale(1.02); }
+        }
+        @keyframes glow-0 { 0% { opacity: 0.05; } 100% { opacity: 0.15; } }
+        @keyframes glow-1 { 0% { opacity: 0.08; } 100% { opacity: 0.18; } }
+        @keyframes glow-2 { 0% { opacity: 0.06; } 100% { opacity: 0.16; } }
+        @keyframes glow-3 { 0% { opacity: 0.07; } 100% { opacity: 0.17; } }
+        @keyframes glow-4 { 0% { opacity: 0.09; } 100% { opacity: 0.19; } }
+        @keyframes glow-5 { 0% { opacity: 0.05; } 100% { opacity: 0.15; } }
+      `}</style>
     </div>
   );
 };
@@ -444,38 +814,81 @@ const RPGStatsPage = ({
               <RPGStatsChart 
                 stats={rpgBalance.current} 
                 suggestedStats={rpgBalance.suggested}
+                activities={activities}
+                dailyActivities={dailyActivities}
                 size={350}
               />
             </CardContent>
           </Card>
 
-          {/* Stats List */}
+          {/* Today's Task Summary */}
           <Card>
             <CardHeader>
-              <CardTitle>Area Details</CardTitle>
+              <CardTitle>Today's Overview</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {rpgBalance.current.map(stat => (
-                  <div key={stat.tagId} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div className="flex items-center space-x-3">
-                      <div 
-                        className="w-4 h-4 rounded-full"
-                        style={{ backgroundColor: stat.color }}
-                      ></div>
-                      <div>
-                        <div className="font-medium">{stat.tagName}</div>
-                        <div className="text-sm text-gray-500">
-                          {stat.totalMinutes}m total • Session: {stat.sessionMinutes}m • Daily: {stat.dailyMinutes}m
+                {/* Quick stats */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="text-center p-3 bg-blue-50 rounded-lg">
+                    <div className="text-2xl font-bold text-blue-600">
+                      {dailyActivities.filter(a => a.status === 'scheduled' || a.status === 'active').length}
+                    </div>
+                    <div className="text-sm text-blue-700">Planned Today</div>
+                  </div>
+                  <div className="text-center p-3 bg-green-50 rounded-lg">
+                    <div className="text-2xl font-bold text-green-600">
+                      {dailyActivities.filter(a => a.status === 'completed').length}
+                    </div>
+                    <div className="text-sm text-green-700">Completed</div>
+                  </div>
+                </div>
+                
+                {/* Progress by tag */}
+                <div className="space-y-3">
+                  <h4 className="font-medium text-gray-900">Today's Progress by Area</h4>
+                  {rpgBalance.current.map(stat => {
+                    const todayMinutes = dailyActivities
+                      .filter(a => a.tags?.includes(stat.tagId))
+                      .reduce((sum, a) => sum + (a.timeSpent || 0), 0);
+                    const plannedMinutes = dailyActivities
+                      .filter(a => a.tags?.includes(stat.tagId))
+                      .reduce((sum, a) => sum + a.duration, 0);
+                    const completionRate = plannedMinutes > 0 ? (todayMinutes / plannedMinutes) * 100 : 0;
+                    
+                    return (
+                      <div key={stat.tagId} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                        <div className="flex items-center space-x-2">
+                          <div 
+                            className="w-3 h-3 rounded-full"
+                            style={{ backgroundColor: stat.color }}
+                          ></div>
+                          <span className="text-sm font-medium">{stat.tagName}</span>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-medium">
+                            {Math.round(todayMinutes)}m / {plannedMinutes}m
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {Math.round(completionRate)}% complete
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-bold text-lg">Lv.{stat.level}</div>
-                      <div className="text-xs text-gray-500">{stat.experience}/60 XP</div>
+                    );
+                  })}
+                </div>
+                
+                {/* Active activity indicator */}
+                {dailyActivities.find(a => a.status === 'active') && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <div className="flex items-center space-x-2">
+                      <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse"></div>
+                      <span className="text-sm font-medium text-amber-800">
+                        Currently active: {dailyActivities.find(a => a.status === 'active')?.name}
+                      </span>
                     </div>
                   </div>
-                ))}
+                )}
               </div>
             </CardContent>
           </Card>
@@ -597,7 +1010,82 @@ const RPGStatsPage = ({
   );
 };
 
-// Activity Tag Manager Component
+// Add Activity Dropdown Component
+const AddActivityDropdown = ({ template, onAddToSession, onAddToDaily, onAddToBoth }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  
+  return (
+    <div className="relative">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex-1 h-8 text-xs sm:text-sm"
+      >
+        <Icon name="plus" className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+        Add Activity
+        <Icon name="arrowUpDown" className="h-3 w-3 ml-1" />
+      </Button>
+      
+      {isOpen && (
+        <>
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 z-10" 
+            onClick={() => setIsOpen(false)}
+          />
+          
+          {/* Dropdown Menu */}
+          <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+            <div className="p-2 space-y-1">
+              <button
+                onClick={() => {
+                  onAddToSession(template);
+                  setIsOpen(false);
+                }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 rounded-md flex items-center gap-2"
+              >
+                <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                <span>Session Only</span>
+                <span className="ml-auto text-xs text-gray-500">Timer focus</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  onAddToDaily(template);
+                  setIsOpen(false);
+                }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-green-50 rounded-md flex items-center gap-2"
+              >
+                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                <span>Daily Only</span>
+                <span className="ml-auto text-xs text-gray-500">Schedule</span>
+              </button>
+              
+              <button
+                onClick={() => {
+                  onAddToBoth(template);
+                  setIsOpen(false);
+                }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-purple-50 rounded-md flex items-center gap-2"
+              >
+                <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                <span>Both (Shared)</span>
+                <span className="ml-auto text-xs text-gray-500">Sync progress</span>
+              </button>
+            </div>
+            
+            <div className="border-t border-gray-100 p-2">
+              <div className="text-xs text-gray-500 px-3 py-1">
+                💡 Shared activities sync progress between session timer and daily schedule
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 const ActivityTagManager = ({ activity, rpgTags, onAddTag, onRemoveTag }) => {
   const [showTagDropdown, setShowTagDropdown] = useState(false);
   
@@ -1599,7 +2087,10 @@ const ActivityManagementPage = ({
   setActivityTemplates, 
   activities, 
   setActivities, 
-  onBackToTimer 
+  onBackToTimer,
+  onAddToSession,
+  onAddToDaily,
+  onAddToBoth
 }) => {
   try {
     const [editingTemplate, setEditingTemplate] = useState<ActivityTemplate | null>(null);
@@ -1755,20 +2246,6 @@ const ActivityManagementPage = ({
         ? prev.filter(id => id !== templateId)
         : [...prev, templateId]
     );
-  };
-
-  const handleAddToCurrentSession = (template: ActivityTemplate) => {
-    const newActivity = {
-      id: Date.now().toString(),
-      name: template.name,
-      color: template.color,
-      percentage: 10, // Default percentage
-      duration: 0,
-      timeRemaining: 0,
-      isCompleted: false,
-      isLocked: false
-    };
-    setActivities(prev => [...prev, newActivity]);
   };
 
   const handleRemoveFromSession = (activityId: string) => {
@@ -1968,17 +2445,19 @@ const ActivityManagementPage = ({
                           variant="ghost"
                           size="sm"
                           onClick={() => handleEditTemplate(template)}
-                          className="h-6 w-6 sm:h-8 sm:w-8 p-0"
+                          className="h-8 w-8 sm:h-10 sm:w-10 p-1 hover:bg-gray-100 rounded-lg"
+                          title="Edit template"
                         >
-                          <Icon name="settings" className="h-3 w-3 sm:h-4 sm:w-4" />
+                          <Icon name="settings" className="h-4 w-4 sm:h-5 sm:w-5 text-gray-600" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleDeleteTemplate(template.id)}
-                          className="h-6 w-6 sm:h-8 sm:w-8 p-0"
+                          className="h-8 w-8 sm:h-10 sm:w-10 p-1 hover:bg-red-50 rounded-lg"
+                          title="Delete template"
                         >
-                          <Icon name="trash2" className="h-3 w-3 sm:h-4 sm:w-4" />
+                          <Icon name="trash2" className="h-4 w-4 sm:h-5 sm:w-5 text-red-500" />
                         </Button>
                       </div>
                     </div>
@@ -2054,15 +2533,12 @@ const ActivityManagementPage = ({
                       )}
                       
                       <div className="flex items-center space-x-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleAddToCurrentSession(template)}
-                          className="flex-1 h-8 text-xs sm:text-sm"
-                        >
-                          <Icon name="plus" className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                          Add to Session
-                        </Button>
+                        <AddActivityDropdown 
+                          template={template}
+                          onAddToSession={onAddToSession}
+                          onAddToDaily={onAddToDaily}
+                          onAddToBoth={onAddToBoth}
+                        />
                       </div>
                     </div>
                   </CardContent>
@@ -2110,10 +2586,10 @@ const ActivityManagementPage = ({
                               e.stopPropagation();
                               handleEditActivity(activity);
                             }}
-                            className="h-6 w-6 sm:h-8 sm:w-8 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-blue-300"
+                            className="h-8 w-8 sm:h-10 sm:w-10 p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 border border-blue-300 rounded-lg"
                             title="Edit Activity"
                           >
-                            <span className="text-xs sm:text-sm">⚙️</span>
+                            <Icon name="settings" className="h-4 w-4 sm:h-5 sm:w-5" />
                           </Button>
                           
                           {/* Delete Button */}
@@ -2121,15 +2597,21 @@ const ActivityManagementPage = ({
                             variant="ghost"
                             size="sm"
                             onClick={() => handleRemoveFromSession(activity.id)}
-                            className="h-6 w-6 sm:h-8 sm:w-8 p-0 text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-300"
+                            className="h-8 w-8 sm:h-10 sm:w-10 p-1 text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-300 rounded-lg"
                             title="Delete Activity"
                           >
-                            <span className="text-xs sm:text-sm">❌</span>
+                            <Icon name="trash2" className="h-4 w-4 sm:h-5 sm:w-5" />
                           </Button>
                         </div>
                       </div>
                       <div className="text-xs sm:text-sm text-gray-600">
                         {activity.isLocked && <Icon name="lock" className="h-3 w-3 sm:h-4 sm:w-4 inline mr-1" />}
+                        {activity.sharedId && (
+                          <span className="inline-flex items-center gap-1 mr-2">
+                            <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse"></div>
+                            <span className="text-purple-600 font-medium">Shared</span>
+                          </span>
+                        )}
                         {activity.isCompleted ? 'Completed' : 'Active'}
                       </div>
                     </CardContent>
@@ -3662,6 +4144,45 @@ export default function App() {
     }
   }, [rpgTags]);
 
+  // Helper function to sync progress between shared activities
+  const syncSharedProgress = useCallback((updatedActivity: Activity, isSessionActivity: boolean) => {
+    if (!updatedActivity.sharedId) return;
+    
+    if (isSessionActivity) {
+      // Update corresponding daily activity
+      setDailyActivities(prev => prev.map(dailyActivity => {
+        if (dailyActivity.sharedId === updatedActivity.sharedId) {
+          const sessionProgress = updatedActivity.isCompleted ? 100 : 
+            ((updatedActivity.duration - (updatedActivity.timeRemaining || 0)) / updatedActivity.duration) * 100;
+          
+          return {
+            ...dailyActivity,
+            timeSpent: Math.round((sessionProgress / 100) * dailyActivity.duration),
+            status: updatedActivity.isCompleted ? 'completed' : 
+                   sessionProgress > 0 ? 'active' : dailyActivity.status
+          };
+        }
+        return dailyActivity;
+      }));
+    } else {
+      // Update corresponding session activity
+      setActivities(prev => prev.map(sessionActivity => {
+        if (sessionActivity.sharedId === updatedActivity.sharedId) {
+          const dailyProgress = updatedActivity.duration > 0 ? 
+            ((updatedActivity.timeSpent || 0) / updatedActivity.duration) * 100 : 0;
+          
+          return {
+            ...sessionActivity,
+            isCompleted: updatedActivity.status === 'completed',
+            timeRemaining: updatedActivity.status === 'completed' ? 0 : 
+              Math.max(0, (sessionActivity.duration || 0) - Math.round((dailyProgress / 100) * (sessionActivity.duration || 0)))
+          };
+        }
+        return sessionActivity;
+      }));
+    }
+  }, []);
+
   // Helper function to check if a template should be active based on recurring schedule
   const isTemplateActiveToday = useCallback((template: ActivityTemplate, currentDate: Date) => {
     // If no recurring schedule, only check time windows
@@ -4423,6 +4944,80 @@ export default function App() {
     return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   };
 
+  // Template-related activity creation functions
+  const handleAddToCurrentSession = (template: ActivityTemplate) => {
+    const newActivity = {
+      id: Date.now().toString(),
+      name: template.name,
+      color: template.color,
+      percentage: 10, // Default percentage
+      duration: 0,
+      timeRemaining: 0,
+      isCompleted: false,
+      isLocked: false,
+      tags: template.tags || [],
+      templateId: template.id // Link to template for shared progress
+    };
+    setActivities(prev => [...prev, newActivity]);
+  };
+
+  const handleAddToDaily = (template: ActivityTemplate) => {
+    const newActivity = {
+      id: `daily-${Date.now()}`,
+      name: template.name,
+      color: template.color,
+      duration: template.presetDuration || 30, // Use preset duration or default
+      percentage: 0,
+      status: 'scheduled' as const,
+      isActive: false,
+      timeSpent: 0,
+      startedAt: null,
+      subtasks: [],
+      tags: template.tags || [],
+      templateId: template.id // Link to template for shared progress
+    };
+    setDailyActivities(prev => [...prev, newActivity]);
+  };
+
+  const handleAddToBoth = (template: ActivityTemplate) => {
+    const sharedId = `shared-${Date.now()}`;
+    
+    // Add to session
+    const sessionActivity = {
+      id: sharedId + '-session',
+      name: template.name,
+      color: template.color,
+      percentage: 10,
+      duration: 0,
+      timeRemaining: 0,
+      isCompleted: false,
+      isLocked: false,
+      tags: template.tags || [],
+      templateId: template.id,
+      sharedId: sharedId // Link for shared progress
+    };
+    
+    // Add to daily
+    const dailyActivity = {
+      id: sharedId + '-daily',
+      name: template.name,
+      color: template.color,
+      duration: template.presetDuration || 30,
+      percentage: 0,
+      status: 'scheduled' as const,
+      isActive: false,
+      timeSpent: 0,
+      startedAt: null,
+      subtasks: [],
+      tags: template.tags || [],
+      templateId: template.id,
+      sharedId: sharedId // Link for shared progress
+    };
+    
+    setActivities(prev => [...prev, sessionActivity]);
+    setDailyActivities(prev => [...prev, dailyActivity]);
+  };
+
   const addActivity = (customName: string | null = null, customColor: string | null = null, presetTime = 0, countUp = false) => {
     // Always open modal if no custom name provided - this ensures all activity creation goes through naming dialog
     // This is especially important for mobile users who shouldn't need to click into input fields to rename
@@ -4595,21 +5190,29 @@ export default function App() {
   const toggleDailyActivityCompletion = (activityId: string) => {
     setDailyActivities(prev => prev.map(activity => {
       if (activity.id === activityId) {
+        let updatedActivity;
         // If currently completed, mark as scheduled and reset all subtasks
         if (activity.status === 'completed') {
-          return { 
+          updatedActivity = { 
             ...activity, 
             status: 'scheduled',
             subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: false }))
           };
         } else {
           // If not completed, mark as completed and complete all subtasks
-          return { 
+          updatedActivity = { 
             ...activity, 
             status: 'completed',
             subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: true }))
           };
         }
+        
+        // Sync progress with shared session activity if it exists
+        if (updatedActivity.sharedId) {
+          syncSharedProgress(updatedActivity, false);
+        }
+        
+        return updatedActivity;
       }
       return activity;
     }));
@@ -5255,12 +5858,14 @@ export default function App() {
     }
   }, [activities, currentActivityIndex]);
 
-  const handleCompleteActivity = (activityId) => {
+  const handleCompleteActivity = (activityId: string) => {
     let timeToVault = 0;
+    let completedActivity: Activity | null = null;
     const updatedActivities = activities.map(act => {
       if (act.id === activityId && !act.isCompleted) {
-        timeToVault = act.timeRemaining;
-        return { ...act, timeRemaining: 0, isCompleted: true };
+        timeToVault = act.timeRemaining || 0;
+        completedActivity = { ...act, timeRemaining: 0, isCompleted: true };
+        return completedActivity;
       }
       return act;
     });
@@ -5270,6 +5875,11 @@ export default function App() {
     }
 
     setActivities(updatedActivities);
+
+    // Sync progress with shared daily activity if it exists
+    if (completedActivity && (completedActivity as Activity).sharedId) {
+      syncSharedProgress(completedActivity as Activity, true);
+    }
 
     const allCompleted = updatedActivities.every(a => a.isCompleted);
     if (allCompleted) {
@@ -5482,6 +6092,9 @@ export default function App() {
       activities={activities}
       setActivities={setActivities}
       onBackToTimer={() => setCurrentPage('timer')}
+      onAddToSession={handleAddToCurrentSession}
+      onAddToDaily={handleAddToDaily}
+      onAddToBoth={handleAddToBoth}
     />
   ) : currentPage === 'rpg-stats' ? (
     <RPGStatsPage
@@ -6433,6 +7046,12 @@ export default function App() {
                             <div className="flex items-center gap-2 flex-1 min-w-0">
                               <div className="w-4 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: activity.color }}></div>
                               <span className="font-medium text-sm truncate flex-1">{activity.name}</span>
+                              {activity.sharedId && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">
+                                  <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-pulse"></div>
+                                  Shared
+                                </span>
+                              )}
                             </div>
                             
                             <div className="flex items-center gap-1 flex-shrink-0">
