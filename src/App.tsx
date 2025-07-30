@@ -3369,7 +3369,7 @@ const FlowmodoroActivity = ({ flowState, settings, onTakeBreak, onSkipBreak, onR
       // Start a break using all available time
       onTakeBreak(flowState.availableRestTime);
     }
-    // If no rest time available, do nothing (can't be selected)
+    // If no rest time available, do nothing (button shows tooltip explaining why)
   };
   
   return (
@@ -3382,6 +3382,13 @@ const FlowmodoroActivity = ({ flowState, settings, onTakeBreak, onSkipBreak, onR
             : "bg-purple-25 border-purple-100 cursor-not-allowed opacity-70"
       }`}
       onClick={handleFlowmodoroClick}
+      title={
+        flowState.isOnBreak 
+          ? "Click to skip break and return unused time" 
+          : flowState.availableRestTime > 0 
+            ? `Start ${Math.floor(flowState.availableRestTime / 60)}m ${flowState.availableRestTime % 60}s break`
+            : "No rest time earned yet. Work on activities to earn break time."
+      }
     >
       {/* Background progress bar like other activities */}
       {settings.flowmodoroShowProgress && (
@@ -3395,10 +3402,13 @@ const FlowmodoroActivity = ({ flowState, settings, onTakeBreak, onSkipBreak, onR
       )}
       
       <div className="flex items-center space-x-4 z-10">
-        <div className="w-4 h-4 rounded-full bg-purple-500" />
+        <div className={`w-4 h-4 rounded-full ${flowState.availableRestTime > 0 ? 'bg-purple-500' : 'bg-gray-300'}`} />
         <span className="font-semibold text-purple-800">
           {flowState.isOnBreak ? 'Flowmodoro Break' : 'Flowmodoro Rest'}
         </span>
+        {!flowState.isOnBreak && flowState.availableRestTime === 0 && (
+          <span className="text-xs text-gray-500">(Start timer to earn time)</span>
+        )}
       </div>
       
       <div className="flex items-center space-x-2 z-10">
@@ -3950,34 +3960,10 @@ export default function App() {
   // Daily Mode Time State (Step 9: Live Time)
   const [currentTime, setCurrentTime] = useState(new Date());
 
-  // Step 12: Update time spent for active activities + Flowmodoro accumulation
+  // Step 12: Update time spent for active activities
   useEffect(() => {
     if (currentMode === 'daily' && activeDailyActivity) {
       const interval = setInterval(() => {
-        // Flowmodoro accumulation for daily mode
-        if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
-          const elapsedSeconds = 1; // Since we run every second
-          const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
-          // Convert ratio to seconds (ratio is work-minutes : rest-minutes, so multiply by 60)
-          const workSecondsPerRestSecond = settings.flowmodoroRatio * 60;
-          const restSecondsToAdd = Math.floor(newAccumulated / workSecondsPerRestSecond);
-          
-          if (restSecondsToAdd > 0) {
-            setFlowmodoroState(prevFlow => ({
-              ...prevFlow,
-              availableRestMinutes: Math.floor((prevFlow.availableRestTime + restSecondsToAdd) / 60),
-              availableRestTime: prevFlow.availableRestTime + restSecondsToAdd,
-              totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
-              accumulatedFractionalTime: newAccumulated % workSecondsPerRestSecond
-            }));
-          } else {
-            setFlowmodoroState(prevFlow => ({
-              ...prevFlow,
-              accumulatedFractionalTime: newAccumulated
-            }));
-          }
-        }
-
         setDailyActivities(prev => prev.map(activity => {
           if (activity.isActive && activity.startedAt) {
             const timeSpentSeconds = Math.floor((Date.now() - (activity.startedAt as any).getTime()) / 1000);
@@ -4002,7 +3988,7 @@ export default function App() {
       }, 1000);
       return () => clearInterval(interval);
     }
-  }, [currentMode, activeDailyActivity, settings.flowmodoroEnabled, settings.flowmodoroRatio]);
+  }, [currentMode, activeDailyActivity]);
 
   // Helper function to get real-time timeSpent for display
   const getRealTimeSpent = (activity) => {
@@ -4801,37 +4787,42 @@ export default function App() {
       return; // Don't process regular timer during break
     }
 
-    setActivities(prev => {
-      const now = Date.now();
-      const elapsedSeconds = Math.round((now - lastTickTimestampRef.current) / 1000);
-      lastTickTimestampRef.current = now;
+    // Calculate elapsed time for both session and daily modes
+    const currentTime = Date.now();
+    const elapsedSeconds = Math.round((currentTime - lastTickTimestampRef.current) / 1000);
+    lastTickTimestampRef.current = currentTime;
 
-      if (elapsedSeconds <= 0) return prev;
+    if (elapsedSeconds <= 0) return;
 
-      // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
-      if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
-        // Add elapsed seconds to fractional accumulator and calculate how much rest time to award
-        const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
-        // Convert ratio to seconds (ratio is work-minutes : rest-minutes, so multiply by 60)
-        const workSecondsPerRestSecond = settings.flowmodoroRatio * 60;
-        const restSecondsToAdd = Math.floor(newAccumulated / workSecondsPerRestSecond);
-        const remainingFractional = newAccumulated % workSecondsPerRestSecond;
-        
-        if (restSecondsToAdd > 0) {
-          setFlowmodoroState(prevFlow => ({
-            ...prevFlow,
-            availableRestTime: prevFlow.availableRestTime + restSecondsToAdd,
-            totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
-            availableRestMinutes: Math.floor((prevFlow.availableRestTime + restSecondsToAdd) / 60),
-            accumulatedFractionalTime: remainingFractional
-          }));
-        } else {
-          setFlowmodoroState(prevFlow => ({
-            ...prevFlow,
-            accumulatedFractionalTime: newAccumulated
-          }));
-        }
+    // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
+    // This works for both session and daily modes
+    if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+      // Add elapsed seconds to fractional accumulator and calculate how much rest time to award
+      const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
+      // For a 2:1 ratio, every 2 work seconds earns 1 rest second
+      // For a 5:1 ratio, every 5 work seconds earns 1 rest second
+      const workSecondsPerRestSecond = settings.flowmodoroRatio;
+      const restSecondsToAdd = Math.floor(newAccumulated / workSecondsPerRestSecond);
+      const remainingFractional = newAccumulated % workSecondsPerRestSecond;
+      
+      if (restSecondsToAdd > 0) {
+        setFlowmodoroState(prevFlow => ({
+          ...prevFlow,
+          availableRestTime: prevFlow.availableRestTime + restSecondsToAdd,
+          totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
+          availableRestMinutes: Math.floor((prevFlow.availableRestTime + restSecondsToAdd) / 60),
+          accumulatedFractionalTime: remainingFractional
+        }));
+      } else {
+        setFlowmodoroState(prevFlow => ({
+          ...prevFlow,
+          accumulatedFractionalTime: newAccumulated
+        }));
       }
+    }
+
+    setActivities(prev => {
+      if (elapsedSeconds <= 0) return prev;
 
       let newActivities = [...prev];
       let secondsToProcess = elapsedSeconds;
@@ -4912,25 +4903,33 @@ export default function App() {
     });
   }, [activities, syncSharedProgress]);
 
-  // Main timer loop
+  // Main timer loop - runs for session mode OR when daily activities are active OR during flowmodoro break
   useEffect(() => {
-    if (isTimerActive && !isPaused) {
+    const hasActiveDailyActivity = currentMode === 'daily' && dailyActivities.some(activity => activity.isActive);
+    const hasActiveFlowmodoroBreak = flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+    const shouldRunTimer = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
+    
+    if (shouldRunTimer) {
       lastTickTimestampRef.current = Date.now();
       const interval = setInterval(handleTimerTick, 1000);
       return () => clearInterval(interval);
     }
-  }, [isTimerActive, isPaused, handleTimerTick]);
+  }, [isTimerActive, isPaused, handleTimerTick, currentMode, dailyActivities, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining]);
 
   // Handle returning to the tab
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && isTimerActive && !isPaused) {
+      const hasActiveDailyActivity = currentMode === 'daily' && dailyActivities.some(activity => activity.isActive);
+      const hasActiveFlowmodoroBreak = flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+      const shouldHandleTick = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
+      
+      if (document.visibilityState === 'visible' && shouldHandleTick) {
         handleTimerTick();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isTimerActive, isPaused, handleTimerTick]);
+  }, [isTimerActive, isPaused, handleTimerTick, currentMode, dailyActivities, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining]);
 
   // Screen Wake Lock
   useEffect(() => {
@@ -6719,10 +6718,10 @@ export default function App() {
                             return Math.min(availableRestPercentage, 100);
                           })()}%` 
                         }}
-                        title={`Available Rest Time: ${flowmodoroState.availableRestMinutes}m earned`}
+                        title={`Available Rest Time: ${Math.floor(flowmodoroState.availableRestTime / 60)}m ${flowmodoroState.availableRestTime % 60}s earned`}
                       >
                         <div className="absolute -top-5 left-2 text-xs text-purple-600 font-medium">
-                          {flowmodoroState.availableRestMinutes}m rest earned
+                          {Math.floor(flowmodoroState.availableRestTime / 60)}m {flowmodoroState.availableRestTime % 60}s rest earned
                         </div>
                       </div>
                     )}
@@ -6969,7 +6968,7 @@ export default function App() {
                       </span>
                       {settings.flowmodoroEnabled && (
                         <span className="text-purple-600">
-                          Rest: {flowmodoroState.availableRestMinutes}m earned
+                          Rest: {Math.floor(flowmodoroState.availableRestTime / 60)}m {flowmodoroState.availableRestTime % 60}s earned
                         </span>
                       )}
                     </div>
