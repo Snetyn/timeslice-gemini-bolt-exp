@@ -4014,15 +4014,6 @@ export default function App() {
     return activity.timeSpent;
   };
 
-  // Helper function to get real-time timeSpent in seconds for countdown display
-  const getRealTimeSpentInSeconds = (activity) => {
-    if (activity.isActive && activity.startedAt) {
-      const currentSessionSeconds = Math.floor((Date.now() - (activity.startedAt as any).getTime()) / 1000);
-      return (activity.timeSpent * 60) + currentSessionSeconds;
-    }
-    return activity.timeSpent * 60; // Convert minutes to seconds
-  };
-
   // Step 14: Calculate real-time timeline position for sliding animation
   const getActiveActivityTimelinePosition = () => {
     const activeActivity = dailyActivities.find(a => a.isActive && a.startedAt);
@@ -7217,8 +7208,8 @@ export default function App() {
                           {activity.status === 'active' && activity.startedAt && (
                             <div className="mt-1 text-xs">
                               {(() => {
-                                const totalSpentSeconds = getRealTimeSpentInSeconds(activity);
-                                const remainingSeconds = (activity.duration * 60) - totalSpentSeconds;
+                                const realTimeSpent = getRealTimeSpent(activity);
+                                const remainingSeconds = Math.max(0, (activity.duration * 60) - Math.floor((currentTime.getTime() - activity.startedAt) / 1000));
                                 
                                 if (remainingSeconds > 0) {
                                   return (
