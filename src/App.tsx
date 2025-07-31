@@ -3725,6 +3725,241 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
   );
 };
 
+// Single Activity Mode Component
+const SingleActivityMode = ({ 
+  singleState, 
+  onStart, 
+  onComplete, 
+  onCancel, 
+  flowmodoroState,
+  formatTime 
+}) => {
+  const [activityName, setActivityName] = useState('');
+  const [currentElapsed, setCurrentElapsed] = useState(0);
+
+  // Update elapsed time in real-time
+  useEffect(() => {
+    if (singleState.isActive && singleState.startTime) {
+      const interval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - singleState.startTime.getTime()) / 1000);
+        setCurrentElapsed(elapsed);
+      }, 100); // Update more frequently for smooth display
+      return () => clearInterval(interval);
+    }
+  }, [singleState.isActive, singleState.startTime]);
+
+  // Calculate flowmodoro reward based on elapsed time (escalating scale)
+  const calculateFlowmodoroReward = (elapsedSeconds) => {
+    // Reward scales from 1:5 ratio at start to 1:1 ratio at 20 minutes (1200 seconds)
+    // Formula: ratio = 5 - (4 * min(elapsedSeconds, 1200) / 1200)
+    const maxSeconds = 20 * 60; // 20 minutes cap
+    const cappedSeconds = Math.min(elapsedSeconds, maxSeconds);
+    const scaleFactor = cappedSeconds / maxSeconds; // 0 to 1
+    const currentRatio = 5 - (4 * scaleFactor); // 5 down to 1
+    
+    // Calculate total reward based on average ratio over time
+    let totalReward = 0;
+    for (let second = 1; second <= elapsedSeconds && second <= maxSeconds; second++) {
+      const secondScaleFactor = second / maxSeconds;
+      const secondRatio = 5 - (4 * secondScaleFactor);
+      totalReward += 1 / secondRatio; // Each second gives 1/ratio rest seconds
+    }
+    
+    // Add remaining seconds at minimum ratio if over 20 minutes
+    if (elapsedSeconds > maxSeconds) {
+      totalReward += (elapsedSeconds - maxSeconds) / 1; // 1:1 ratio for time over 20 minutes
+    }
+    
+    return Math.floor(totalReward);
+  };
+
+  const currentReward = calculateFlowmodoroReward(currentElapsed);
+  const currentRatio = currentElapsed <= 1200 ? 
+    (5 - (4 * Math.min(currentElapsed, 1200) / 1200)).toFixed(1) : 
+    '1.0';
+
+  const handleStart = () => {
+    if (activityName.trim()) {
+      onStart(activityName.trim());
+      setActivityName('');
+    }
+  };
+
+  const handleComplete = () => {
+    const reward = calculateFlowmodoroReward(currentElapsed);
+    onComplete(reward);
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !singleState.isActive) {
+      handleStart();
+    }
+  };
+
+  // Format time for display (hours:minutes:seconds for long durations)
+  const formatElapsedTime = (seconds) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+  };
+
+  // Render chain visualization
+  const renderChain = () => {
+    const recentChain = singleState.chain.slice(-10); // Show last 10 activities
+    
+    return (
+      <div className="flex items-center space-x-2 mt-4">
+        <span className="text-sm font-medium text-gray-600">Chain:</span>
+        <div className="flex items-center space-x-1">
+          {recentChain.map((activity, index) => (
+            <div
+              key={index}
+              className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white"
+              style={{ backgroundColor: `hsl(${120 + (activity.reward * 2)}, 60%, 50%)` }}
+              title={`${activity.name} - ${activity.reward}s reward - ${new Date(activity.completedAt).toLocaleTimeString()}`}
+            >
+              {activity.reward}
+            </div>
+          ))}
+          {singleState.chain.length === 0 && (
+            <span className="text-gray-400 text-sm">No activities completed yet</span>
+          )}
+        </div>
+        {singleState.chain.length > 0 && (
+          <div className="ml-4 text-sm text-gray-600">
+            Streak: {singleState.currentChainStreak} | Total: {singleState.chain.length}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-6 space-y-6">
+      <div className="text-center">
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Single Activity Mode</h2>
+        <p className="text-gray-600">
+          Quick upcount timer for unplanned tasks. Flowmodoro rewards scale from 5:1 to 1:1 ratio over 20 minutes.
+        </p>
+      </div>
+
+      {!singleState.isActive ? (
+        <Card>
+          <CardContent className="p-6">
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="activity-name" className="text-sm font-medium text-gray-700">
+                  What are you working on?
+                </Label>
+                <Input
+                  id="activity-name"
+                  type="text"
+                  value={activityName}
+                  onChange={(e) => setActivityName(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder="Enter activity name..."
+                  className="mt-2"
+                  autoFocus
+                />
+              </div>
+              <Button 
+                onClick={handleStart}
+                disabled={!activityName.trim()}
+                className="w-full"
+              >
+                <Icon name="play" className="w-4 h-4 mr-2" />
+                Start Activity
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-6">
+            <div className="text-center space-y-6">
+              <h3 className="text-xl font-semibold text-gray-900">
+                {singleState.activityName}
+              </h3>
+              
+              <div className="text-6xl font-mono font-bold text-blue-600">
+                {formatElapsedTime(currentElapsed)}
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 text-center">
+                <div className="bg-green-50 p-4 rounded-lg">
+                  <div className="text-2xl font-bold text-green-600">{currentReward}s</div>
+                  <div className="text-sm text-gray-600">Flowmodoro Reward</div>
+                </div>
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <div className="text-2xl font-bold text-blue-600">{currentRatio}:1</div>
+                  <div className="text-sm text-gray-600">Current Ratio</div>
+                </div>
+              </div>
+              
+              <div className="flex space-x-4">
+                <Button onClick={handleComplete} className="flex-1">
+                  <Icon name="check" className="w-4 h-4 mr-2" />
+                  Complete & Claim Reward
+                </Button>
+                <Button onClick={onCancel} variant="outline" className="flex-1">
+                  <Icon name="x" className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Progress indicator for 20-minute scaling */}
+      {singleState.isActive && (
+        <Card>
+          <CardContent className="p-4">
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm text-gray-600">
+                <span>Ratio Scale Progress</span>
+                <span>{Math.min(100, (currentElapsed / 1200) * 100).toFixed(1)}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-gradient-to-r from-red-400 to-green-400 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min(100, (currentElapsed / 1200) * 100)}%` }}
+                />
+              </div>
+              <div className="text-xs text-gray-500 text-center">
+                Reward ratio improves as you work longer (caps at 20 minutes)
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {renderChain()}
+      
+      {/* Show available flowmodoro time */}
+      {flowmodoroState.availableRestTime > 0 && (
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-center">
+              <div className="text-lg font-medium text-purple-600">
+                Available Flowmodoro Time: {formatTime(flowmodoroState.availableRestTime)}
+              </div>
+              <div className="text-sm text-gray-500 mt-1">
+                Switch to Session or Daily mode to use your earned break time
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+};
+
 // --- Main Application Component ---
 export default function App() {
   const [activities, setActivities] = useState(() => {
@@ -3864,7 +4099,7 @@ export default function App() {
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
   
-  // Mode state - 'session' or 'daily'
+  // Mode state - 'session', 'daily', or 'single'
   const [currentMode, setCurrentMode] = useState('session');
   
   // Daily Mode State (Step 1: Basic daily activities) - Load from localStorage
@@ -3959,6 +4194,39 @@ export default function App() {
   
   // Daily Mode Time State (Step 9: Live Time)
   const [currentTime, setCurrentTime] = useState(new Date());
+
+  // Single Activity Mode State
+  const [singleActivityState, setSingleActivityState] = useState(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceSingleActivityState');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...parsed,
+          startTime: parsed.startTime ? new Date(parsed.startTime) : null
+        };
+      }
+    } catch (e) {
+      console.error('Failed to load single activity state from localStorage:', e);
+    }
+    return {
+      isActive: false,
+      activityName: '',
+      startTime: null,
+      elapsedSeconds: 0,
+      chain: [], // Array of completed activities with timestamps and rewards
+      currentChainStreak: 0 // Current consecutive activities completed
+    };
+  });
+
+  // Save single activity state to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('timeSliceSingleActivityState', JSON.stringify(singleActivityState));
+    } catch (e) {
+      console.error('Failed to save single activity state to localStorage:', e);
+    }
+  }, [singleActivityState]);
 
   // Step 12: Update time spent for active activities
   useEffect(() => {
@@ -4513,6 +4781,68 @@ export default function App() {
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
       accumulatedFractionalTime: 0
+    }));
+  };
+
+  // Single Activity Mode handlers
+  const startSingleActivity = (activityName) => {
+    setSingleActivityState(prev => ({
+      ...prev,
+      isActive: true,
+      activityName,
+      startTime: new Date(),
+      elapsedSeconds: 0
+    }));
+  };
+
+  const completeSingleActivity = (rewardSeconds) => {
+    const completedActivity = {
+      name: singleActivityState.activityName,
+      reward: rewardSeconds,
+      completedAt: new Date(),
+      duration: Math.floor((Date.now() - singleActivityState.startTime.getTime()) / 1000)
+    };
+
+    setSingleActivityState(prev => {
+      const newChain = [...prev.chain, completedActivity];
+      
+      // Calculate streak (consecutive activities within reasonable time gaps)
+      let streak = 1;
+      for (let i = newChain.length - 2; i >= 0; i--) {
+        const timeDiff = (new Date(newChain[i + 1].completedAt).getTime() - new Date(newChain[i].completedAt).getTime()) / (1000 * 60); // minutes
+        if (timeDiff <= 120) { // Within 2 hours = continue streak
+          streak++;
+        } else {
+          break;
+        }
+      }
+
+      return {
+        ...prev,
+        isActive: false,
+        activityName: '',
+        startTime: null,
+        elapsedSeconds: 0,
+        chain: newChain,
+        currentChainStreak: streak
+      };
+    });
+
+    // Add flowmodoro reward
+    setFlowmodoroState(prev => ({
+      ...prev,
+      availableRestTime: prev.availableRestTime + rewardSeconds,
+      totalEarnedToday: prev.totalEarnedToday + rewardSeconds
+    }));
+  };
+
+  const cancelSingleActivity = () => {
+    setSingleActivityState(prev => ({
+      ...prev,
+      isActive: false,
+      activityName: '',
+      startTime: null,
+      elapsedSeconds: 0
     }));
   };
 
@@ -6621,7 +6951,7 @@ export default function App() {
                 className={`h-9 text-sm ${currentMode === 'session' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('session')}
               >
-                Session Mode
+                Session
               </Button>
               <Button 
                 size="sm" 
@@ -6629,7 +6959,15 @@ export default function App() {
                 className={`h-9 text-sm ${currentMode === 'daily' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('daily')}
               >
-                Daily Mode
+                Daily
+              </Button>
+              <Button 
+                size="sm" 
+                variant={currentMode === 'single' ? 'default' : 'outline'}
+                className={`h-9 text-sm ${currentMode === 'single' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+                onClick={() => setCurrentMode('single')}
+              >
+                Single
               </Button>
             </div>
 
@@ -6642,7 +6980,7 @@ export default function App() {
                   <Button size="sm" variant={durationType === 'endTime' ? 'default' : 'outline'} onClick={() => setDurationType('endTime')} className="h-9 text-sm flex-1 sm:flex-none">Set End Time</Button>
                 </div>
               </>
-            ) : (
+            ) : currentMode === 'daily' ? (
               // Daily Mode Content
               <>
                 <h2 className="text-lg sm:text-xl font-semibold">Daily Progress</h2>
@@ -7453,7 +7791,17 @@ export default function App() {
                   </div>
                 </div>
               </>
-            )}
+            ) : currentMode === 'single' ? (
+              // Single Activity Mode Content
+              <SingleActivityMode 
+                singleState={singleActivityState}
+                onStart={startSingleActivity}
+                onComplete={completeSingleActivity}
+                onCancel={cancelSingleActivity}
+                flowmodoroState={flowmodoroState}
+                formatTime={formatTime}
+              />
+            ) : null}
           </div>
 
           {currentMode === 'session' && (
