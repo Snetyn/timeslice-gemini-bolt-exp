@@ -4165,8 +4165,8 @@ const SingleActivityMode = ({
     return Math.max(baseRatio - improvement, 1.0);
   };
 
-  const currentReward = calculateFlowmodoroReward(totalSessionTime, currentChainLength);
-  const currentRatio = calculateCurrentRatio(totalSessionTime, currentChainLength);
+  const currentReward = calculateFlowmodoroReward(currentElapsed, currentChainLength);
+  const currentRatio = calculateCurrentRatio(currentElapsed, currentChainLength);
 
   const handleStart = () => {
     if (activityName.trim()) {
@@ -4178,8 +4178,8 @@ const SingleActivityMode = ({
   const handleNewActivity = () => {
     if (newActivityName.trim()) {
       // Complete current activity and immediately start new one (chaining)
-      // IMPORTANT: Keep the total session time continuous - don't reset the timer!
-      const reward = calculateFlowmodoroReward(totalSessionTime, currentChainLength); // Use total session time
+      // IMPORTANT: Only reward the current activity's elapsed time, not the total session time
+      const reward = calculateFlowmodoroReward(currentElapsed, currentChainLength); // Use current activity time only
       onComplete(reward, true, newActivityName.trim()); // Pass new activity name for chaining
       setNewActivityName('');
       setShowNewActivityInput(false);
@@ -4192,7 +4192,7 @@ const SingleActivityMode = ({
   };
 
   const handleComplete = () => {
-    const reward = calculateFlowmodoroReward(totalSessionTime, currentChainLength);
+    const reward = calculateFlowmodoroReward(currentElapsed, currentChainLength);
     onComplete(reward);
     setIsPaused(false);
     setTotalSessionTime(0);
