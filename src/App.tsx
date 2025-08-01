@@ -4057,7 +4057,8 @@ const SingleActivityMode = ({
   onComplete, 
   onCancel, 
   flowmodoroState,
-  formatTime 
+  formatTime,
+  settings
 }) => {
   const [activityName, setActivityName] = useState('');
   const [newActivityName, setNewActivityName] = useState('');
@@ -4098,7 +4099,7 @@ const SingleActivityMode = ({
     // Dynamic scaling based on task length - shorter tasks get better early rewards
     const taskLengthMinutes = Math.floor(elapsedSeconds / 60);
     
-    // Base scaling from 5:1 to 1:1 over 30 minutes, but influenced by task patterns
+    // Base scaling from configured ratio to 1:1 over 30 minutes, but influenced by task patterns
     const maxSeconds = 30 * 60; // 30 minutes cap
     const cappedSeconds = Math.min(elapsedSeconds, maxSeconds);
     
@@ -4108,16 +4109,17 @@ const SingleActivityMode = ({
       const scaleFactor = second / maxSeconds;
       
       // Dynamic ratio based on task length patterns
-      let baseRatio = 5;
+      const baseConfigRatio = Math.max(1, Math.min(10, settings?.flowmodoroRatio || 5));
+      let baseRatio = baseConfigRatio;
       if (taskLengthMinutes <= 5) {
-        // Short tasks: Better early rewards (4:1 to 1:1)
-        baseRatio = 4 - (3 * scaleFactor);
+        // Short tasks: Better early rewards (ratio-1:1 to 1:1)
+        baseRatio = Math.max(1, (baseConfigRatio - 1) - ((baseConfigRatio - 2) * scaleFactor));
       } else if (taskLengthMinutes <= 15) {
-        // Medium tasks: Standard scaling (5:1 to 1:1)
-        baseRatio = 5 - (4 * scaleFactor);
+        // Medium tasks: Standard scaling (ratio:1 to 1:1)
+        baseRatio = Math.max(1, baseConfigRatio - ((baseConfigRatio - 1) * scaleFactor));
       } else {
-        // Long tasks: Slower early rewards (6:1 to 1:1) 
-        baseRatio = 6 - (5 * scaleFactor);
+        // Long tasks: Slower early rewards (ratio+1:1 to 1:1) 
+        baseRatio = Math.max(1, (baseConfigRatio + 1) - (baseConfigRatio * scaleFactor));
       }
       
       totalReward += 1 / Math.max(baseRatio, 1.0);
@@ -4146,13 +4148,14 @@ const SingleActivityMode = ({
     const taskLengthMinutes = Math.floor(seconds / 60);
     
     // Dynamic base ratio
-    let baseRatio = 5;
+    const baseConfigRatio = Math.max(1, Math.min(10, settings?.flowmodoroRatio || 5));
+    let baseRatio = baseConfigRatio;
     if (taskLengthMinutes <= 5) {
-      baseRatio = 4 - (3 * scaleFactor);
+      baseRatio = Math.max(1, (baseConfigRatio - 1) - ((baseConfigRatio - 2) * scaleFactor));
     } else if (taskLengthMinutes <= 15) {
-      baseRatio = 5 - (4 * scaleFactor);
+      baseRatio = Math.max(1, baseConfigRatio - ((baseConfigRatio - 1) * scaleFactor));
     } else {
-      baseRatio = 6 - (5 * scaleFactor);
+      baseRatio = Math.max(1, (baseConfigRatio + 1) - (baseConfigRatio * scaleFactor));
     }
     
     // Chain bonus with diminishing returns
@@ -8497,6 +8500,7 @@ export default function App() {
                 onCancel={cancelSingleActivity}
                 flowmodoroState={flowmodoroState}
                 formatTime={formatTime}
+                settings={settings}
               />
             ) : currentMode === 'flowmodoro' ? (
               // Standalone Flowmodoro Mode Content
