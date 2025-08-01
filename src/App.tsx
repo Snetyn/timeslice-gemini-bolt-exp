@@ -5454,7 +5454,7 @@ export default function App() {
     }));
   };
 
-  const completeSingleActivity = (rewardSeconds) => {
+  const completeSingleActivity = (rewardSeconds, isChaining = false, newActivityName = '') => {
     const completedActivity = {
       name: singleActivityState.activityName,
       reward: rewardSeconds,
@@ -5476,6 +5476,20 @@ export default function App() {
         }
       }
 
+      // If chaining, immediately start the new activity
+      if (isChaining && newActivityName.trim()) {
+        return {
+          ...prev,
+          isActive: true,
+          activityName: newActivityName.trim(),
+          startTime: new Date(), // Start new activity immediately
+          elapsedSeconds: 0,
+          chain: newChain,
+          currentChainStreak: streak
+        };
+      }
+
+      // If not chaining, complete the session
       return {
         ...prev,
         isActive: false,
