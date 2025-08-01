@@ -147,6 +147,14 @@ const Icon = ({ name, className }) => {
       </>
     ),
     check: <path d="M20 6 9 17l-5-5" />,
+    refresh: (
+      <>
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+        <path d="M21 3v5h-5" />
+        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+        <path d="M3 21v-5h5" />
+      </>
+    ),
   };
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -156,11 +164,11 @@ const Icon = ({ name, className }) => {
 };
 
 const Button = ({ variant = 'default', size = 'default', className = '', children, ...props }) => {
-  const baseClasses = "inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50";
+  const baseClasses = "inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 touch-manipulation";
   const sizeClasses = {
-    default: "h-10 px-4 py-2",
-    sm: "h-9 rounded-md px-3",
-    lg: "h-11 rounded-md px-8",
+    default: "h-9 sm:h-10 px-3 sm:px-4 py-2 text-sm",
+    sm: "h-8 sm:h-9 rounded-md px-2 sm:px-3 text-xs sm:text-sm",
+    lg: "h-10 sm:h-11 rounded-md px-4 sm:px-6 md:px-8 text-sm sm:text-base",
   };
   const variantClasses = {
     default: "bg-slate-900 text-slate-50 hover:bg-slate-900/90",
@@ -176,13 +184,94 @@ const Button = ({ variant = 'default', size = 'default', className = '', childre
 };
 
 const Input = ({ className = '', ...props }) => (
-  <input className={`flex h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${className}`} {...props} />
+  <input className={`flex h-9 sm:h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 touch-manipulation ${className}`} {...props} />
 );
 
 const Card = ({ className = '', children }) => <div className={`rounded-lg border bg-white text-slate-950 shadow-sm ${className}`}>{children}</div>;
-const CardHeader = ({ className = '', children }) => <div className={`flex flex-col space-y-1.5 p-6 ${className}`}>{children}</div>;
-const CardTitle = ({ className = '', children }) => <h3 className={`text-2xl font-semibold leading-none tracking-tight ${className}`}>{children}</h3>;
-const CardContent = ({ className = '', children }) => <div className={`p-6 pt-0 ${className}`}>{children}</div>;
+const CardHeader = ({ className = '', children }) => <div className={`flex flex-col space-y-1 sm:space-y-1.5 p-3 sm:p-4 md:p-6 ${className}`}>{children}</div>;
+const CardTitle = ({ className = '', children }) => <h3 className={`text-lg sm:text-xl md:text-2xl font-semibold leading-none tracking-tight ${className}`}>{children}</h3>;
+const CardContent = ({ className = '', children }) => <div className={`p-3 sm:p-4 md:p-6 pt-0 ${className}`}>{children}</div>;
+
+// Mobile Zoom Utilities
+const getMobileClasses = (zoomLevel: string) => {
+  switch (zoomLevel) {
+    case 'compact':
+      return {
+        container: 'p-1 sm:p-2 md:p-4 space-y-2 sm:space-y-3 md:space-y-6',
+        text: {
+          xs: 'text-[10px] sm:text-xs',
+          sm: 'text-xs sm:text-sm',
+          base: 'text-sm sm:text-base',
+          lg: 'text-base sm:text-lg',
+          xl: 'text-lg sm:text-xl',
+          '2xl': 'text-xl sm:text-2xl',
+          '3xl': 'text-2xl sm:text-3xl',
+          '8xl': 'text-4xl sm:text-6xl md:text-8xl'
+        },
+        spacing: {
+          cardPadding: 'p-2 sm:p-3',
+          buttonPadding: 'px-2 py-1 sm:px-3 sm:py-1.5',
+          margin: 'm-1 sm:m-2',
+          gap: 'gap-1 sm:gap-2'
+        },
+        button: {
+          sm: 'h-7 sm:h-8 px-2 sm:px-3 text-xs sm:text-sm',
+          base: 'h-8 sm:h-9 px-3 sm:px-4 text-xs sm:text-sm',
+          lg: 'h-9 sm:h-10 px-4 sm:px-6 text-sm sm:text-base'
+        }
+      };
+    case 'large':
+      return {
+        container: 'p-4 sm:p-6 md:p-8 space-y-4 sm:space-y-6 md:space-y-8',
+        text: {
+          xs: 'text-xs sm:text-sm',
+          sm: 'text-sm sm:text-base',
+          base: 'text-base sm:text-lg',
+          lg: 'text-lg sm:text-xl',
+          xl: 'text-xl sm:text-2xl',
+          '2xl': 'text-2xl sm:text-3xl',
+          '3xl': 'text-3xl sm:text-4xl',
+          '8xl': 'text-6xl sm:text-8xl md:text-9xl'
+        },
+        spacing: {
+          cardPadding: 'p-4 sm:p-6',
+          buttonPadding: 'px-4 py-2 sm:px-6 sm:py-3',
+          margin: 'm-2 sm:m-4',
+          gap: 'gap-3 sm:gap-4'
+        },
+        button: {
+          sm: 'h-10 sm:h-11 px-4 sm:px-5 text-sm sm:text-base',
+          base: 'h-11 sm:h-12 px-5 sm:px-6 text-base sm:text-lg',
+          lg: 'h-12 sm:h-14 px-6 sm:px-8 text-lg sm:text-xl'
+        }
+      };
+    default: // normal
+      return {
+        container: 'p-2 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6',
+        text: {
+          xs: 'text-xs',
+          sm: 'text-sm',
+          base: 'text-base',
+          lg: 'text-lg',
+          xl: 'text-xl',
+          '2xl': 'text-2xl',
+          '3xl': 'text-3xl',
+          '8xl': 'text-6xl sm:text-8xl'
+        },
+        spacing: {
+          cardPadding: 'p-3 sm:p-4 md:p-6',
+          buttonPadding: 'px-3 py-1.5 sm:px-4 sm:py-2',
+          margin: 'm-2 sm:m-3',
+          gap: 'gap-2 sm:gap-3'
+        },
+        button: {
+          sm: 'h-8 sm:h-9 px-3 text-sm',
+          base: 'h-9 sm:h-10 px-4 text-sm',
+          lg: 'h-10 sm:h-11 px-6 text-base'
+        }
+      };
+  }
+};
 
 // RPG Stats Radar Chart Component with Enhanced Today's Tasks Display
 const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dailyActivities = [] }: {
@@ -3725,7 +3814,243 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
   );
 };
 
-// Single Activity Mode Component
+// Standalone Flowmodoro Mode Component
+const FlowmodoroMode = ({ 
+  flowmodoroState,
+  onTakeBreak,
+  onSkipBreak,
+  onReset,
+  formatTime
+}) => {
+  const [customBreakMinutes, setCustomBreakMinutes] = useState(0);
+  const [customBreakSeconds, setCustomBreakSeconds] = useState(0);
+  const [showCustomInput, setShowCustomInput] = useState(false);
+
+  const availableMinutes = Math.floor(flowmodoroState.availableRestTime / 60);
+  const availableSeconds = flowmodoroState.availableRestTime % 60;
+  const breakMinutes = Math.floor(flowmodoroState.breakTimeRemaining / 60);
+  const breakSeconds = flowmodoroState.breakTimeRemaining % 60;
+  
+  const totalEarnedMinutes = Math.floor(flowmodoroState.totalEarnedToday / 60);
+  const totalEarnedSeconds = flowmodoroState.totalEarnedToday % 60;
+
+  const handleStartAllAvailableTime = () => {
+    if (flowmodoroState.availableRestTime > 0) {
+      onTakeBreak(flowmodoroState.availableRestTime);
+    }
+  };
+
+  const handleStartCustomTime = () => {
+    const customTime = (customBreakMinutes * 60) + customBreakSeconds;
+    if (customTime > 0 && customTime <= flowmodoroState.availableRestTime) {
+      onTakeBreak(customTime);
+      setShowCustomInput(false);
+      setCustomBreakMinutes(0);
+      setCustomBreakSeconds(0);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto p-2 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
+      {/* Header */}
+      <div className="text-center">
+        <h2 className="text-xl sm:text-2xl md:text-3xl font-bold bg-gradient-to-r from-purple-600 to-green-600 bg-clip-text text-transparent mb-2">
+          🌟 Flowmodoro Mode
+        </h2>
+        <p className="text-gray-600 text-sm sm:text-base md:text-lg px-2">
+          Dedicated timer for your earned break time. Use the rest time you've earned from working!
+        </p>
+      </div>
+
+      {/* Current Break Timer */}
+      {flowmodoroState.isOnBreak && (
+        <Card className="border-2 border-purple-300 bg-gradient-to-r from-purple-50 to-green-50">
+          <CardContent className="p-4 sm:p-6 md:p-8 text-center">
+            <div className="space-y-4 sm:space-y-6">
+              <div>
+                <h3 className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Break in Progress</h3>
+                <div className="text-4xl sm:text-6xl md:text-8xl font-mono font-bold text-purple-600" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  {formatTime(flowmodoroState.breakTimeRemaining)}
+                </div>
+                <div className="text-sm sm:text-base md:text-lg text-gray-600 mt-2">
+                  Enjoy your well-earned break! 🌱
+                </div>
+              </div>
+              
+              <div className="flex justify-center">
+                <Button 
+                  onClick={onSkipBreak}
+                  size="lg" 
+                  className="w-full sm:w-auto sm:min-w-48 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700"
+                >
+                  <Icon name="x" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                  <span className="hidden sm:inline">Skip Break & Return Time</span>
+                  <span className="sm:hidden">Skip Break</span>
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Available Time & Controls */}
+      {!flowmodoroState.isOnBreak && (
+        <Card className="border-2 border-green-200">
+          <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 mb-4 sm:mb-6">
+              <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-200">
+                <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Available Break Time</div>
+                <div className="text-2xl sm:text-3xl md:text-4xl font-bold text-green-600">
+                  {availableMinutes}m {availableSeconds}s
+                </div>
+                <div className="text-xs text-gray-500 mt-1">Ready to use</div>
+              </div>
+              <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-blue-50 to-purple-50 rounded-xl border-2 border-blue-200">
+                <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Total Earned Today</div>
+                <div className="text-2xl sm:text-3xl md:text-4xl font-bold text-blue-600">
+                  {totalEarnedMinutes}m {totalEarnedSeconds}s
+                </div>
+                <div className="text-xs text-gray-500 mt-1">All work sessions</div>
+              </div>
+            </div>
+
+            {flowmodoroState.availableRestTime > 0 ? (
+              <div className="space-y-3 sm:space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:justify-center gap-2 md:gap-4">
+                  <Button 
+                    onClick={handleStartAllAvailableTime}
+                    size="lg" 
+                    className="w-full sm:w-auto sm:min-w-48 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                  >
+                    <Icon name="play" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                    <span className="hidden sm:inline">Use All Available Time</span>
+                    <span className="sm:hidden">Use All Time</span>
+                  </Button>
+                  <Button 
+                    onClick={() => setShowCustomInput(!showCustomInput)}
+                    variant="outline"
+                    size="lg" 
+                    className="w-full sm:w-auto sm:min-w-48 border-2 border-blue-400 text-blue-600 hover:bg-blue-50"
+                  >
+                    <Icon name="settings" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                    <span className="hidden sm:inline">Custom Duration</span>
+                    <span className="sm:hidden">Custom</span>
+                  </Button>
+                  <Button 
+                    onClick={onReset}
+                    variant="outline"
+                    size="lg" 
+                    className="w-full sm:w-auto sm:min-w-32 border-2 border-red-400 text-red-600 hover:bg-red-50 sm:col-span-2 md:col-span-1"
+                    title="Reset all earned break time"
+                  >
+                    <Icon name="refresh" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                    Reset
+                  </Button>
+                </div>
+
+                {/* Custom Time Input */}
+                {showCustomInput && (
+                  <Card className="border-2 border-blue-300 bg-blue-50">
+                    <CardContent className="p-4">
+                      <div className="space-y-3">
+                        <h4 className="text-lg font-semibold text-blue-800">Custom Break Duration</h4>
+                        <div className="flex items-center justify-center space-x-4">
+                          <div className="flex items-center space-x-2">
+                            <label className="text-sm font-medium">Minutes:</label>
+                            <Input
+                              type="number"
+                              min="0"
+                              max={Math.floor(flowmodoroState.availableRestTime / 60)}
+                              value={customBreakMinutes}
+                              onChange={(e) => setCustomBreakMinutes(parseInt(e.target.value) || 0)}
+                              className="w-16 text-center"
+                            />
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            <label className="text-sm font-medium">Seconds:</label>
+                            <Input
+                              type="number"
+                              min="0"
+                              max="59"
+                              value={customBreakSeconds}
+                              onChange={(e) => setCustomBreakSeconds(parseInt(e.target.value) || 0)}
+                              className="w-16 text-center"
+                            />
+                          </div>
+                          <Button 
+                            onClick={handleStartCustomTime}
+                            disabled={customBreakMinutes === 0 && customBreakSeconds === 0}
+                            className="bg-blue-600 hover:bg-blue-700"
+                          >
+                            <Icon name="play" className="w-4 h-4 mr-2" />
+                            Start
+                          </Button>
+                          <Button 
+                            onClick={() => setShowCustomInput(false)}
+                            variant="outline"
+                            className="border-red-300 text-red-600"
+                          >
+                            <Icon name="x" className="w-4 h-4" />
+                          </Button>
+                        </div>
+                        <p className="text-sm text-blue-600 text-center">
+                          Maximum: {Math.floor(flowmodoroState.availableRestTime / 60)}m {flowmodoroState.availableRestTime % 60}s
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <div className="text-6xl mb-4">⏰</div>
+                <h3 className="text-xl font-semibold text-gray-700 mb-2">No Break Time Available</h3>
+                <p className="text-gray-600">
+                  Work in Session, Daily, or Single mode to earn flowmodoro break time!
+                </p>
+                <div className="mt-4 text-sm text-gray-500">
+                  Tip: The longer you work, the more break time you earn
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Instructions */}
+      {!flowmodoroState.isOnBreak && (
+        <Card className="border-2 border-gray-200 bg-gray-50">
+          <CardContent className="p-6">
+            <h4 className="text-lg font-semibold text-gray-800 mb-3">How Flowmodoro Works</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-600">
+              <div className="flex items-start space-x-2">
+                <span className="text-green-600 font-bold">1.</span>
+                <div>
+                  <div className="font-medium">Earn Time</div>
+                  <div>Work in any mode to accumulate break time based on your productivity</div>
+                </div>
+              </div>
+              <div className="flex items-start space-x-2">
+                <span className="text-blue-600 font-bold">2.</span>
+                <div>
+                  <div className="font-medium">Use Time</div>
+                  <div>Come here to take breaks using your earned time - all or custom amounts</div>
+                </div>
+              </div>
+              <div className="flex items-start space-x-2">
+                <span className="text-purple-600 font-bold">3.</span>
+                <div>
+                  <div className="font-medium">Stay Fresh</div>
+                  <div>Regular breaks help maintain focus and prevent burnout during long work sessions</div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+};
 const SingleActivityMode = ({ 
   singleState, 
   onStart, 
@@ -3735,48 +4060,110 @@ const SingleActivityMode = ({
   formatTime 
 }) => {
   const [activityName, setActivityName] = useState('');
+  const [newActivityName, setNewActivityName] = useState('');
   const [currentElapsed, setCurrentElapsed] = useState(0);
+  const [totalSessionTime, setTotalSessionTime] = useState(0); // Accumulated time across all chained activities
+  const [currentChainLength, setCurrentChainLength] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showNewActivityInput, setShowNewActivityInput] = useState(false);
 
   // Update elapsed time in real-time
   useEffect(() => {
-    if (singleState.isActive && singleState.startTime) {
+    if (singleState.isActive && singleState.startTime && !isPaused) {
       const interval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - singleState.startTime.getTime()) / 1000);
         setCurrentElapsed(elapsed);
-      }, 100); // Update more frequently for smooth display
+        
+        // Calculate total session time including previous activities in current chain
+        const baseTime = singleState.chain.reduce((sum, activity, index) => {
+          // Only count activities from current session (same chain streak)
+          if (index >= singleState.chain.length - singleState.currentChainStreak) {
+            return sum + activity.duration;
+          }
+          return sum;
+        }, 0);
+        setTotalSessionTime(baseTime + elapsed);
+      }, 100);
       return () => clearInterval(interval);
     }
-  }, [singleState.isActive, singleState.startTime]);
+  }, [singleState.isActive, singleState.startTime, isPaused, singleState.chain, singleState.currentChainStreak]);
 
-  // Calculate flowmodoro reward based on elapsed time (escalating scale)
-  const calculateFlowmodoroReward = (elapsedSeconds) => {
-    // Reward scales from 1:5 ratio at start to 1:1 ratio at 20 minutes (1200 seconds)
-    // Formula: ratio = 5 - (4 * min(elapsedSeconds, 1200) / 1200)
-    const maxSeconds = 20 * 60; // 20 minutes cap
-    const cappedSeconds = Math.min(elapsedSeconds, maxSeconds);
-    const scaleFactor = cappedSeconds / maxSeconds; // 0 to 1
-    const currentRatio = 5 - (4 * scaleFactor); // 5 down to 1
+  // Update current chain length
+  useEffect(() => {
+    setCurrentChainLength(singleState.currentChainStreak);
+  }, [singleState.currentChainStreak]);
+
+  // Calculate flowmodoro reward with chain multiplier and dynamic scaling
+  const calculateFlowmodoroReward = (elapsedSeconds, chainMultiplier = 1) => {
+    // Dynamic scaling based on task length - shorter tasks get better early rewards
+    const taskLengthMinutes = Math.floor(elapsedSeconds / 60);
     
-    // Calculate total reward based on average ratio over time
+    // Base scaling from 5:1 to 1:1 over 30 minutes, but influenced by task patterns
+    const maxSeconds = 30 * 60; // 30 minutes cap
+    const cappedSeconds = Math.min(elapsedSeconds, maxSeconds);
+    
+    // Calculate base reward with dynamic efficiency curve
     let totalReward = 0;
     for (let second = 1; second <= elapsedSeconds && second <= maxSeconds; second++) {
-      const secondScaleFactor = second / maxSeconds;
-      const secondRatio = 5 - (4 * secondScaleFactor);
-      totalReward += 1 / secondRatio; // Each second gives 1/ratio rest seconds
+      const scaleFactor = second / maxSeconds;
+      
+      // Dynamic ratio based on task length patterns
+      let baseRatio = 5;
+      if (taskLengthMinutes <= 5) {
+        // Short tasks: Better early rewards (4:1 to 1:1)
+        baseRatio = 4 - (3 * scaleFactor);
+      } else if (taskLengthMinutes <= 15) {
+        // Medium tasks: Standard scaling (5:1 to 1:1)
+        baseRatio = 5 - (4 * scaleFactor);
+      } else {
+        // Long tasks: Slower early rewards (6:1 to 1:1) 
+        baseRatio = 6 - (5 * scaleFactor);
+      }
+      
+      totalReward += 1 / Math.max(baseRatio, 1.0);
     }
     
-    // Add remaining seconds at minimum ratio if over 20 minutes
+    // Add remaining seconds at 1:1 ratio if over 30 minutes
     if (elapsedSeconds > maxSeconds) {
-      totalReward += (elapsedSeconds - maxSeconds) / 1; // 1:1 ratio for time over 20 minutes
+      totalReward += (elapsedSeconds - maxSeconds);
     }
     
-    return Math.floor(totalReward);
+    // Chain multiplier with diminishing returns to prevent runaway accumulation
+    const effectiveChain = Math.min(chainMultiplier, 10); // Cap chain at 10 for multiplier calculation
+    const multiplier = 1 + (effectiveChain * 0.08 * Math.pow(0.95, effectiveChain)); // Diminishing returns
+    
+    // Additional bonus for chain diversity (different task lengths)
+    const diversityBonus = chainMultiplier > 2 ? 1.1 : 1.0;
+    
+    return Math.floor(totalReward * multiplier * diversityBonus);
   };
 
-  const currentReward = calculateFlowmodoroReward(currentElapsed);
-  const currentRatio = currentElapsed <= 1200 ? 
-    (5 - (4 * Math.min(currentElapsed, 1200) / 1200)).toFixed(1) : 
-    '1.0';
+  // Calculate current ratio with dynamic scaling
+  const calculateCurrentRatio = (seconds, chainBonus = 0) => {
+    const maxSeconds = 1800; // 30 minutes
+    const cappedSeconds = Math.min(seconds, maxSeconds);
+    const scaleFactor = cappedSeconds / maxSeconds;
+    const taskLengthMinutes = Math.floor(seconds / 60);
+    
+    // Dynamic base ratio
+    let baseRatio = 5;
+    if (taskLengthMinutes <= 5) {
+      baseRatio = 4 - (3 * scaleFactor);
+    } else if (taskLengthMinutes <= 15) {
+      baseRatio = 5 - (4 * scaleFactor);
+    } else {
+      baseRatio = 6 - (5 * scaleFactor);
+    }
+    
+    // Chain bonus with diminishing returns
+    const effectiveChain = Math.min(chainBonus, 10);
+    const improvement = effectiveChain * 0.05 * Math.pow(0.9, effectiveChain);
+    
+    return Math.max(baseRatio - improvement, 1.0);
+  };
+
+  const currentReward = calculateFlowmodoroReward(totalSessionTime, currentChainLength);
+  const currentRatio = calculateCurrentRatio(totalSessionTime, currentChainLength);
 
   const handleStart = () => {
     if (activityName.trim()) {
@@ -3785,14 +4172,57 @@ const SingleActivityMode = ({
     }
   };
 
+  const handleNewActivity = () => {
+    if (newActivityName.trim()) {
+      // Complete current activity and immediately start new one (chaining)
+      // IMPORTANT: Keep the total session time continuous - don't reset the timer!
+      const reward = calculateFlowmodoroReward(totalSessionTime, currentChainLength); // Use total session time
+      onComplete(reward, true, newActivityName.trim()); // Pass new activity name for chaining
+      setNewActivityName('');
+      setShowNewActivityInput(false);
+      // Note: totalSessionTime continues accumulating, currentElapsed resets to 0 for new activity
+    }
+  };
+
+  const handlePause = () => {
+    setIsPaused(!isPaused);
+  };
+
   const handleComplete = () => {
-    const reward = calculateFlowmodoroReward(currentElapsed);
+    const reward = calculateFlowmodoroReward(totalSessionTime, currentChainLength);
     onComplete(reward);
+    setIsPaused(false);
+    setTotalSessionTime(0);
+  };
+
+  const handleCancel = () => {
+    onCancel();
+    setIsPaused(false);
+    setTotalSessionTime(0);
+  };
+
+  const handleResetChain = () => {
+    if (confirm('Reset flow chain? This will clear your current chain progress but keep any earned flowmodoro time.')) {
+      // Reset chain but keep accumulated flowmodoro time
+      onCancel(true); // Pass true to indicate chain reset only
+      setIsPaused(false);
+      setTotalSessionTime(0);
+    }
   };
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !singleState.isActive) {
       handleStart();
+    }
+  };
+
+  const handleNewActivityKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      handleNewActivity();
+    }
+    if (e.key === 'Escape') {
+      setShowNewActivityInput(false);
+      setNewActivityName('');
     }
   };
 
@@ -3808,154 +4238,380 @@ const SingleActivityMode = ({
     return `${minutes}:${String(secs).padStart(2, '0')}`;
   };
 
-  // Render chain visualization
-  const renderChain = () => {
-    const recentChain = singleState.chain.slice(-10); // Show last 10 activities
+  // Enhanced chain visualization with flow connection and task pattern analysis
+  const renderEnhancedChain = () => {
+    const recentChain = singleState.chain.slice(-8); // Show last 8 activities
+    
+    // Analyze task patterns for visual feedback
+    const getTaskLengthCategory = (duration) => {
+      const minutes = Math.floor(duration / 60);
+      if (minutes <= 5) return { category: 'short', color: '#10b981', icon: '⚡' };
+      if (minutes <= 15) return { category: 'medium', color: '#3b82f6', icon: '💎' };
+      return { category: 'long', color: '#8b5cf6', icon: '🏆' };
+    };
     
     return (
-      <div className="flex items-center space-x-2 mt-4">
-        <span className="text-sm font-medium text-gray-600">Chain:</span>
-        <div className="flex items-center space-x-1">
-          {recentChain.map((activity, index) => (
-            <div
-              key={index}
-              className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white"
-              style={{ backgroundColor: `hsl(${120 + (activity.reward * 2)}, 60%, 50%)` }}
-              title={`${activity.name} - ${activity.reward}s reward - ${new Date(activity.completedAt).toLocaleTimeString()}`}
-            >
-              {activity.reward}
+      <Card className="mt-4 sm:mt-6">
+        <CardHeader>
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+            <CardTitle className="text-base sm:text-lg font-semibold">Flow Chain</CardTitle>
+            <div className="flex flex-wrap gap-2 sm:gap-4 text-xs sm:text-sm text-gray-600">
+              <span>Chain: <span className="font-bold text-purple-600">{currentChainLength}</span></span>
+              <span>Total: <span className="font-bold text-purple-600">{singleState.chain.length}</span></span>
+              <span className="hidden sm:inline">Multiplier: <span className="font-bold text-green-600">{(1 + (Math.min(currentChainLength, 10) * 0.08 * Math.pow(0.95, currentChainLength))).toFixed(2)}x</span></span>
+              {!singleState.isActive && singleState.chain.length > 0 && (
+                <Button 
+                  onClick={handleResetChain} 
+                  variant="outline" 
+                  size="sm"
+                  className="border-purple-300 text-purple-600 hover:bg-purple-50 px-2 py-1 text-xs"
+                  title="Reset chain but keep flowmodoro time"
+                >
+                  <Icon name="refresh" className="w-3 h-3 mr-1" />
+                  Reset
+                </Button>
+              )}
             </div>
-          ))}
-          {singleState.chain.length === 0 && (
-            <span className="text-gray-400 text-sm">No activities completed yet</span>
-          )}
-        </div>
-        {singleState.chain.length > 0 && (
-          <div className="ml-4 text-sm text-gray-600">
-            Streak: {singleState.currentChainStreak} | Total: {singleState.chain.length}
           </div>
-        )}
-      </div>
+        </CardHeader>
+        <CardContent>
+          <div className="min-h-16 sm:min-h-20 p-2 sm:p-4 bg-gray-50 rounded-lg overflow-x-auto">
+            {singleState.chain.length === 0 ? (
+              <div className="text-center text-gray-500 italic py-4 sm:py-8">
+                🔗 Start your first activity to begin building your Flow Chain!<br/>
+                <span className="text-xs mt-2 block">Mix short & long tasks for optimal rewards</span>
+              </div>
+            ) : (
+              <div className="space-y-2 sm:space-y-3">
+                <div className="flex items-center gap-1 sm:gap-2 overflow-x-auto pb-2">
+                  {recentChain.map((activity, index) => {
+                    const taskInfo = getTaskLengthCategory(activity.duration);
+                    const isInCurrentChain = currentChainLength > index;
+                    
+                    return (
+                      <div key={index} className="flex items-center flex-shrink-0">
+                        <div
+                          className="w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg transition-all duration-300 hover:scale-110 cursor-pointer relative"
+                          style={{ 
+                            background: `linear-gradient(135deg, ${taskInfo.color}, #06b6d4)`,
+                            boxShadow: isInCurrentChain ? '0 0 15px rgba(139, 92, 246, 0.6)' : '0 0 8px rgba(139, 92, 246, 0.3)',
+                            border: isInCurrentChain ? '2px solid #10b981' : '1px solid #e5e7eb'
+                          }}
+                          title={`${activity.name} - ${Math.floor(activity.duration / 60)}m ${activity.duration % 60}s (${taskInfo.category})`}
+                        >
+                          {taskInfo.icon}
+                          {isInCurrentChain && (
+                            <div className="absolute -top-1 -right-1 w-3 h-3 sm:w-4 sm:h-4 bg-green-500 rounded-full text-[8px] sm:text-[10px] flex items-center justify-center">
+                              ⚡
+                            </div>
+                          )}
+                        </div>
+                        {index < recentChain.length - 1 && (
+                          <div 
+                            className={`w-3 sm:w-4 md:w-6 h-0.5 sm:h-1 rounded mx-1 transition-all duration-300 ${
+                              isInCurrentChain 
+                                ? 'bg-gradient-to-r from-green-500 to-emerald-400' 
+                                : 'bg-gradient-to-r from-purple-300 to-blue-300'
+                            }`} 
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                  {singleState.chain.length > 8 && (
+                    <div className="text-xs text-gray-500 ml-1 sm:ml-2 px-1 sm:px-2 py-1 bg-gray-200 rounded flex-shrink-0">
+                      +{singleState.chain.length - 8}
+                    </div>
+                  )}
+                </div>
+                
+                {/* Task pattern legend */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 text-xs text-gray-600 pt-2 border-t border-gray-200">
+                  <div className="flex items-center gap-1 justify-center sm:justify-start">
+                    <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-full bg-green-500"></div>
+                    <span className="text-[10px] sm:text-xs">⚡ Short (≤5m)</span>
+                  </div>
+                  <div className="flex items-center gap-1 justify-center sm:justify-start">
+                    <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-full bg-blue-500"></div>
+                    <span className="text-[10px] sm:text-xs">💎 Medium (6-15m)</span>
+                  </div>
+                  <div className="flex items-center gap-1 justify-center sm:justify-start">
+                    <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-full bg-purple-500"></div>
+                    <span className="text-[10px] sm:text-xs">🏆 Long (15m+)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     );
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-6 space-y-6">
+    <div className="max-w-4xl mx-auto p-2 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
+      {/* Header */}
       <div className="text-center">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Single Activity Mode</h2>
-        <p className="text-gray-600">
-          Quick upcount timer for unplanned tasks. Flowmodoro rewards scale from 5:1 to 1:1 ratio over 20 minutes.
+        <h2 className="text-xl sm:text-2xl md:text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent mb-2">
+          Single Activity Mode
+        </h2>
+        <p className="text-gray-600 text-sm sm:text-base md:text-lg px-2">
+          Continuous flow timer with activity chaining. Chain activities for better flowmodoro rewards!<br className="hidden sm:block"/>
+          <span className="text-xs sm:text-sm text-green-600 font-medium">⚡ Dynamic scaling adapts to your task patterns!</span>
         </p>
       </div>
 
-      {!singleState.isActive ? (
-        <Card>
-          <CardContent className="p-6">
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="activity-name" className="text-sm font-medium text-gray-700">
-                  What are you working on?
-                </Label>
-                <Input
-                  id="activity-name"
-                  type="text"
-                  value={activityName}
-                  onChange={(e) => setActivityName(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="Enter activity name..."
-                  className="mt-2"
-                  autoFocus
-                />
-              </div>
+      {/* Task Input Section */}
+      {!singleState.isActive && (
+        <Card className="border-2 border-purple-200 hover:border-purple-300 transition-colors">
+          <CardHeader>
+            <CardTitle className="text-lg sm:text-xl text-gray-800">What are you working on?</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
+              <Input
+                type="text"
+                placeholder="Enter a quick task or activity..."
+                value={activityName}
+                onChange={(e) => setActivityName(e.target.value)}
+                onKeyPress={handleKeyPress}
+                className="flex-1 text-sm sm:text-base md:text-lg p-3 sm:p-4 border-2 focus:border-purple-400"
+                maxLength={100}
+                autoFocus
+              />
               <Button 
-                onClick={handleStart}
-                disabled={!activityName.trim()}
-                className="w-full"
+                onClick={handleStart} 
+                disabled={!activityName.trim()} 
+                className="w-full sm:w-auto sm:min-w-36 text-sm sm:text-base md:text-lg px-4 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                size="lg"
               >
-                <Icon name="play" className="w-4 h-4 mr-2" />
+                <Icon name="play" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
                 Start Activity
               </Button>
             </div>
           </CardContent>
         </Card>
-      ) : (
-        <Card>
-          <CardContent className="p-6">
-            <div className="text-center space-y-6">
-              <h3 className="text-xl font-semibold text-gray-900">
-                {singleState.activityName}
-              </h3>
-              
-              <div className="text-6xl font-mono font-bold text-blue-600">
-                {formatElapsedTime(currentElapsed)}
+      )}
+
+      {/* Timer Section */}
+      {singleState.isActive && (
+        <Card className="border-2 border-purple-300">
+          <CardContent className="p-4 sm:p-6 md:p-8 text-center">
+            <div className="space-y-4 sm:space-y-6 md:space-y-8">
+              <div>
+                <h3 className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Current Activity</h3>
+                <div className="text-xl sm:text-2xl md:text-3xl font-bold text-purple-600 min-h-8 sm:min-h-10 md:min-h-12 flex items-center justify-center px-2">
+                  {singleState.activityName}
+                </div>
+                {currentChainLength > 0 && (
+                  <div className="mt-2 text-xs sm:text-sm text-green-600 font-medium">
+                    🔗 Chained #{currentChainLength + 1} • {(1 + (Math.min(currentChainLength, 10) * 0.08 * Math.pow(0.95, currentChainLength))).toFixed(2)}x Multiplier
+                  </div>
+                )}
               </div>
               
-              <div className="grid grid-cols-2 gap-4 text-center">
-                <div className="bg-green-50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold text-green-600">{currentReward}s</div>
-                  <div className="text-sm text-gray-600">Flowmodoro Reward</div>
+              <div className="relative">
+                <div 
+                  className={`text-4xl sm:text-6xl md:text-8xl font-mono font-bold transition-all duration-300 ${isPaused ? 'text-orange-500' : 'text-gray-900'}`}
+                  style={{ 
+                    fontVariantNumeric: 'tabular-nums',
+                    textShadow: isPaused ? '0 0 20px rgba(249, 115, 22, 0.3)' : '0 0 20px rgba(139, 92, 246, 0.3)'
+                  }}
+                >
+                  {formatElapsedTime(currentElapsed)}
                 </div>
-                <div className="bg-blue-50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold text-blue-600">{currentRatio}:1</div>
-                  <div className="text-sm text-gray-600">Current Ratio</div>
-                </div>
+                {totalSessionTime > currentElapsed && (
+                  <div className="text-sm sm:text-base md:text-lg text-purple-600 font-medium mt-2">
+                    Total Flow: {formatElapsedTime(totalSessionTime)}
+                  </div>
+                )}
+                {isPaused && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="bg-orange-500 text-white px-3 sm:px-4 py-1 sm:py-2 rounded-lg text-sm sm:text-base md:text-lg font-bold">
+                      PAUSED
+                    </div>
+                  </div>
+                )}
               </div>
               
-              <div className="flex space-x-4">
-                <Button onClick={handleComplete} className="flex-1">
-                  <Icon name="check" className="w-4 h-4 mr-2" />
-                  Complete & Claim Reward
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:justify-center gap-2 sm:gap-3">
+                <Button 
+                  onClick={handlePause} 
+                  variant="outline" 
+                  size="lg" 
+                  className="w-full sm:w-auto sm:min-w-32 border-2 border-orange-400 text-orange-600 hover:bg-orange-50"
+                >
+                  <Icon name={isPaused ? "play" : "pause"} className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                  {isPaused ? "Resume" : "Pause"}
                 </Button>
-                <Button onClick={onCancel} variant="outline" className="flex-1">
-                  <Icon name="x" className="w-4 h-4 mr-2" />
+                <Button 
+                  onClick={() => setShowNewActivityInput(!showNewActivityInput)} 
+                  variant="outline" 
+                  size="lg" 
+                  className="w-full sm:w-auto sm:min-w-48 border-2 border-blue-400 text-blue-600 hover:bg-blue-50"
+                >
+                  <Icon name="plus" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                  <span className="hidden sm:inline">Chain New Activity</span>
+                  <span className="sm:hidden">Chain Activity</span>
+                </Button>
+                <Button 
+                  onClick={handleComplete} 
+                  size="lg" 
+                  className="w-full sm:w-auto sm:min-w-48 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                >
+                  <Icon name="check" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                  <span className="hidden sm:inline">Complete & Claim Reward</span>
+                  <span className="sm:hidden">Complete</span>
+                </Button>
+                <Button 
+                  onClick={handleResetChain} 
+                  variant="outline" 
+                  size="lg" 
+                  className="w-full sm:w-auto sm:min-w-32 border-2 border-purple-400 text-purple-600 hover:bg-purple-50"
+                  title="Reset chain progress but keep earned flowmodoro time"
+                >
+                  <Icon name="refresh" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
+                  Reset Chain
+                </Button>
+                <Button 
+                  onClick={handleCancel} 
+                  variant="outline" 
+                  size="lg" 
+                  className="w-full sm:w-auto sm:min-w-32 border-2 border-red-400 text-red-600 hover:bg-red-50"
+                >
+                  <Icon name="x" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
                   Cancel
                 </Button>
               </div>
+
+              {/* New Activity Input (when chaining) */}
+              {showNewActivityInput && (
+                <Card className="border-2 border-blue-300 bg-blue-50">
+                  <CardContent className="p-3 sm:p-4">
+                    <div className="space-y-3">
+                      <h4 className="text-base sm:text-lg font-semibold text-blue-800">Chain Next Activity</h4>
+                      <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
+                        <Input
+                          type="text"
+                          placeholder="Enter next activity..."
+                          value={newActivityName}
+                          onChange={(e) => setNewActivityName(e.target.value)}
+                          onKeyPress={handleNewActivityKeyPress}
+                          className="flex-1 border-2 border-blue-300 focus:border-blue-500"
+                          maxLength={100}
+                          autoFocus
+                        />
+                        <Button 
+                          onClick={handleNewActivity} 
+                          disabled={!newActivityName.trim()}
+                          className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700"
+                        >
+                          <Icon name="arrowUpDown" className="w-4 h-4 mr-2" />
+                          Chain
+                        </Button>
+                        <Button 
+                          onClick={() => {
+                            setShowNewActivityInput(false);
+                            setNewActivityName('');
+                          }} 
+                          variant="outline"
+                          className="w-full sm:w-auto border-red-300 text-red-600"
+                        >
+                          <Icon name="x" className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs sm:text-sm text-blue-600 text-center sm:text-left">
+                        🔗 Chaining will keep your flow state and add a {(1 + ((Math.min(currentChainLength + 1, 10) * 0.08 * Math.pow(0.95, currentChainLength + 1)))).toFixed(2)}x multiplier bonus!
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Progress indicator for 20-minute scaling */}
-      {singleState.isActive && (
-        <Card>
-          <CardContent className="p-4">
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm text-gray-600">
-                <span>Ratio Scale Progress</span>
-                <span>{Math.min(100, (currentElapsed / 1200) * 100).toFixed(1)}%</span>
+      {/* Reward Progress Section */}
+      <Card className="border-2 border-purple-200">
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 mb-4 sm:mb-6">
+            <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-purple-50 to-blue-50 rounded-xl border-2 border-purple-200">
+              <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Current Ratio</div>
+              <div className="text-xl sm:text-2xl md:text-3xl font-bold text-purple-600">{currentRatio.toFixed(1)}:1</div>
+              <div className="text-xs text-gray-500 mt-1">Work : Rest</div>
+              {currentChainLength > 0 && (
+                <div className="text-xs text-green-600 font-bold mt-1">+Chain Bonus!</div>
+              )}
+            </div>
+            <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-200">
+              <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Pending Reward</div>
+              <div className="text-xl sm:text-2xl md:text-3xl font-bold text-green-600">{Math.floor(currentReward / 60)}m {currentReward % 60}s</div>
+              <div className="text-xs text-gray-500 mt-1">Flowmodoro time</div>
+            </div>
+            <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl border-2 border-amber-200 sm:col-span-2 md:col-span-1">
+              <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">Chain Multiplier</div>
+              <div className="text-xl sm:text-2xl md:text-3xl font-bold text-amber-600">
+                {(1 + (Math.min(currentChainLength, 10) * 0.08 * Math.pow(0.95, currentChainLength))).toFixed(2)}x
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="text-xs text-gray-500 mt-1">Diminishing returns after 10</div>
+              {currentChainLength > 2 && (
+                <div className="text-xs text-green-600 font-bold mt-1">+Diversity Bonus!</div>
+              )}
+            </div>
+          </div>
+          
+          <div className="space-y-2 sm:space-y-3">
+            <div className="flex flex-col sm:flex-row sm:justify-between text-xs sm:text-sm text-gray-600 gap-1">
+              <span className="font-medium">Flow Progress (Total: {formatElapsedTime(totalSessionTime)})</span>
+              <span className="font-bold text-purple-600">{Math.min(100, (totalSessionTime / 1800) * 100).toFixed(1)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-3 sm:h-4 overflow-hidden relative shadow-inner">
+              <div 
+                className="h-full bg-gradient-to-r from-purple-500 via-blue-500 to-green-400 rounded-full transition-all duration-500 relative"
+                style={{ width: `${Math.min(100, (totalSessionTime / 1800) * 100)}%` }}
+              >
                 <div 
-                  className="bg-gradient-to-r from-red-400 to-green-400 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.min(100, (currentElapsed / 1200) * 100)}%` }}
+                  className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-40"
+                  style={{ 
+                    animation: 'shimmer 2s infinite linear',
+                    background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent)'
+                  }}
                 />
               </div>
-              <div className="text-xs text-gray-500 text-center">
-                Reward ratio improves as you work longer (caps at 20 minutes)
-              </div>
             </div>
+            <div className="text-xs text-gray-500 text-center px-2">
+              Chain activities to maintain flow state • Dynamic scaling adapts to task patterns • Shorter tasks get better early rewards
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Enhanced Flow Chain */}
+      {renderEnhancedChain()}
+      
+      {/* Available Flowmodoro Time */}
+      {flowmodoroState.availableRestTime > 0 && (
+        <Card className="border-2 border-green-200 bg-gradient-to-r from-green-50 to-emerald-50">
+          <CardContent className="p-6 text-center">
+            <div className="text-xl font-bold text-green-700 mb-2">
+              🌟 Available Flowmodoro Time: {formatTime(flowmodoroState.availableRestTime)}
+            </div>
+            <p className="text-green-600">
+              Switch to Session or Daily mode to use your earned break time
+            </p>
           </CardContent>
         </Card>
       )}
 
-      {renderChain()}
-      
-      {/* Show available flowmodoro time */}
-      {flowmodoroState.availableRestTime > 0 && (
-        <Card>
-          <CardContent className="p-4">
-            <div className="text-center">
-              <div className="text-lg font-medium text-purple-600">
-                Available Flowmodoro Time: {formatTime(flowmodoroState.availableRestTime)}
-              </div>
-              <div className="text-sm text-gray-500 mt-1">
-                Switch to Session or Daily mode to use your earned break time
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      <style dangerouslySetInnerHTML={{
+        __html: `
+          @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+          }
+        `
+      }} />
     </div>
   );
 };
@@ -4074,6 +4730,9 @@ export default function App() {
       progressBarStyle: 'default',
       progressView: 'linear',
       showActivityTime: true, // NEW: toggle for activity time next to bar
+      // Mobile optimization settings
+      mobileZoomLevel: 'normal', // 'compact', 'normal', 'large'
+      mobileCompactMode: false, // Show minimal UI for small screens
       // Simplified Flowmodoro settings
       flowmodoroEnabled: true,
       flowmodoroRatio: 5, // 5:1 ratio (5 minutes work = 1 minute rest)
@@ -4099,7 +4758,7 @@ export default function App() {
   const [endTime, setEndTime] = useState('23:30');
   const [vaultTime, setVaultTime] = useState(0);
   
-  // Mode state - 'session', 'daily', or 'single'
+  // Mode state - 'session', 'daily', 'single', or 'flowmodoro'
   const [currentMode, setCurrentMode] = useState('session');
   
   // Daily Mode State (Step 1: Basic daily activities) - Load from localStorage
@@ -4836,13 +5495,17 @@ export default function App() {
     }));
   };
 
-  const cancelSingleActivity = () => {
+  const cancelSingleActivity = (chainResetOnly = false) => {
     setSingleActivityState(prev => ({
       ...prev,
       isActive: false,
       activityName: '',
       startTime: null,
-      elapsedSeconds: 0
+      elapsedSeconds: 0,
+      // If chain reset only, reset current streak but keep chain history
+      currentChainStreak: chainResetOnly ? 0 : prev.currentChainStreak,
+      // If full cancel, reset everything
+      ...(chainResetOnly ? {} : { chain: [], currentChainStreak: 0 })
     }));
   };
 
@@ -6755,6 +7418,16 @@ export default function App() {
                   </div>
                 )}
                 <Separator />
+                <div className="space-y-2">
+                  <Label>Mobile Zoom Level</Label>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant={settings.mobileZoomLevel === 'compact' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, mobileZoomLevel: 'compact' }))}>Compact</Button>
+                    <Button size="sm" variant={settings.mobileZoomLevel === 'normal' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, mobileZoomLevel: 'normal' }))}>Normal</Button>
+                    <Button size="sm" variant={settings.mobileZoomLevel === 'large' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, mobileZoomLevel: 'large' }))}>Large</Button>
+                  </div>
+                  <p className="text-xs text-gray-500">Adjust interface size for better mobile experience</p>
+                </div>
+                <Separator />
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
@@ -6943,12 +7616,12 @@ export default function App() {
 
           <div className="space-y-4">
             {/* Mode Selector */}
-            <div className="flex items-center gap-2 mb-6">
-              <span className="text-sm font-medium">Mode:</span>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 sm:mb-6">
+              <span className="text-xs sm:text-sm font-medium">Mode:</span>
               <Button 
                 size="sm" 
                 variant={currentMode === 'session' ? 'default' : 'outline'}
-                className={`h-9 text-sm ${currentMode === 'session' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+                className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'session' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('session')}
               >
                 Session
@@ -6956,7 +7629,7 @@ export default function App() {
               <Button 
                 size="sm" 
                 variant={currentMode === 'daily' ? 'default' : 'outline'}
-                className={`h-9 text-sm ${currentMode === 'daily' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+                className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'daily' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('daily')}
               >
                 Daily
@@ -6964,10 +7637,20 @@ export default function App() {
               <Button 
                 size="sm" 
                 variant={currentMode === 'single' ? 'default' : 'outline'}
-                className={`h-9 text-sm ${currentMode === 'single' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
+                className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'single' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('single')}
               >
                 Single
+              </Button>
+              <Button 
+                size="sm" 
+                variant={currentMode === 'flowmodoro' ? 'default' : 'outline'}
+                className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'flowmodoro' ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'border-purple-400 text-purple-600 hover:bg-purple-50'}`}
+                onClick={() => setCurrentMode('flowmodoro')}
+                title="Standalone Flowmodoro timer - use your earned break time"
+              >
+                <span className="hidden sm:inline">🌟 Flowmodoro</span>
+                <span className="sm:hidden">🌟 Flow</span>
               </Button>
             </div>
 
@@ -7799,6 +8482,15 @@ export default function App() {
                 onComplete={completeSingleActivity}
                 onCancel={cancelSingleActivity}
                 flowmodoroState={flowmodoroState}
+                formatTime={formatTime}
+              />
+            ) : currentMode === 'flowmodoro' ? (
+              // Standalone Flowmodoro Mode Content
+              <FlowmodoroMode 
+                flowmodoroState={flowmodoroState}
+                onTakeBreak={takeFlowmodoroBreak}
+                onSkipBreak={skipFlowmodoroBreak}
+                onReset={resetFlowmodoroState}
                 formatTime={formatTime}
               />
             ) : null}

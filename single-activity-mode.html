@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TimeSlice - Single Activity Mode</title>
+    <style>
+        /* Global Variables and Base Styles */
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-accent: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #cbd5e1;
+            --accent-color: #8b5cf6;
+            --accent-hover: #7c3aed;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+            --border-color: #475569;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Container and Layout */
+        .app-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--accent-color), #06b6d4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        /* Mode Navigation */
+        .mode-nav {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .mode-btn {
+            padding: 0.75rem 1.5rem;
+            background: var(--bg-accent);
+            border: 2px solid var(--border-color);
+            border-radius: 0.5rem;
+            color: var(--text-primary);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mode-btn:hover {
+            background: var(--accent-color);
+            border-color: var(--accent-color);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow);
+        }
+
+        .mode-btn.active {
+            background: var(--accent-color);
+            border-color: var(--accent-color);
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+        }
+
+        .mode-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            transition: left 0.6s ease;
+        }
+
+        .mode-btn:hover::before {
+            left: 100%;
+        }
+
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .mode-content {
+            display: none;
+        }
+
+        .mode-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Single Activity Mode Styles */
+        .single-mode-container {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .task-input-section {
+            background: var(--bg-secondary);
+            padding: 1.5rem;
+            border-radius: 1rem;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+        }
+
+        .task-input-form {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        #taskInput {
+            flex: 1;
+            min-width: 200px;
+            padding: 0.75rem 1rem;
+            background: var(--bg-accent);
+            border: 2px solid var(--border-color);
+            border-radius: 0.5rem;
+            color: var(--text-primary);
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        #taskInput:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+        }
+
+        #taskInput::placeholder {
+            color: var(--text-secondary);
+        }
+
+        #addTaskBtn {
+            padding: 0.75rem 1.5rem;
+            background: var(--accent-color);
+            border: none;
+            border-radius: 0.5rem;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        #addTaskBtn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow);
+        }
+
+        #addTaskBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Timer Section */
+        .timer-section {
+            background: var(--bg-secondary);
+            padding: 2rem;
+            border-radius: 1rem;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+            text-align: center;
+        }
+
+        .current-task {
+            margin-bottom: 1.5rem;
+        }
+
+        .current-task h3 {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.5rem;
+        }
+
+        .current-task .task-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-color);
+            min-height: 2rem;
+        }
+
+        .timer-display {
+            font-size: 4rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            margin: 1.5rem 0;
+            color: var(--text-primary);
+            text-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+        }
+
+        .timer-controls {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .timer-btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 100px;
+        }
+
+        #startBtn {
+            background: var(--success-color);
+            color: white;
+        }
+
+        #startBtn:hover {
+            background: #059669;
+            transform: translateY(-2px);
+        }
+
+        #pauseBtn {
+            background: var(--warning-color);
+            color: white;
+        }
+
+        #pauseBtn:hover {
+            background: #d97706;
+            transform: translateY(-2px);
+        }
+
+        #cancelBtn {
+            background: var(--error-color);
+            color: white;
+        }
+
+        #cancelBtn:hover {
+            background: #dc2626;
+            transform: translateY(-2px);
+        }
+
+        #completeBtn {
+            background: var(--accent-color);
+            color: white;
+        }
+
+        #completeBtn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+        }
+
+        .timer-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Reward Progress Section */
+        .reward-section {
+            background: var(--bg-secondary);
+            padding: 1.5rem;
+            border-radius: 1rem;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+        }
+
+        .reward-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .reward-stat {
+            text-align: center;
+            padding: 1rem;
+            background: var(--bg-accent);
+            border-radius: 0.5rem;
+        }
+
+        .reward-stat .label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.5rem;
+        }
+
+        .reward-stat .value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-color);
+        }
+
+        .reward-progress-container {
+            margin-top: 1rem;
+        }
+
+        .reward-progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .reward-progress-bar {
+            width: 100%;
+            height: 0.5rem;
+            background: var(--bg-accent);
+            border-radius: 0.25rem;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .reward-progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-color), #06b6d4);
+            border-radius: 0.25rem;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+
+        .reward-progress-fill::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+
+        /* Flow Chain Section */
+        .flow-chain-section {
+            background: var(--bg-secondary);
+            padding: 1.5rem;
+            border-radius: 1rem;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow);
+        }
+
+        .flow-chain-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .flow-chain-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .flow-chain-stats {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .flow-chain-container {
+            min-height: 60px;
+            padding: 1rem;
+            background: var(--bg-accent);
+            border-radius: 0.5rem;
+            position: relative;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+        .flow-chain {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            min-height: 40px;
+            position: relative;
+        }
+
+        .flow-link {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--accent-color), #06b6d4);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 0.8rem;
+            position: relative;
+            animation: linkAppear 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+        }
+
+        .flow-link::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: -25px;
+            width: 20px;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-color), #06b6d4);
+            transform: translateY(-50%);
+            border-radius: 2px;
+        }
+
+        .flow-link:first-child::before {
+            display: none;
+        }
+
+        .flow-chain-empty {
+            text-align: center;
+            color: var(--text-secondary);
+            font-style: italic;
+            padding: 2rem;
+        }
+
+        @keyframes linkAppear {
+            0% {
+                opacity: 0;
+                transform: scale(0) rotate(180deg);
+            }
+            50% {
+                opacity: 1;
+                transform: scale(1.2) rotate(0deg);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1) rotate(0deg);
+            }
+        }
+
+        /* Placeholder Mode Content */
+        .placeholder-mode {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: var(--text-secondary);
+        }
+
+        .placeholder-mode h2 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+        }
+
+        .placeholder-mode p {
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .app-container {
+                padding: 0.5rem;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .timer-display {
+                font-size: 3rem;
+            }
+
+            .task-input-form {
+                flex-direction: column;
+            }
+
+            #taskInput {
+                min-width: unset;
+            }
+
+            .timer-controls {
+                justify-content: center;
+                gap: 0.5rem;
+            }
+
+            .timer-btn {
+                min-width: 80px;
+                padding: 0.5rem 1rem;
+                font-size: 0.9rem;
+            }
+
+            .reward-info {
+                grid-template-columns: 1fr;
+            }
+
+            .flow-chain-stats {
+                flex-direction: column;
+                gap: 0.5rem;
+                text-align: right;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .mode-nav {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .mode-btn {
+                width: 100%;
+                max-width: 200px;
+            }
+
+            .timer-display {
+                font-size: 2.5rem;
+            }
+        }
+
+        /* Accessibility */
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* Focus States for Accessibility */
+        .mode-btn:focus,
+        .timer-btn:focus,
+        #taskInput:focus,
+        #addTaskBtn:focus {
+            outline: 2px solid var(--accent-color);
+            outline-offset: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header Section -->
+        <header class="header">
+            <h1>TimeSlice</h1>
+            <p>Productive time management with gamified flow states</p>
+        </header>
+
+        <!-- Mode Navigation -->
+        <nav class="mode-nav">
+            <button class="mode-btn" data-mode="session">Session Mode</button>
+            <button class="mode-btn" data-mode="daily">Daily Mode</button>
+            <button class="mode-btn active" data-mode="single">Single Activity Mode</button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Session Mode (Placeholder) -->
+            <div class="mode-content" id="session-mode">
+                <div class="placeholder-mode">
+                    <h2>Session Mode</h2>
+                    <p>Plan and execute focused work sessions with structured activities and time allocation.</p>
+                </div>
+            </div>
+
+            <!-- Daily Mode (Placeholder) -->
+            <div class="mode-content" id="daily-mode">
+                <div class="placeholder-mode">
+                    <h2>Daily Mode</h2>
+                    <p>Organize your entire day with scheduled activities and real-time progress tracking.</p>
+                </div>
+            </div>
+
+            <!-- Single Activity Mode -->
+            <div class="mode-content active" id="single-mode">
+                <div class="single-mode-container">
+                    <!-- Task Input Section -->
+                    <section class="task-input-section">
+                        <div class="task-input-form">
+                            <input 
+                                type="text" 
+                                id="taskInput" 
+                                placeholder="Enter a quick task or activity..."
+                                maxlength="100"
+                                autocomplete="off"
+                            >
+                            <button id="addTaskBtn">Add Task</button>
+                        </div>
+                    </section>
+
+                    <!-- Timer Section -->
+                    <section class="timer-section">
+                        <div class="current-task">
+                            <h3>Current Task</h3>
+                            <div class="task-name" id="currentTaskName">No task selected</div>
+                        </div>
+                        
+                        <div class="timer-display" id="timerDisplay">00:00</div>
+                        
+                        <div class="timer-controls">
+                            <button class="timer-btn" id="startBtn">Start</button>
+                            <button class="timer-btn" id="pauseBtn" disabled>Pause</button>
+                            <button class="timer-btn" id="cancelBtn" disabled>Cancel</button>
+                            <button class="timer-btn" id="completeBtn" disabled>Complete & Claim Reward</button>
+                        </div>
+                    </section>
+
+                    <!-- Reward Progress Section -->
+                    <section class="reward-section">
+                        <div class="reward-info">
+                            <div class="reward-stat">
+                                <div class="label">Current Ratio</div>
+                                <div class="value" id="currentRatio">5:1</div>
+                            </div>
+                            <div class="reward-stat">
+                                <div class="label">Pending Gems</div>
+                                <div class="value" id="pendingGems">0</div>
+                            </div>
+                            <div class="reward-stat">
+                                <div class="label">Total Gems</div>
+                                <div class="value" id="totalGems">0</div>
+                            </div>
+                        </div>
+                        
+                        <div class="reward-progress-container">
+                            <div class="reward-progress-label">
+                                <span>Scaling Progress (0 → 20 minutes)</span>
+                                <span id="progressPercent">0%</span>
+                            </div>
+                            <div class="reward-progress-bar">
+                                <div class="reward-progress-fill" id="rewardProgressFill"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Flow Chain Section -->
+                    <section class="flow-chain-section">
+                        <div class="flow-chain-header">
+                            <h3 class="flow-chain-title">Flow Chain</h3>
+                            <div class="flow-chain-stats">
+                                <span>Links: <span id="chainLength">0</span></span>
+                                <span>Streak: <span id="chainStreak">0</span></span>
+                            </div>
+                        </div>
+                        
+                        <div class="flow-chain-container">
+                            <div class="flow-chain" id="flowChain">
+                                <div class="flow-chain-empty" id="chainEmpty">
+                                    Complete your first task to start building your Flow Chain!
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // ============================
+        // GLOBAL VARIABLES & STATE
+        // ============================
+
+        // Application state
+        let currentMode = 'single';
+        
+        // Task management
+        let taskQueue = [];
+        let currentTask = '';
+        
+        // Timer state
+        let timerInterval = null;
+        let timerSeconds = 0;
+        let isTimerRunning = false;
+        let isPaused = false;
+        
+        // Reward system
+        let totalGems = parseInt(localStorage.getItem('totalFlowGems') || '0');
+        let pendingGems = 0;
+        
+        // Flow chain system
+        let flowChain = JSON.parse(localStorage.getItem('flowChain') || '[]');
+        let chainStreak = parseInt(localStorage.getItem('chainStreak') || '0');
+        
+        // DOM element references
+        const elements = {
+            // Mode navigation
+            modeButtons: document.querySelectorAll('.mode-btn'),
+            modeContents: document.querySelectorAll('.mode-content'),
+            
+            // Task input
+            taskInput: document.getElementById('taskInput'),
+            addTaskBtn: document.getElementById('addTaskBtn'),
+            currentTaskName: document.getElementById('currentTaskName'),
+            
+            // Timer controls
+            timerDisplay: document.getElementById('timerDisplay'),
+            startBtn: document.getElementById('startBtn'),
+            pauseBtn: document.getElementById('pauseBtn'),
+            cancelBtn: document.getElementById('cancelBtn'),
+            completeBtn: document.getElementById('completeBtn'),
+            
+            // Reward display
+            currentRatio: document.getElementById('currentRatio'),
+            pendingGems: document.getElementById('pendingGems'),
+            totalGemsDisplay: document.getElementById('totalGems'),
+            progressPercent: document.getElementById('progressPercent'),
+            rewardProgressFill: document.getElementById('rewardProgressFill'),
+            
+            // Flow chain
+            flowChain: document.getElementById('flowChain'),
+            chainEmpty: document.getElementById('chainEmpty'),
+            chainLength: document.getElementById('chainLength'),
+            chainStreak: document.getElementById('chainStreak')
+        };
+
+        // ============================
+        // UTILITY FUNCTIONS
+        // ============================
+
+        /**
+         * Format seconds into MM:SS or HH:MM:SS format
+         * @param {number} seconds - Total seconds to format
+         * @returns {string} Formatted time string
+         */
+        function formatTime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            
+            if (hours > 0) {
+                return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            }
+            return `${minutes}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        /**
+         * Calculate the dynamic reward ratio based on elapsed time
+         * Ratio scales from 5:1 at 0 seconds to 1:1 at 1200 seconds (20 minutes)
+         * @param {number} seconds - Elapsed time in seconds
+         * @returns {number} Current ratio (work time : reward time)
+         */
+        function calculateRewardRatio(seconds) {
+            const maxSeconds = 1200; // 20 minutes
+            const cappedSeconds = Math.min(seconds, maxSeconds);
+            const scaleFactor = cappedSeconds / maxSeconds;
+            return 5 - (4 * scaleFactor); // 5 down to 1
+        }
+
+        /**
+         * Calculate total Flow Gems earned for a given duration
+         * Uses integration of the dynamic ratio function
+         * @param {number} totalSeconds - Total elapsed time in seconds
+         * @returns {number} Total gems earned (rounded down)
+         */
+        function calculateTotalGems(totalSeconds) {
+            const maxSeconds = 1200; // 20 minutes
+            let totalReward = 0;
+            
+            // Calculate reward for the scaling period (0-20 minutes)
+            const scalingSeconds = Math.min(totalSeconds, maxSeconds);
+            for (let second = 1; second <= scalingSeconds; second++) {
+                const ratio = calculateRewardRatio(second);
+                totalReward += 1 / ratio; // Each second gives 1/ratio reward seconds
+            }
+            
+            // Add reward for time beyond 20 minutes at 1:1 ratio
+            if (totalSeconds > maxSeconds) {
+                totalReward += (totalSeconds - maxSeconds);
+            }
+            
+            return Math.floor(totalReward);
+        }
+
+        /**
+         * Save current state to localStorage
+         */
+        function saveState() {
+            localStorage.setItem('totalFlowGems', totalGems.toString());
+            localStorage.setItem('flowChain', JSON.stringify(flowChain));
+            localStorage.setItem('chainStreak', chainStreak.toString());
+        }
+
+        /**
+         * Update all display elements with current values
+         */
+        function updateDisplay() {
+            // Timer display
+            elements.timerDisplay.textContent = formatTime(timerSeconds);
+            
+            // Reward calculations
+            const currentRatio = calculateRewardRatio(timerSeconds);
+            pendingGems = calculateTotalGems(timerSeconds);
+            
+            // Reward display updates
+            elements.currentRatio.textContent = `${currentRatio.toFixed(1)}:1`;
+            elements.pendingGems.textContent = pendingGems.toString();
+            elements.totalGemsDisplay.textContent = totalGems.toString();
+            
+            // Progress bar (0% at 0 seconds, 100% at 20 minutes)
+            const progressPercent = Math.min((timerSeconds / 1200) * 100, 100);
+            elements.progressPercent.textContent = `${progressPercent.toFixed(1)}%`;
+            elements.rewardProgressFill.style.width = `${progressPercent}%`;
+            
+            // Flow chain display
+            elements.chainLength.textContent = flowChain.length.toString();
+            elements.chainStreak.textContent = chainStreak.toString();
+        }
+
+        // ============================
+        // TIMER FUNCTIONALITY
+        // ============================
+
+        /**
+         * Start the timer for the current task
+         */
+        function startTimer() {
+            if (!currentTask) {
+                alert('Please add a task first!');
+                return;
+            }
+            
+            isTimerRunning = true;
+            isPaused = false;
+            
+            // Update button states
+            elements.startBtn.disabled = true;
+            elements.pauseBtn.disabled = false;
+            elements.cancelBtn.disabled = false;
+            elements.completeBtn.disabled = false;
+            elements.addTaskBtn.disabled = true;
+            elements.taskInput.disabled = true;
+            
+            // Start the interval
+            timerInterval = setInterval(() => {
+                timerSeconds++;
+                updateDisplay();
+            }, 1000);
+            
+            updateDisplay();
+        }
+
+        /**
+         * Pause or resume the timer
+         */
+        function pauseTimer() {
+            if (isPaused) {
+                // Resume
+                isPaused = false;
+                elements.pauseBtn.textContent = 'Pause';
+                timerInterval = setInterval(() => {
+                    timerSeconds++;
+                    updateDisplay();
+                }, 1000);
+            } else {
+                // Pause
+                isPaused = true;
+                elements.pauseBtn.textContent = 'Resume';
+                clearInterval(timerInterval);
+            }
+        }
+
+        /**
+         * Cancel the current timer and reset
+         */
+        function cancelTimer() {
+            // Stop timer
+            clearInterval(timerInterval);
+            isTimerRunning = false;
+            isPaused = false;
+            timerSeconds = 0;
+            pendingGems = 0;
+            
+            // Reset task
+            currentTask = '';
+            elements.currentTaskName.textContent = 'No task selected';
+            
+            // Reset button states
+            elements.startBtn.disabled = false;
+            elements.pauseBtn.disabled = true;
+            elements.pauseBtn.textContent = 'Pause';
+            elements.cancelBtn.disabled = true;
+            elements.completeBtn.disabled = true;
+            elements.addTaskBtn.disabled = false;
+            elements.taskInput.disabled = false;
+            
+            updateDisplay();
+        }
+
+        /**
+         * Complete the current task and claim rewards
+         */
+        function completeTask() {
+            if (timerSeconds === 0) {
+                alert('Timer must be running to complete a task!');
+                return;
+            }
+            
+            // Calculate final rewards
+            const finalGems = calculateTotalGems(timerSeconds);
+            totalGems += finalGems;
+            
+            // Add to flow chain
+            const chainLink = {
+                id: Date.now(),
+                taskName: currentTask,
+                duration: timerSeconds,
+                gemsEarned: finalGems,
+                completedAt: new Date().toISOString(),
+                number: flowChain.length + 1
+            };
+            
+            flowChain.push(chainLink);
+            chainStreak++;
+            
+            // Update visual chain
+            addFlowLink(chainLink);
+            
+            // Save state
+            saveState();
+            
+            // Reset for next task
+            cancelTimer();
+            
+            // Show completion message
+            setTimeout(() => {
+                alert(`Task completed! You earned ${finalGems} Flow Gems! 💎\n\nChain streak: ${chainStreak}`);
+            }, 100);
+        }
+
+        // ============================
+        // TASK MANAGEMENT
+        // ============================
+
+        /**
+         * Add a new task to the queue and set as current task
+         */
+        function addTask() {
+            const taskName = elements.taskInput.value.trim();
+            
+            if (!taskName) {
+                alert('Please enter a task name!');
+                return;
+            }
+            
+            if (isTimerRunning) {
+                alert('Cannot add task while timer is running!');
+                return;
+            }
+            
+            // Set as current task
+            currentTask = taskName;
+            elements.currentTaskName.textContent = taskName;
+            
+            // Clear input
+            elements.taskInput.value = '';
+            
+            // Enable start button
+            elements.startBtn.disabled = false;
+        }
+
+        // ============================
+        // FLOW CHAIN VISUALIZATION
+        // ============================
+
+        /**
+         * Add a new flow link to the visual chain with animation
+         * @param {object} chainLink - The chain link data
+         */
+        function addFlowLink(chainLink) {
+            // Hide empty message if it's the first link
+            if (flowChain.length === 1) {
+                elements.chainEmpty.style.display = 'none';
+            }
+            
+            // Create new link element
+            const linkElement = document.createElement('div');
+            linkElement.className = 'flow-link';
+            linkElement.textContent = chainLink.number.toString();
+            linkElement.title = `${chainLink.taskName} - ${Math.floor(chainLink.duration / 60)}m ${chainLink.duration % 60}s - ${chainLink.gemsEarned} gems`;
+            
+            // Add to chain container
+            elements.flowChain.appendChild(linkElement);
+            
+            // Scroll to show new link
+            setTimeout(() => {
+                linkElement.scrollIntoView({ behavior: 'smooth', inline: 'end' });
+            }, 300);
+            
+            updateDisplay();
+        }
+
+        /**
+         * Initialize the flow chain display from saved data
+         */
+        function initializeFlowChain() {
+            elements.flowChain.innerHTML = '';
+            
+            if (flowChain.length === 0) {
+                const emptyDiv = document.createElement('div');
+                emptyDiv.className = 'flow-chain-empty';
+                emptyDiv.id = 'chainEmpty';
+                emptyDiv.textContent = 'Complete your first task to start building your Flow Chain!';
+                elements.flowChain.appendChild(emptyDiv);
+                elements.chainEmpty = emptyDiv;
+            } else {
+                flowChain.forEach(chainLink => {
+                    const linkElement = document.createElement('div');
+                    linkElement.className = 'flow-link';
+                    linkElement.textContent = chainLink.number.toString();
+                    linkElement.title = `${chainLink.taskName} - ${Math.floor(chainLink.duration / 60)}m ${chainLink.duration % 60}s - ${chainLink.gemsEarned} gems`;
+                    elements.flowChain.appendChild(linkElement);
+                });
+            }
+        }
+
+        // ============================
+        // MODE NAVIGATION
+        // ============================
+
+        /**
+         * Switch between different app modes
+         * @param {string} mode - The mode to switch to ('session', 'daily', 'single')
+         */
+        function switchMode(mode) {
+            // Update current mode
+            currentMode = mode;
+            
+            // Update button states
+            elements.modeButtons.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === mode);
+            });
+            
+            // Update content visibility
+            elements.modeContents.forEach(content => {
+                content.classList.toggle('active', content.id === `${mode}-mode`);
+            });
+        }
+
+        // ============================
+        // EVENT LISTENERS
+        // ============================
+
+        /**
+         * Initialize all event listeners
+         */
+        function initializeEventListeners() {
+            // Mode navigation
+            elements.modeButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    switchMode(btn.dataset.mode);
+                });
+            });
+            
+            // Task input
+            elements.addTaskBtn.addEventListener('click', addTask);
+            elements.taskInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    addTask();
+                }
+            });
+            
+            // Timer controls
+            elements.startBtn.addEventListener('click', startTimer);
+            elements.pauseBtn.addEventListener('click', pauseTimer);
+            elements.cancelBtn.addEventListener('click', cancelTimer);
+            elements.completeBtn.addEventListener('click', completeTask);
+            
+            // Prevent form submission
+            elements.taskInput.closest('.task-input-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                addTask();
+            });
+        }
+
+        // ============================
+        // INITIALIZATION
+        // ============================
+
+        /**
+         * Initialize the application
+         */
+        function initializeApp() {
+            // Initialize flow chain display
+            initializeFlowChain();
+            
+            // Update display with saved values
+            updateDisplay();
+            
+            // Set up event listeners
+            initializeEventListeners();
+            
+            // Focus on task input
+            elements.taskInput.focus();
+            
+            console.log('TimeSlice Single Activity Mode initialized successfully!');
+            console.log(`Total Flow Gems: ${totalGems}`);
+            console.log(`Chain Length: ${flowChain.length}`);
+            console.log(`Current Streak: ${chainStreak}`);
+        }
+
+        // ============================
+        // APPLICATION STARTUP
+        // ============================
+
+        // Initialize when DOM is loaded
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeApp);
+        } else {
+            initializeApp();
+        }
+
+        // Handle page visibility changes to pause timer if needed
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && isTimerRunning && !isPaused) {
+                // Optionally pause when tab is hidden
+                // pauseTimer();
+            }
+        });
+
+        // Prevent accidental page refresh when timer is running
+        window.addEventListener('beforeunload', (e) => {
+            if (isTimerRunning) {
+                e.preventDefault();
+                e.returnValue = 'Timer is running. Are you sure you want to leave?';
+                return e.returnValue;
+            }
+        });
+
+    </script>
+</body>
+</html>
