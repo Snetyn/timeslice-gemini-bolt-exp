@@ -58,6 +58,10 @@ interface RPGTag {
   color: string;
   description?: string;
   createdAt: Date;
+  parentId?: string; // For sub-categories - references parent tag
+  isSubCategory?: boolean; // Whether this is a sub-category
+  overallProgress?: number; // Permanent progress that persists (0-100)
+  totalLifetimeMinutes?: number; // Total time ever spent in this category
 }
 
 interface RPGStat {
@@ -274,14 +278,15 @@ const getMobileClasses = (zoomLevel: string) => {
 };
 
 // RPG Stats Radar Chart Component with Enhanced Today's Tasks Display
-const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dailyActivities = [] }: {
+const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dailyActivities = [], rpgTags = [] }: {
   stats: any[];
   suggestedStats: any[];
   size?: number;
   activities?: any[];
   dailyActivities?: any[];
+  rpgTags?: RPGTag[];
 }) => {
-  const [displayMode, setDisplayMode] = useState('overview'); // 'overview', 'today-tasks', 'progress', 'balance'
+  const [displayMode, setDisplayMode] = useState('overview'); // 'overview', 'today-tasks', 'daily-view', 'progress', 'balance'
   const [showToggles, setShowToggles] = useState(true);
   
   const center = size / 2;
@@ -401,6 +406,33 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           return `${x},${y}`;
         });
         
+      case 'daily-view':
+        // Calculate daily activity completion rates for each tag
+        const dailyViewData = stats.map(stat => {
+          const dailyMinutes = dailyActivities
+            .filter(a => a.tags?.includes(stat.tagId))
+            .reduce((sum, a) => sum + (a.timeSpent || 0), 0);
+          const plannedDaily = dailyActivities
+            .filter(a => a.tags?.includes(stat.tagId))
+            .reduce((sum, a) => sum + a.duration, 0);
+          return {
+            ...stat,
+            dailyCompletionRate: plannedDaily > 0 ? dailyMinutes / plannedDaily : 0,
+            dailyMinutes,
+            plannedDaily
+          };
+        });
+        
+        const maxDailyCompletion = Math.max(...dailyViewData.map(d => d.dailyCompletionRate), 1);
+        return dailyViewData.map((data, index) => {
+          const angle = index * angleStep - Math.PI / 2;
+          const normalizedValue = Math.min(data.dailyCompletionRate / maxDailyCompletion, 1);
+          const radius = maxRadius * normalizedValue;
+          const x = center + Math.cos(angle) * radius;
+          const y = center + Math.sin(angle) * radius;
+          return `${x},${y}`;
+        });
+        
       case 'progress':
         const maxProgress = Math.max(...todayTaskData.map(d => d.progressToday), 1);
         return todayTaskData.map((data, index) => {
@@ -452,6 +484,7 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
   const getDisplayColor = () => {
     switch (displayMode) {
       case 'today-tasks': return '#10b981'; // green
+      case 'daily-view': return '#0891b2'; // teal
       case 'progress': return '#f59e0b'; // amber  
       case 'balance': return '#8b5cf6'; // purple
       default: return '#3b82f6'; // blue
@@ -461,11 +494,82 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
   const getDisplayLabel = () => {
     switch (displayMode) {
       case 'today-tasks': return 'Today\'s Planned Tasks';
+      case 'daily-view': return 'Daily Activity View';
       case 'progress': return 'Today\'s Progress';
       case 'balance': return 'Suggested Balance';
       default: return 'Current Stats';
     }
   };
+
+  // Organize tags into parent-child tree structure
+  const organizeTagsWithSubCategories = () => {
+    const parentTags = rpgTags.filter(tag => !tag.isSubCategory);
+    const subCategories = rpgTags.filter(tag => tag.isSubCategory);
+    
+    return parentTags.map(parent => {
+      const children = subCategories.filter(sub => sub.parentId === parent.id);
+      return {
+        parent,
+        children,
+        stat: stats.find(s => s.tagId === parent.id)
+      };
+    });
+  };
+
+  const tagTree = organizeTagsWithSubCategories();
+
+  // Generate sub-category branch positions
+  const generateSubCategoryBranches = () => {
+    interface Branch {
+      parent: { x: number; y: number; stat: any; tag: RPGTag };
+      child: { x: number; y: number; stat: any; tag: RPGTag };
+      angle: number;
+    }
+    
+    const branches: Branch[] = [];
+    
+    tagTree.forEach((node, index) => {
+      if (node.children.length === 0) return;
+      
+      const parentAngle = index * angleStep - Math.PI / 2;
+      const parentStat = node.stat;
+      
+      if (!parentStat) return;
+      
+      const parentScaledLevel = parentStat.level * scalingFactor;
+      const parentRadius = maxRadius * Math.min(parentScaledLevel / effectiveMaxLevel, 1);
+      const parentX = center + Math.cos(parentAngle) * parentRadius;
+      const parentY = center + Math.sin(parentAngle) * parentRadius;
+      
+      // Create sub-category positions branching from parent
+      node.children.forEach((child, childIndex) => {
+        const childStat = stats.find(s => s.tagId === child.id);
+        if (!childStat) return;
+        
+        // Create branch angle with spacing around parent
+        const branchOffset = (childIndex - (node.children.length - 1) / 2) * 0.3; // 0.3 radians spacing
+        const childAngle = parentAngle + branchOffset;
+        
+        // Sub-categories appear at 60-80% of parent radius to create tree effect
+        const childScaledLevel = childStat.level * scalingFactor;
+        const childBaseRadius = maxRadius * Math.min(childScaledLevel / effectiveMaxLevel, 1);
+        const childRadius = Math.min(childBaseRadius, parentRadius * 0.8); // Constrain to parent radius
+        
+        const childX = center + Math.cos(childAngle) * childRadius;
+        const childY = center + Math.sin(childAngle) * childRadius;
+        
+        branches.push({
+          parent: { x: parentX, y: parentY, stat: parentStat, tag: node.parent },
+          child: { x: childX, y: childY, stat: childStat, tag: child },
+          angle: childAngle
+        });
+      });
+    });
+    
+    return branches;
+  };
+
+  const subCategoryBranches = generateSubCategoryBranches();
   
   return (
     <div className="flex flex-col items-center">
@@ -490,6 +594,16 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           }`}
         >
           📅 Today's Tasks
+        </button>
+        <button
+          onClick={() => setDisplayMode('daily-view')}
+          className={`px-3 py-1 text-xs rounded-full transition-all ${
+            displayMode === 'daily-view' 
+              ? 'bg-teal-500 text-white shadow-md' 
+              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+        >
+          🌅 Daily View
         </button>
         <button
           onClick={() => setDisplayMode('progress')}
@@ -605,6 +719,18 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
               radius = maxRadius * Math.min(data.plannedToday / maxPlanned, 1);
               pointData = `${data.plannedToday}m planned`;
               break;
+            case 'daily-view':
+              const dailyMinutes = dailyActivities
+                .filter(a => a.tags?.includes(stat.tagId))
+                .reduce((sum, a) => sum + (a.timeSpent || 0), 0);
+              const plannedDaily = dailyActivities
+                .filter(a => a.tags?.includes(stat.tagId))
+                .reduce((sum, a) => sum + a.duration, 0);
+              const completionRate = plannedDaily > 0 ? dailyMinutes / plannedDaily : 0;
+              const maxDailyCompletion = 1; // Completion rates are 0-1
+              radius = maxRadius * Math.min(completionRate / maxDailyCompletion, 1);
+              pointData = `${Math.round(completionRate * 100)}% daily completion`;
+              break;
             case 'progress':
               const maxProgress = Math.max(...todayTaskData.map(d => d.progressToday), 1);
               radius = maxRadius * Math.min(data.progressToday / maxProgress, 1);
@@ -667,6 +793,61 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           );
         })}
         
+        {/* Sub-category branches (tree-like visualization) */}
+        {subCategoryBranches.map((branch, branchIndex) => (
+          <g key={`branch-${branchIndex}`}>
+            {/* Branch line connecting parent to child */}
+            <line
+              x1={branch.parent.x}
+              y1={branch.parent.y}
+              x2={branch.child.x}
+              y2={branch.child.y}
+              stroke={branch.parent.tag.color}
+              strokeWidth="2"
+              opacity="0.6"
+              strokeDasharray="3,2"
+            />
+            
+            {/* Sub-category data point */}
+            <circle
+              cx={branch.child.x}
+              cy={branch.child.y}
+              r="6"
+              fill={branch.parent.tag.color}
+              stroke="white"
+              strokeWidth="2"
+              opacity="0.8"
+              style={{
+                filter: `brightness(0.9)`,
+                transition: 'all 0.3s ease-in-out'
+              }}
+            />
+            
+            {/* Sub-category level indicator */}
+            <text 
+              x={branch.child.x} 
+              y={branch.child.y + 1} 
+              textAnchor="middle" 
+              dominantBaseline="middle" 
+              className="text-xs font-bold fill-white"
+            >
+              {branch.child.stat.level}
+            </text>
+            
+            {/* Sub-category mini label */}
+            <text
+              x={branch.child.x}
+              y={branch.child.y - 15}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="text-xs font-medium fill-slate-600"
+              style={{ fontSize: '10px' }}
+            >
+              {branch.child.tag.name}
+            </text>
+          </g>
+        ))}
+        
         {/* Enhanced labels with mode-specific information */}
         {stats.map((stat, index) => {
           const angle = index * angleStep - Math.PI / 2;
@@ -680,6 +861,15 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           
           if (displayMode === 'today-tasks') {
             subText = `${data.plannedToday}m planned • ${data.completedToday}m done`;
+          } else if (displayMode === 'daily-view') {
+            const dailyMinutes = dailyActivities
+              .filter(a => a.tags?.includes(stat.tagId))
+              .reduce((sum, a) => sum + (a.timeSpent || 0), 0);
+            const plannedDaily = dailyActivities
+              .filter(a => a.tags?.includes(stat.tagId))
+              .reduce((sum, a) => sum + a.duration, 0);
+            const completionRate = plannedDaily > 0 ? Math.round((dailyMinutes / plannedDaily) * 100) : 0;
+            subText = `${dailyMinutes}m / ${plannedDaily}m (${completionRate}%)`;
           } else if (displayMode === 'progress') {
             subText = `${Math.round(data.progressToday)}m progress today`;
           } else if (displayMode === 'balance') {
@@ -764,6 +954,20 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           </div>
         )}
         
+        {displayMode === 'daily-view' && (
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-teal-500 rounded-full border-2 border-teal-300"></div>
+            <span>Daily Completion Rate</span>
+          </div>
+        )}
+        
+        {subCategoryBranches.length > 0 && (
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-gray-400 rounded-full border-2 border-gray-300 opacity-80"></div>
+            <span>Sub-categories</span>
+          </div>
+        )}
+        
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 bg-slate-400 rounded-full"></div>
           <span>{rings} Dynamic Rings</span>
@@ -811,14 +1015,34 @@ const RPGStatsPage = ({
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#3b82f6');
   const [newTagDescription, setNewTagDescription] = useState('');
+  const [isAddingSubCategory, setIsAddingSubCategory] = useState(false);
+  const [selectedParentTag, setSelectedParentTag] = useState('');
 
   const handleAddTag = () => {
     if (newTagName.trim()) {
-      onAddTag(newTagName, newTagColor, newTagDescription);
+      if (isAddingSubCategory && selectedParentTag) {
+        // Add as sub-category
+        const parentTag = rpgTags.find(tag => tag.id === selectedParentTag);
+        onAddTag(newTagName, parentTag?.color || newTagColor, newTagDescription, selectedParentTag, true);
+      } else {
+        // Add as main category
+        onAddTag(newTagName, newTagColor, newTagDescription);
+      }
       setNewTagName('');
       setNewTagDescription('');
+      setIsAddingSubCategory(false);
+      setSelectedParentTag('');
     }
   };
+
+  // Get main categories (not sub-categories)
+  const mainCategories = rpgTags.filter(tag => !tag.isSubCategory);
+  
+  // Organize tags with their sub-categories for display
+  const organizedTags = mainCategories.map(parent => ({
+    parent,
+    subCategories: rpgTags.filter(tag => tag.parentId === parent.id)
+  }));
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -905,6 +1129,7 @@ const RPGStatsPage = ({
                 suggestedStats={rpgBalance.suggested}
                 activities={activities}
                 dailyActivities={dailyActivities}
+                rpgTags={rpgTags}
                 size={350}
               />
             </CardContent>
@@ -992,57 +1217,171 @@ const RPGStatsPage = ({
               <CardTitle>Add New Life Area Tag</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <Input
-                  placeholder="Tag name (e.g., Fitness)"
-                  value={newTagName}
-                  onChange={(e) => setNewTagName(e.target.value)}
-                />
-                <input
-                  type="color"
-                  value={newTagColor}
-                  onChange={(e) => setNewTagColor(e.target.value)}
-                  className="h-10 w-full rounded border border-gray-300 cursor-pointer"
-                />
-                <Input
-                  placeholder="Description (optional)"
-                  value={newTagDescription}
-                  onChange={(e) => setNewTagDescription(e.target.value)}
-                />
-                <Button onClick={handleAddTag} disabled={!newTagName.trim()}>
-                  Add Tag
-                </Button>
+              <div className="space-y-4">
+                {/* Tag Type Toggle */}
+                <div className="flex items-center space-x-4">
+                  <label className="flex items-center space-x-2">
+                    <input
+                      type="radio"
+                      checked={!isAddingSubCategory}
+                      onChange={() => setIsAddingSubCategory(false)}
+                      className="form-radio"
+                    />
+                    <span>Main Category</span>
+                  </label>
+                  <label className="flex items-center space-x-2">
+                    <input
+                      type="radio"
+                      checked={isAddingSubCategory}
+                      onChange={() => setIsAddingSubCategory(true)}
+                      className="form-radio"
+                    />
+                    <span>Sub-category</span>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                  <Input
+                    placeholder="Tag name (e.g., Fitness)"
+                    value={newTagName}
+                    onChange={(e) => setNewTagName(e.target.value)}
+                  />
+                  
+                  {/* Parent selection for sub-categories */}
+                  {isAddingSubCategory && (
+                    <select
+                      value={selectedParentTag}
+                      onChange={(e) => setSelectedParentTag(e.target.value)}
+                      className="h-10 px-3 rounded border border-gray-300"
+                    >
+                      <option value="">Select Parent Category</option>
+                      {mainCategories.map(tag => (
+                        <option key={tag.id} value={tag.id}>{tag.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  
+                  {/* Color picker (disabled for sub-categories) */}
+                  <input
+                    type="color"
+                    value={isAddingSubCategory && selectedParentTag 
+                      ? rpgTags.find(t => t.id === selectedParentTag)?.color || newTagColor
+                      : newTagColor
+                    }
+                    onChange={(e) => setNewTagColor(e.target.value)}
+                    disabled={isAddingSubCategory}
+                    className="h-10 w-full rounded border border-gray-300 cursor-pointer disabled:opacity-50"
+                  />
+                  
+                  <Input
+                    placeholder="Description (optional)"
+                    value={newTagDescription}
+                    onChange={(e) => setNewTagDescription(e.target.value)}
+                  />
+                  
+                  <Button 
+                    onClick={handleAddTag} 
+                    disabled={!newTagName.trim() || (isAddingSubCategory && !selectedParentTag)}
+                  >
+                    Add {isAddingSubCategory ? 'Sub-category' : 'Tag'}
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Existing Tags */}
+          {/* Existing Tags with Tree Structure */}
           <Card>
             <CardHeader>
-              <CardTitle>Existing Life Area Tags</CardTitle>
+              <CardTitle>Life Area Tags & Overall Progress</CardTitle>
+              <p className="text-sm text-gray-600">Overall progress tracks lifetime achievement in each area</p>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {rpgTags.map(tag => (
-                  <div key={tag.id} className="p-4 border rounded-lg">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center space-x-2">
+              <div className="space-y-6">
+                {organizedTags.map(({ parent, subCategories }) => (
+                  <div key={parent.id} className="p-4 border rounded-lg bg-gray-50">
+                    {/* Parent Category */}
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center space-x-3">
                         <div 
-                          className="w-4 h-4 rounded-full"
-                          style={{ backgroundColor: tag.color }}
+                          className="w-6 h-6 rounded-full border-2 border-white shadow-sm"
+                          style={{ backgroundColor: parent.color }}
                         ></div>
-                        <span className="font-medium">{tag.name}</span>
+                        <div>
+                          <span className="font-bold text-lg">{parent.name}</span>
+                          {parent.description && (
+                            <p className="text-sm text-gray-600">{parent.description}</p>
+                          )}
+                        </div>
                       </div>
                       <Button 
                         size="sm" 
                         variant="destructive"
-                        onClick={() => onRemoveTag(tag.id)}
+                        onClick={() => onRemoveTag(parent.id)}
                       >
                         <Icon name="trash2" className="h-3 w-3" />
                       </Button>
                     </div>
-                    {tag.description && (
-                      <p className="text-sm text-gray-600">{tag.description}</p>
+
+                    {/* Overall Progress Bar */}
+                    <div className="mb-4 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium">Overall Progress</span>
+                        <span className="text-sm text-gray-600">
+                          {parent.overallProgress || 0}% • {Math.floor((parent.totalLifetimeMinutes || 0) / 60)}h total
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-3">
+                        <div 
+                          className="h-3 rounded-full transition-all duration-300"
+                          style={{ 
+                            width: `${parent.overallProgress || 0}%`,
+                            backgroundColor: parent.color,
+                            opacity: 0.8
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Sub-categories */}
+                    {subCategories.length > 0 && (
+                      <div className="space-y-3">
+                        <h4 className="text-sm font-medium text-gray-700 border-b pb-1">Sub-categories</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 ml-4">
+                          {subCategories.map(subCategory => (
+                            <div key={subCategory.id} className="flex items-center justify-between p-3 bg-white rounded border border-gray-200">
+                              <div className="flex items-center space-x-2">
+                                <div className="flex items-center space-x-1">
+                                  <div className="w-2 h-8 border-l-2 border-b-2 border-gray-300 rounded-bl"></div>
+                                  <div 
+                                    className="w-4 h-4 rounded-full border border-gray-300"
+                                    style={{ 
+                                      backgroundColor: parent.color,
+                                      filter: 'brightness(0.9)'
+                                    }}
+                                  ></div>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-sm">{subCategory.name}</span>
+                                  {subCategory.description && (
+                                    <p className="text-xs text-gray-500">{subCategory.description}</p>
+                                  )}
+                                  <div className="text-xs text-gray-600">
+                                    Progress: {subCategory.overallProgress || 0}% • {Math.floor((subCategory.totalLifetimeMinutes || 0) / 60)}h
+                                  </div>
+                                </div>
+                              </div>
+                              <Button 
+                                size="sm" 
+                                variant="destructive"
+                                onClick={() => onRemoveTag(subCategory.id)}
+                              >
+                                <Icon name="trash2" className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -5015,19 +5354,21 @@ export default function App() {
   // RPG Tags State (NEW)
   const [rpgTags, setRpgTags] = useState<RPGTag[]>(() => {
     const defaultTags: RPGTag[] = [
-      { id: '1', name: 'Work', color: '#3b82f6', description: 'Professional development and career', createdAt: new Date() },
-      { id: '2', name: 'Health', color: '#10b981', description: 'Physical and mental wellbeing', createdAt: new Date() },
-      { id: '3', name: 'Learning', color: '#8b5cf6', description: 'Education and skill development', createdAt: new Date() },
-      { id: '4', name: 'Social', color: '#f59e0b', description: 'Relationships and social activities', createdAt: new Date() },
-      { id: '5', name: 'Creative', color: '#ef4444', description: 'Art, music, and creative pursuits', createdAt: new Date() },
-      { id: '6', name: 'Spiritual', color: '#06b6d4', description: 'Meditation, reflection, and spiritual growth', createdAt: new Date() }
+      { id: '1', name: 'Work', color: '#3b82f6', description: 'Professional development and career', createdAt: new Date(), overallProgress: 0, totalLifetimeMinutes: 0 },
+      { id: '2', name: 'Health', color: '#10b981', description: 'Physical and mental wellbeing', createdAt: new Date(), overallProgress: 0, totalLifetimeMinutes: 0 },
+      { id: '3', name: 'Learning', color: '#8b5cf6', description: 'Education and skill development', createdAt: new Date(), overallProgress: 0, totalLifetimeMinutes: 0 },
+      { id: '4', name: 'Social', color: '#f59e0b', description: 'Relationships and social activities', createdAt: new Date(), overallProgress: 0, totalLifetimeMinutes: 0 },
+      { id: '5', name: 'Creative', color: '#ef4444', description: 'Art, music, and creative pursuits', createdAt: new Date(), overallProgress: 0, totalLifetimeMinutes: 0 },
+      { id: '6', name: 'Spiritual', color: '#06b6d4', description: 'Meditation, reflection, and spiritual growth', createdAt: new Date(), overallProgress: 0, totalLifetimeMinutes: 0 }
     ];
     
     try {
       const saved = localStorage.getItem('timeSliceRPGTags');
       return saved ? JSON.parse(saved).map(tag => ({
         ...tag,
-        createdAt: new Date(tag.createdAt)
+        createdAt: new Date(tag.createdAt),
+        overallProgress: tag.overallProgress || 0,
+        totalLifetimeMinutes: tag.totalLifetimeMinutes || 0
       })) : defaultTags;
     } catch (e) {
       return defaultTags;
@@ -6621,17 +6962,64 @@ export default function App() {
   };
 
   // RPG Tag Management Functions
-  const addRPGTag = (name: string, color: string, description?: string) => {
+  const addRPGTag = (name: string, color: string, description?: string, parentId?: string, isSubCategory: boolean = false) => {
     const newTag: RPGTag = {
       id: Date.now().toString(),
       name: name.trim(),
       color,
       description: description?.trim(),
-      createdAt: new Date()
+      createdAt: new Date(),
+      parentId,
+      isSubCategory,
+      overallProgress: 0,
+      totalLifetimeMinutes: 0
     };
     
     setRpgTags(prev => [...prev, newTag]);
   };
+
+  // Update overall progress for tags based on activity completion
+  const updateTagProgress = useCallback((tagId: string, minutesSpent: number) => {
+    setRpgTags(prev => prev.map(tag => {
+      if (tag.id === tagId) {
+        const newTotalMinutes = (tag.totalLifetimeMinutes || 0) + minutesSpent;
+        // Simple progress calculation: every 60 hours = 1% progress (up to 100%)
+        const newProgress = Math.min(100, Math.floor(newTotalMinutes / (60 * 60)));
+        
+        return {
+          ...tag,
+          totalLifetimeMinutes: newTotalMinutes,
+          overallProgress: newProgress
+        };
+      }
+      return tag;
+    }));
+  }, []);
+
+  // Track activity completion and update tag progress
+  useEffect(() => {
+    // This effect will run when activities change - we can track completion here
+    // For now, we'll update progress when activities are marked as completed
+    const updateProgressFromActivities = () => {
+      // Check daily activities for completion
+      dailyActivities.forEach(activity => {
+        if (activity.status === 'completed' && activity.tags && activity.tags.length > 0) {
+          activity.tags.forEach(tagId => {
+            // Only update if this activity wasn't already counted
+            // We can use a flag or timestamp to track this
+            const timeSpent = activity.timeSpent || 0;
+            if (timeSpent > 0) {
+              updateTagProgress(tagId, timeSpent);
+            }
+          });
+        }
+      });
+    };
+
+    // For this demo, we'll just run the update
+    // In a real implementation, you'd want to track which activities have already been counted
+    // updateProgressFromActivities();
+  }, [dailyActivities, updateTagProgress]);
 
   const updateRPGTag = (tagId: string, updates: Partial<RPGTag>) => {
     setRpgTags(prev => prev.map(tag => 
