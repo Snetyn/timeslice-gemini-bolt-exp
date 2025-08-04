@@ -4099,8 +4099,8 @@ const SingleActivityMode = ({
     // Dynamic scaling based on task length - shorter tasks get better early rewards
     const taskLengthMinutes = Math.floor(elapsedSeconds / 60);
     
-    // Base scaling from configured ratio to 1:1 over 30 minutes, but influenced by task patterns
-    const maxSeconds = 30 * 60; // 30 minutes cap
+    // Base scaling from configured ratio to 1:1 over configured max progress time, but influenced by task patterns
+    const maxSeconds = (settings?.flowmodoroMaxProgressMinutes || 30) * 60; // Configurable minutes cap
     const cappedSeconds = Math.min(elapsedSeconds, maxSeconds);
     
     // Calculate base reward with dynamic efficiency curve
@@ -4142,7 +4142,7 @@ const SingleActivityMode = ({
 
   // Calculate current ratio with dynamic scaling
   const calculateCurrentRatio = (seconds, chainBonus = 0) => {
-    const maxSeconds = 1800; // 30 minutes
+    const maxSeconds = (settings?.flowmodoroMaxProgressMinutes || 30) * 60; // Configurable minutes
     const cappedSeconds = Math.min(seconds, maxSeconds);
     const scaleFactor = cappedSeconds / maxSeconds;
     const taskLengthMinutes = Math.floor(seconds / 60);
@@ -4567,12 +4567,12 @@ const SingleActivityMode = ({
           <div className="space-y-2 sm:space-y-3">
             <div className="flex flex-col sm:flex-row sm:justify-between text-xs sm:text-sm text-gray-600 gap-1">
               <span className="font-medium">Flow Progress (Total: {formatElapsedTime(totalSessionTime)})</span>
-              <span className="font-bold text-purple-600">{Math.min(100, (totalSessionTime / 1800) * 100).toFixed(1)}%</span>
+              <span className="font-bold text-purple-600">{Math.min(100, (totalSessionTime / ((settings?.flowmodoroMaxProgressMinutes || 30) * 60)) * 100).toFixed(1)}%</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 sm:h-4 overflow-hidden relative shadow-inner">
               <div 
                 className="h-full bg-gradient-to-r from-purple-500 via-blue-500 to-green-400 rounded-full transition-all duration-500 relative"
-                style={{ width: `${Math.min(100, (totalSessionTime / 1800) * 100)}%` }}
+                style={{ width: `${Math.min(100, (totalSessionTime / ((settings?.flowmodoroMaxProgressMinutes || 30) * 60)) * 100)}%` }}
               >
                 <div 
                   className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-40"
@@ -4584,7 +4584,7 @@ const SingleActivityMode = ({
               </div>
             </div>
             <div className="text-xs text-gray-500 text-center px-2">
-              Chain activities to maintain flow state • Dynamic scaling adapts to task patterns • Shorter tasks get better early rewards
+              Chain activities to maintain flow state • Dynamic scaling adapts to task patterns • Progress reaches 100% at {settings?.flowmodoroMaxProgressMinutes || 30} minutes
             </div>
           </div>
         </CardContent>
@@ -4739,6 +4739,7 @@ export default function App() {
       // Simplified Flowmodoro settings
       flowmodoroEnabled: true,
       flowmodoroRatio: 5, // 5:1 ratio (5 minutes work = 1 minute rest)
+      flowmodoroMaxProgressMinutes: 30, // Time in minutes for progress to reach maximum (default 30 minutes)
       flowmodoroShowProgress: true, // Toggle for flowmodoro progress bar
       flowmodoroProgressType: 'fill', // 'fill' or 'drain' like other activities
       flowmodoroResetStartTime: '06:00', // Daily reset at 6 AM
@@ -5892,7 +5893,7 @@ export default function App() {
       }
       return newActivities;
     });
-  }, [currentActivityIndex, settings.overtimeType, settings.flowmodoroEnabled, settings.flowmodoroRatio, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining, flowmodoroState.lastResetDate, checkIfShouldReset]);
+  }, [currentActivityIndex, settings.overtimeType, settings.flowmodoroEnabled, settings.flowmodoroRatio, settings.flowmodoroMaxProgressMinutes, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining, flowmodoroState.lastResetDate, checkIfShouldReset]);
 
   // Sync shared progress when session activities change during active timer
   useEffect(() => {
@@ -7485,6 +7486,33 @@ export default function App() {
                             />
                             <span className="text-sm text-gray-600">:1 (work:rest)</span>
                           </div>
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <Label>Max Progress Time</Label>
+                          <div className="flex items-center space-x-2">
+                            <Input 
+                              type="number" 
+                              min="10" 
+                              max="120" 
+                              value={settings.flowmodoroMaxProgressMinutes}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                if (value === '') {
+                                  setSettings(prev => ({ ...prev, flowmodoroMaxProgressMinutes: 30 }));
+                                } else {
+                                  setSettings(prev => ({ ...prev, flowmodoroMaxProgressMinutes: Math.max(10, Math.min(120, Number(value) || 30)) }));
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const value = Number(e.target.value) || 30;
+                                setSettings(prev => ({ ...prev, flowmodoroMaxProgressMinutes: Math.max(10, Math.min(120, value)) }));
+                              }}
+                              className="w-16"
+                            />
+                            <span className="text-sm text-gray-600">minutes (time for progress bar to reach 100%)</span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">Controls when dynamic scaling transitions from configured ratio to 1:1. Longer tasks benefit from higher values.</p>
                         </div>
                         
                         <div className="flex items-center justify-between">
