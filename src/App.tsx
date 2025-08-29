@@ -25,6 +25,7 @@ interface Activity {
   timeSpent?: number;
   startedAt?: Date | null;
   subtasks?: Subtask[];
+  countUp?: boolean;
 }
 
 interface ActivityTemplate {
@@ -58,10 +59,10 @@ interface RPGTag {
   color: string;
   description?: string;
   createdAt: Date;
-  parentId?: string;
-  isSubCategory?: boolean;
-  overallProgress?: number;
-  totalLifetimeMinutes?: number;
+  parentId?: string; // For sub-categories - references parent tag
+  isSubCategory?: boolean; // Whether this is a sub-category
+  overallProgress?: number; // Permanent progress that persists (0-100)
+  totalLifetimeMinutes?: number; // Total time ever spent in this category
 }
 
 interface RPGStat {
@@ -82,7 +83,8 @@ interface RPGBalance {
   balanceScore: number;
 }
 
-// Minimal Icon component (copied from stable-version.tsx)
+// --- Self-Contained UI Components ---
+
 const Icon = ({ name, className }) => {
   const icons = {
     plus: <path d="M5 12h14m-7-7v14" />,
@@ -98,7 +100,7 @@ const Icon = ({ name, className }) => {
     ),
     settings: (
       <>
-        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.10a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
         <circle cx="12" cy="12" r="3" />
       </>
     ),
@@ -4991,15 +4993,32 @@ export default function App() {
   });
 
   useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      const swUrl = '/service-worker.js'; // Use absolute path
-      navigator.serviceWorker.register(swUrl)
-        .then(registration => {
-          console.log('ServiceWorker registration successful with scope: ', registration.scope);
-        })
-        .catch(err => {
-          console.log('ServiceWorker registration failed: ', err);
-        });
+    try {
+      const inIframe = typeof window !== 'undefined' && window.top !== window.self;
+  const isSecure = typeof window !== 'undefined' && Boolean(window.isSecureContext);
+  const canUseSW = 'serviceWorker' in navigator && isSecure && !inIframe;
+  const isProd = (import.meta as any)?.env?.PROD === true;
+
+      if (canUseSW && isProd) {
+        const swUrl = '/service-worker.js';
+        navigator.serviceWorker.register(swUrl)
+          .then(registration => {
+            console.log('ServiceWorker registration successful with scope: ', registration.scope);
+          })
+          .catch(err => {
+            console.log('ServiceWorker registration failed: ', err);
+          });
+      } else {
+        console.log('Skipping ServiceWorker (prod only, secure context, not in iframe).', { canUseSW, isProd, inIframe, isSecure });
+        // In dev or when embedded, proactively unregister any existing SW to avoid stale caches breaking preview
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations?.().then((regs) => {
+            regs.forEach(reg => reg.unregister());
+          }).catch(() => { /* noop */ });
+        }
+      }
+    } catch (e) {
+      console.log('Skipping ServiceWorker due to environment constraints.', e);
     }
   }, []);
 
@@ -6076,24 +6095,69 @@ export default function App() {
   const totalSessionMinutes = calculateTotalSessionMinutes();
   const totalPercentage = activities.filter(activity => !activity.countUp).reduce((sum, activity) => sum + activity.percentage, 0);
 
+  // Helper: allocated seconds for an activity based on session and its config
+  const getAllocatedSeconds = useCallback((activity: Activity) => {
+    const totalSeconds = calculateTotalSessionMinutes() * 60;
+    const pct = Number(activity.percentage || 0);
+    if (!activity.countUp && pct > 0) {
+      return Math.round((pct / 100) * totalSeconds);
+    }
+    if (activity.duration > 0) {
+      return Math.round(activity.duration * 60);
+    }
+    return 0;
+  }, [calculateTotalSessionMinutes]);
+
   // This effect keeps durations in sync with percentages and total time
   const activityPercentages = activities.map(a => a.percentage).join(',');
   useEffect(() => {
     console.log('Duration sync effect triggered:', { isTimerActive, totalSessionMinutes, activityPercentages });
     if (isTimerActive) return;
     const totalMins = calculateTotalSessionMinutes();
-    console.log('Calculated total minutes:', totalMins);
-    setActivities(prev => prev.map(activity => {
-      const newDuration = Math.round((activity.percentage / 100) * totalMins);
-      const newTimeRemaining = activity.countUp ? 0 : newDuration * 60;
-      console.log(`Activity ${activity.name}: ${activity.percentage}% = ${newDuration}min = ${newTimeRemaining}sec (countUp: ${activity.countUp})`);
-      return {
-        ...activity,
-        duration: newDuration,
-        timeRemaining: newTimeRemaining,
-        isCompleted: false,
-      };
-    }));
+    const totalSeconds = totalMins * 60;
+
+    setActivities(prev => {
+      // Build allocation info for percentage-based, non-countUp activities
+      const alloc = prev.map((a, idx) => {
+        if (!a.countUp && a.percentage > 0) {
+          const exact = (a.percentage / 100) * totalSeconds;
+          const floorSec = Math.floor(exact);
+          return { idx, exact, floorSec, remainder: exact - floorSec, type: 'pct' as const };
+        }
+        return { idx, exact: Math.round((a.duration || 0) * 60), floorSec: Math.round((a.duration || 0) * 60), remainder: 0, type: 'fixed' as const };
+      });
+
+      // Distribute remaining seconds so sum of pct allocations equals session seconds
+      const pctItems = alloc.filter(x => x.type === 'pct');
+      const floorSum = pctItems.reduce((s, x) => s + x.floorSec, 0);
+      let remainderToGive = Math.max(0, totalSeconds - floorSum);
+      // Sort by largest fractional remainder
+      pctItems.sort((a, b) => b.remainder - a.remainder);
+      for (let i = 0; i < pctItems.length && remainderToGive > 0; i++, remainderToGive--) {
+        pctItems[i].floorSec += 1;
+      }
+
+      // Map back: set duration to allocatedSeconds/60 (can be fractional minutes), timeRemaining to allocatedSeconds
+      const pctMap = new Map(pctItems.map(x => [x.idx, x.floorSec]));
+      const next = prev.map((activity, i) => {
+        let allocatedSeconds = 0;
+        if (!activity.countUp && activity.percentage > 0) {
+          allocatedSeconds = pctMap.get(i) || 0;
+        } else if (activity.duration > 0) {
+          allocatedSeconds = Math.round(activity.duration * 60);
+        }
+        const newDuration = allocatedSeconds / 60; // keep accurate, may be fractional minutes
+        const newTimeRemaining = activity.countUp ? 0 : allocatedSeconds;
+        console.log(`Activity ${activity.name}: pct=${activity.percentage}% -> ${newDuration.toFixed(2)}min = ${newTimeRemaining}s (countUp: ${activity.countUp})`);
+        return {
+          ...activity,
+          duration: newDuration,
+          timeRemaining: newTimeRemaining,
+          isCompleted: false,
+        };
+      });
+      return next;
+    });
   }, [activityPercentages, totalSessionMinutes, isTimerActive, calculateTotalSessionMinutes]);
 
   const handleTimerTick = useCallback(() => {
@@ -7449,37 +7513,19 @@ export default function App() {
   };
 
   const getOverallProgress = () => {
-    // Calculate total allocated time based on percentages and session duration
-    const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
-    if (totalSessionSeconds === 0) return 0;
-
     const totalElapsedSeconds = activities.reduce((sum, act) => {
-      // For activities with allocated time (percentage > 0)
-      if (act.percentage > 0) {
-        const allocatedSeconds = (act.percentage / 100) * totalSessionSeconds;
-        const elapsed = allocatedSeconds - Math.max(0, act.timeRemaining);
-        return sum + elapsed;
-      }
-      // For activities added during session (percentage = 0), use duration if available
-      else if (act.duration > 0) {
-        const elapsed = (act.duration * 60) - Math.max(0, act.timeRemaining);
-        return sum + elapsed;
+      const allocated = getAllocatedSeconds(act);
+      if (allocated > 0) {
+        const elapsed = allocated - Math.max(0, act.timeRemaining);
+        return sum + Math.max(0, elapsed);
       }
       return sum;
     }, 0);
 
-    // Calculate total possible time (allocated + added activities)
-    const totalAllocatedSeconds = activities.reduce((sum, act) => {
-      if (act.percentage > 0) {
-        return sum + (act.percentage / 100) * totalSessionSeconds;
-      } else if (act.duration > 0) {
-        return sum + (act.duration * 60);
-      }
-      return sum;
-    }, 0);
-
-    if (totalAllocatedSeconds === 0) return 0;
-    return (totalElapsedSeconds / totalAllocatedSeconds) * 100;
+    const totalAllocatedSeconds = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
+    if (totalAllocatedSeconds <= 0) return 0;
+    const pct = (totalElapsedSeconds / totalAllocatedSeconds) * 100;
+    return Math.max(0, Math.min(100, pct));
   };
 
   const getDailyOverallProgress = () => {
@@ -7548,19 +7594,6 @@ export default function App() {
       onAddToSession={handleAddToCurrentSession}
       onAddToDaily={handleAddToDaily}
       onAddToBoth={handleAddToBoth}
-    />
-  ) : currentPage === 'rpg-stats' ? (
-    <RPGStatsPage
-      rpgBalance={getRPGBalance()}
-      rpgTags={rpgTags}
-      activities={activities}
-      dailyActivities={dailyActivities}
-      onBackToTimer={() => setCurrentPage('timer')}
-      onAddTag={addRPGTag}
-      onUpdateTag={updateRPGTag}
-      onRemoveTag={removeRPGTag}
-      onAddTagToActivity={addTagToActivity}
-      onRemoveTagFromActivity={removeTagFromActivity}
     />
   ) : isTimerActive ? (
     <div className="max-w-2xl mx-auto">
@@ -7732,10 +7765,7 @@ export default function App() {
                 <Icon name="settings" className="h-4 w-4 mr-2" />
                 Manage Activities
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setCurrentPage('rpg-stats')} className="flex-1 sm:flex-none h-9 text-sm">
-                🎮
-                RPG Stats
-              </Button>
+              {/* RPG Stats button removed */}
               <Button variant="outline" size="sm" onClick={() => {
                 console.log("showSettings before toggle:", showSettings);
                 setShowSettings(!showSettings);
