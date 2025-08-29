@@ -58,10 +58,10 @@ interface RPGTag {
   color: string;
   description?: string;
   createdAt: Date;
-  parentId?: string; // For sub-categories - references parent tag
-  isSubCategory?: boolean; // Whether this is a sub-category
-  overallProgress?: number; // Permanent progress that persists (0-100)
-  totalLifetimeMinutes?: number; // Total time ever spent in this category
+  parentId?: string;
+  isSubCategory?: boolean;
+  overallProgress?: number;
+  totalLifetimeMinutes?: number;
 }
 
 interface RPGStat {
@@ -82,8 +82,7 @@ interface RPGBalance {
   balanceScore: number;
 }
 
-// --- Self-Contained UI Components ---
-
+// Minimal Icon component (copied from stable-version.tsx)
 const Icon = ({ name, className }) => {
   const icons = {
     plus: <path d="M5 12h14m-7-7v14" />,
@@ -99,7 +98,7 @@ const Icon = ({ name, className }) => {
     ),
     settings: (
       <>
-        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.10a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
         <circle cx="12" cy="12" r="3" />
       </>
     ),
