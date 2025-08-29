@@ -1622,37 +1622,87 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   }
 
   if (style === 'segmented') {
+    // Build planned seconds per activity based on percentage or fixed duration
+    const plannedSeconds = activities.map(act => {
+      if (act.percentage && act.percentage > 0) return (act.percentage / 100) * totalSessionSeconds;
+      if (act.duration && act.duration > 0) return act.duration * 60;
+      return 0;
+    });
+    const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0) || 1; // avoid div by 0
+    const baseWidths = plannedSeconds.map(sec => (sec / totalPlanned) * 100);
+
+    // Find an activity in overtime (timeRemaining < 0)
+    const overtimeIndex = activities.findIndex(a => (a?.timeRemaining ?? 0) < 0);
+
+    let redistributedWidths = [...baseWidths];
+    if (overtimeIndex !== -1) {
+      const overtimeSec = Math.abs(activities[overtimeIndex].timeRemaining || 0);
+      // Extra width as percentage of total planned time
+      let extraPercent = (overtimeSec / totalPlanned) * 100;
+
+      // Subtract this equally from all other non-zero segments without going negative
+      let indices = redistributedWidths
+        .map((_, i) => i)
+        .filter(i => i !== overtimeIndex && redistributedWidths[i] > 0);
+
+      let remainingToSubtract = extraPercent;
+      let actuallySubtracted = 0;
+      while (remainingToSubtract > 1e-6 && indices.length > 0) {
+        const per = remainingToSubtract / indices.length;
+        let roundSub = 0;
+        const nextIndices: number[] = [];
+        for (const i of indices) {
+          const remove = Math.min(per, redistributedWidths[i]);
+          redistributedWidths[i] -= remove;
+          roundSub += remove;
+          if (redistributedWidths[i] > 1e-6) nextIndices.push(i);
+        }
+        actuallySubtracted += roundSub;
+        remainingToSubtract -= roundSub;
+        indices = nextIndices;
+        if (roundSub <= 1e-6) break; // nothing left to take
+      }
+      // Give only what we could subtract to the overtime segment; cap to 100
+      redistributedWidths[overtimeIndex] = Math.min(100, redistributedWidths[overtimeIndex] + actuallySubtracted);
+      // Normalize small floating errors to keep total ~100
+      const totalWidth = redistributedWidths.reduce((s, v) => s + v, 0);
+      if (Math.abs(totalWidth - 100) > 0.01) {
+        // Scale all to sum 100, keeping proportions (minor correction only)
+        const scale = 100 / totalWidth;
+        redistributedWidths = redistributedWidths.map(w => w * scale);
+      }
+    }
+
     return (
       <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
-        {activities.map((activity) => {
-          // Calculate segment width based on allocated or actual duration
-          let activityTime = 0;
-          if (activity.percentage > 0) {
-            activityTime = (activity.percentage / 100) * totalSessionSeconds;
-          } else if (activity.duration > 0) {
-            activityTime = activity.duration * 60;
-          }
-          
-          const segmentWidth = (activityTime / totalTime) * 100;
+        {activities.map((activity, idx) => {
+          const segmentWidth = redistributedWidths[idx];
+          if (!segmentWidth || segmentWidth <= 0) return null;
+
+          // Compute fill within segment based on its own planned time
+          let activityTime = plannedSeconds[idx];
           let fillWidth = 0;
-          
           if (activity.isCompleted) {
             fillWidth = 100;
           } else if (activityTime > 0) {
-            const elapsed = activityTime - Math.max(0, activity.timeRemaining);
-            fillWidth = (elapsed / activityTime) * 100;
+            // Allow overtime to fully fill the segment (>=100%) visually by capping at 100
+            const tr = activity.timeRemaining;
+            let elapsed = 0;
+            if (typeof tr === 'number') {
+              elapsed = tr >= 0 ? (activityTime - tr) : (activityTime + Math.abs(tr));
+            } else {
+              // Not started yet
+              elapsed = 0;
+            }
+            fillWidth = Math.min(100, Math.max(0, (elapsed / activityTime) * 100));
           }
-
-          if (segmentWidth === 0) return null;
 
           return (
             <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full relative last:border-r-0">
-              {/* Background segment with activity color at reduced opacity */}
               <div 
                 style={{ backgroundColor: activity.color }} 
                 className="h-full opacity-30"
               />
-              {/* Filled progress with full activity color */}
               <div 
                 style={{ 
                   width: `${Math.max(0, fillWidth)}%`, 
@@ -1668,21 +1718,36 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   }
 
   if (style === 'dynamicColor') {
+    // Compute actual elapsed seconds per activity, including overtime and count-up
+    const perActivityElapsed = activities.map(act => {
+      let planned = 0;
+      if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
+      else if (act.duration && act.duration > 0) planned = act.duration * 60;
+
+      if (act.countUp) {
+        return Math.max(0, act.timeRemaining || 0);
+      }
+      const tr = act.timeRemaining;
+      if (typeof tr === 'number') {
+        // If tr >= 0, elapsed = planned - tr; if tr < 0, elapsed = planned + |tr| (overtime)
+        return Math.max(0, planned - tr);
+      }
+      // No timer yet → zero elapsed
+      return 0;
+    });
+    const totalElapsed = perActivityElapsed.reduce((s, v) => s + v, 0);
+    // Fallback to previous behavior if nothing has elapsed yet
+    if (totalElapsed <= 0) {
+      return (
+        <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}></div>
+      );
+    }
+
     return (
       <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
-        {activities.map(activity => {
-          let activityTime = 0;
-          if (activity.percentage > 0) {
-            activityTime = (activity.percentage / 100) * totalSessionSeconds;
-          } else if (activity.duration > 0) {
-            activityTime = activity.duration * 60;
-          }
-          
-          const elapsed = activityTime - Math.max(0, activity.timeRemaining);
-          const widthPercentage = (elapsed / totalTime) * 100;
-
-          if (widthPercentage === 0) return null;
-
+        {activities.map((activity, idx) => {
+          const widthPercentage = (perActivityElapsed[idx] / totalElapsed) * 100;
+          if (!widthPercentage || widthPercentage <= 0) return null;
           return (
             <div
               key={activity.id}
@@ -1736,18 +1801,32 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     if (totalTime === 0) return null;
 
     if (style === 'dynamicColor') {
+      // Compute elapsed seconds per activity (includes overtime and count-up)
+      const perElapsed = activities.map(act => {
+        let planned = 0;
+        if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
+        else if (act.duration && act.duration > 0) planned = act.duration * 60;
+
+        if (act.countUp) {
+          return Math.max(0, act.timeRemaining || 0);
+        }
+        const tr = act.timeRemaining;
+        if (typeof tr === 'number') {
+          return tr >= 0 ? Math.max(0, planned - tr) : planned + Math.abs(tr);
+        }
+        return 0;
+      });
+      const totalElapsed = perElapsed.reduce((s, v) => s + v, 0);
+      if (totalElapsed <= 0) return null;
+
       let cumulativeRotation = -90;
-      return activities.map(activity => {
-        const activityDuration = activity.percentage > 0 ? (activity.percentage / 100) * totalSessionSeconds : activity.duration * 60;
-        const elapsed = activityDuration - Math.max(0, activity.timeRemaining);
-        if (elapsed <= 0) return null;
-
-        const progressAngle = (elapsed / totalTime) * 360;
-        const arcLength = (progressAngle / 360) * circumference;
-
+      return activities.map((activity, idx) => {
+        const share = perElapsed[idx] / totalElapsed;
+        if (!share || share <= 0) return null;
+        const angle = share * 360;
+        const arcLength = (angle / 360) * circumference;
         const rotation = cumulativeRotation;
-        cumulativeRotation += progressAngle;
-
+        cumulativeRotation += angle;
         return (
           <circle
             key={`progress-${activity.id}`}
@@ -1766,15 +1845,67 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     }
 
     if (style === 'segmented') {
+      // Planned seconds per activity
+      const plannedSeconds = activities.map(a => {
+        if (a.percentage && a.percentage > 0) return (a.percentage / 100) * totalSessionSeconds;
+        if (a.duration && a.duration > 0) return a.duration * 60;
+        return 0;
+      });
+      const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0) || 1;
+      // Base angles by plan
+      let angles = plannedSeconds.map(sec => (sec / totalPlanned) * 360);
+
+      // Overtime redistribution: find first activity in overtime and give it extra angle
+      const overtimeIndex = activities.findIndex(a => (a?.timeRemaining ?? 0) < 0);
+      if (overtimeIndex !== -1) {
+        const overtimeSec = Math.abs(activities[overtimeIndex].timeRemaining || 0);
+        let extraAngle = (overtimeSec / totalPlanned) * 360;
+        // Subtract evenly from others without going below 0
+        let idxs = angles.map((_, i) => i).filter(i => i !== overtimeIndex && angles[i] > 0);
+        let remaining = extraAngle;
+        let taken = 0;
+        while (remaining > 1e-6 && idxs.length > 0) {
+          const per = remaining / idxs.length;
+          let round = 0;
+          const next: number[] = [];
+          for (const i of idxs) {
+            const remove = Math.min(per, angles[i]);
+            angles[i] -= remove;
+            round += remove;
+            if (angles[i] > 1e-6) next.push(i);
+          }
+          taken += round;
+          remaining -= round;
+          idxs = next;
+          if (round <= 1e-6) break;
+        }
+        angles[overtimeIndex] = Math.min(360, angles[overtimeIndex] + taken);
+        // Normalize to sum ~360
+        const sumAngles = angles.reduce((s, v) => s + v, 0);
+        if (Math.abs(sumAngles - 360) > 0.01) {
+          const scale = 360 / sumAngles;
+          angles = angles.map(a => a * scale);
+        }
+      }
+
       let cumulativeRotation = -90;
-      return activities.map(activity => {
-        const activityDuration = activity.percentage > 0 ? (activity.percentage / 100) * totalSessionSeconds : activity.duration * 60;
-        const segmentAngle = (activityDuration / totalTime) * 360;
+      return activities.map((activity, idx) => {
+        const segmentAngle = angles[idx];
+        if (!segmentAngle || segmentAngle <= 0) return null;
         const segmentArcLength = (segmentAngle / 360) * circumference;
 
-        const elapsed = activityDuration - Math.max(0, activity.timeRemaining);
-        const progressWithinSegment = activityDuration > 0 ? (elapsed / activityDuration) : 0;
-        const fillAngle = segmentAngle * progressWithinSegment;
+        // Fill within the segment based on planned seconds (cap at 100%)
+        const planned = plannedSeconds[idx];
+        let fillAngle = 0;
+        if (planned > 0) {
+          const tr = activity.timeRemaining;
+          let elapsed = 0;
+          if (typeof tr === 'number') {
+            elapsed = tr >= 0 ? (planned - tr) : (planned + Math.abs(tr));
+          }
+          const progressWithin = Math.min(1, Math.max(0, elapsed / planned));
+          fillAngle = segmentAngle * progressWithin;
+        }
         const fillArcLength = (fillAngle / 360) * circumference;
 
         const rotation = cumulativeRotation;
@@ -1782,7 +1913,6 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
 
         return (
           <g key={`segment-${activity.id}`} transform={`rotate(${rotation} ${center} ${center})`}>
-            {/* Background segment with activity color at reduced opacity */}
             <circle
               stroke={activity.color}
               fill="transparent"
@@ -1794,7 +1924,6 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
               strokeLinecap="butt"
               opacity={0.3}
             />
-            {/* Filled progress with full activity color */}
             {fillArcLength > 0 && (
               <circle
                 stroke={activity.color}
