@@ -16,6 +16,7 @@ interface Activity {
   timeRemaining?: number;
   isCompleted?: boolean;
   isLocked?: boolean;
+  category?: string;
   tags?: string[];
   templateId?: string;
   sharedId?: string; // For linking session and daily activities
@@ -2061,6 +2062,124 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   );
 };
 
+// --- Category/Tag Spider Chart (independent from RPG system) ---
+const SpiderChart = ({
+  activities,
+  categoryColors,
+  showTags,
+  size = 360,
+}: {
+  activities: Activity[];
+  categoryColors: Record<string, string>;
+  showTags: boolean;
+  size?: number;
+}) => {
+  const center = size / 2;
+  const radius = center - 40;
+
+  // Aggregate time per category/tag using duration - timeRemaining for countdown and timeRemaining for countUp
+  const aggregates = React.useMemo(() => {
+    const perCategory = new Map<string, number>();
+    const perTag = new Map<string, number>();
+
+    activities.forEach(a => {
+      // compute spent seconds
+      let spent = 0;
+      if (a.countUp) {
+        spent = Math.max(0, a.timeRemaining || 0);
+      } else {
+        const planned = (a.percentage && a.percentage > 0) ? 0 : (a.duration || 0) * 60;
+        const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : planned;
+        spent = planned > 0 ? Math.max(0, planned - Math.max(0, tr)) : 0;
+      }
+      const cat = (a.category || 'uncategorized').toLowerCase();
+      perCategory.set(cat, (perCategory.get(cat) || 0) + spent);
+      (a.tags || []).forEach(tag => {
+        perTag.set(`${cat}::${tag}`, (perTag.get(`${cat}::${tag}`) || 0) + spent);
+      });
+    });
+    return { perCategory, perTag };
+  }, [activities]);
+
+  const categories = Array.from(aggregates.perCategory.keys());
+  const total = Array.from(aggregates.perCategory.values()).reduce((s, v) => s + v, 0) || 1;
+  const angleStep = (2 * Math.PI) / Math.max(1, categories.length);
+
+  const polarToXY = (r: number, angle: number) => ({ x: center + r * Math.cos(angle), y: center + r * Math.sin(angle) });
+
+  const categoryPoints = categories.map((cat, i) => {
+    const value = aggregates.perCategory.get(cat) || 0;
+    const norm = value / total; // share of time
+    const r = radius * norm;
+    const angle = -Math.PI / 2 + i * angleStep;
+    const { x, y } = polarToXY(r, angle);
+    return { x, y, cat, value, angle };
+  });
+
+  const outlinePoints = categoryPoints.map(p => `${p.x},${p.y}`).join(' ');
+
+  // Tag overlays per category (inner polygons), dashed
+  const tagOverlays = categories.map((cat, i) => {
+    const catColor = categoryColors[cat] || '#64748b';
+    const tags = Array.from(aggregates.perTag.entries())
+      .filter(([key]) => key.startsWith(cat + '::'))
+      .map(([key, val]) => ({ tag: key.split('::')[1], val }));
+    if (tags.length === 0) return null;
+    const sum = tags.reduce((s, t) => s + t.val, 0) || 1;
+    // Order tags stable
+    const polys = tags.map((t, ti) => {
+      const norm = (t.val / sum) * (aggregates.perCategory.get(cat)! / total);
+      const r = radius * norm;
+      const angle = -Math.PI / 2 + i * angleStep;
+      const { x, y } = polarToXY(r, angle);
+      return { x, y, tag: t.tag };
+    });
+    // Single point overlay shape is just a point; we'll render small circles with tooltip
+    return { cat, catColor, points: polys };
+  });
+
+  return (
+    <svg width={size} height={size} className="bg-white rounded-lg border">
+      {/* Grid */}
+      {[0.25, 0.5, 0.75, 1].map((f, idx) => (
+        <circle key={idx} cx={center} cy={center} r={radius * f} fill="none" stroke="#e2e8f0" strokeWidth={1} />
+      ))}
+      {/* Axes */}
+      {categories.map((cat, i) => {
+        const angle = -Math.PI / 2 + i * angleStep;
+        const { x, y } = polarToXY(radius, angle);
+        return <line key={cat} x1={center} y1={center} x2={x} y2={y} stroke="#e2e8f0" strokeWidth={1} />;
+      })}
+      {/* Category polygon */}
+      {categories.length > 0 && (
+        <polygon points={outlinePoints} fill="rgba(59,130,246,0.15)" stroke="#3b82f6" strokeWidth={2} />
+      )}
+      {/* Category vertices */}
+      {categoryPoints.map((p, i) => (
+        <g key={p.cat}>
+          <circle cx={p.x} cy={p.y} r={4} fill={categoryColors[p.cat] || '#3b82f6'} stroke="#fff" strokeWidth={2} />
+          {/* Labels */}
+          <text x={center + (radius + 14) * Math.cos(p.angle)} y={center + (radius + 14) * Math.sin(p.angle)} textAnchor="middle" className="text-xs fill-slate-600">
+            {p.cat}
+          </text>
+        </g>
+      ))}
+      {/* Tag overlays */}
+      {showTags && tagOverlays.map((ov) => ov && (
+        <g key={`ov-${ov.cat}`}>
+          {ov.points.map(pt => (
+            <g key={`${ov.cat}-${pt.tag}`}>
+              <circle cx={pt.x} cy={pt.y} r={3} fill={ov.catColor} opacity={0.7} />
+              <title>{`${pt.tag}`}</title>
+              <line x1={center} y1={center} x2={pt.x} y2={pt.y} stroke={ov.catColor} strokeDasharray="4,4" opacity={0.4} />
+            </g>
+          ))}
+        </g>
+      ))}
+    </svg>
+  );
+};
+
 
 const Switch = ({ checked, onCheckedChange, id }) => (
   <button
@@ -2703,7 +2822,11 @@ const ActivityManagementPage = ({
   onBackToTimer,
   onAddToSession,
   onAddToDaily,
-  onAddToBoth
+  onAddToBoth,
+  customCategories,
+  setCustomCategories,
+  customTags,
+  setCustomTags,
 }) => {
   try {
     const [editingTemplate, setEditingTemplate] = useState<ActivityTemplate | null>(null);
@@ -2716,55 +2839,7 @@ const ActivityManagementPage = ({
   // Activity customization state
   const [editingActivity, setEditingActivity] = useState<any | null>(null);
   
-  // Custom categories and tags management
-  const [customCategories, setCustomCategories] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('timeSliceCustomCategories');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Validate that we have an array of strings
-        if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
-          return parsed;
-        }
-      }
-      return [];
-    } catch (e) {
-      return [];
-    }
-  });
-  
-  const [customTags, setCustomTags] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('timeSliceCustomTags');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Validate that we have an array of strings
-        if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
-          return parsed;
-        }
-      }
-      return [];
-    } catch (e) {
-      return [];
-    }
-  });
-
-  // Save custom categories and tags to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('timeSliceCustomCategories', JSON.stringify(customCategories));
-    } catch (e) {
-      console.error('Failed to save custom categories:', e);
-    }
-  }, [customCategories]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('timeSliceCustomTags', JSON.stringify(customTags));
-    } catch (e) {
-      console.error('Failed to save custom tags:', e);
-    }
-  }, [customTags]);
+  // Categories and tags are provided by parent and persisted globally
 
   // Only custom categories now
   const allCategories = [...customCategories];
@@ -5551,7 +5626,7 @@ export default function App() {
   const [addActivityModalState, setAddActivityModalState] = useState({ isOpen: false });
 
   // Navigation State for Activity Management Page
-  const [currentPage, setCurrentPage] = useState('timer'); // 'timer', 'manage-activities', or 'rpg-stats'
+  const [currentPage, setCurrentPage] = useState('timer'); // 'timer', 'manage-activities', 'spider'
 
   // RPG Tags State (NEW)
   const [rpgTags, setRpgTags] = useState<RPGTag[]>(() => {
@@ -5603,6 +5678,124 @@ export default function App() {
       console.error('Failed to save activity templates to localStorage:', e);
     }
   }, [activityTemplates]);
+
+  // Global Categories/Tags used across app (persisted)
+  const [customCategories, setCustomCategories] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceCustomCategories');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  const [customTags, setCustomTags] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceCustomTags');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('timeSliceCustomCategories', JSON.stringify(customCategories)); } catch {}
+  }, [customCategories]);
+  useEffect(() => {
+    try { localStorage.setItem('timeSliceCustomTags', JSON.stringify(customTags)); } catch {}
+  }, [customTags]);
+
+  // Tag input autocomplete state (for pre-session panel)
+  const [tagFocusId, setTagFocusId] = useState<string | null>(null);
+  const [tagDraft, setTagDraft] = useState<string>('');
+  const [tagActiveIndex, setTagActiveIndex] = useState<number>(0);
+  const allKnownTags = React.useMemo(
+    () => {
+      // Merge tags from custom list, templates, and any activities to ensure full coverage
+      const merged = [
+        ...(customTags || []),
+        ...activityTemplates.flatMap(t => t.tags || []),
+        ...activities.flatMap(a => a.tags || []),
+      ]
+        .filter(Boolean)
+        .map(t => (typeof t === 'string' ? t.trim().toLowerCase() : String(t)))
+        .filter(Boolean);
+      return Array.from(new Set(merged));
+    },
+    [customTags, activityTemplates, activities]
+  );
+
+  // Helpers
+  const upsertCategory = useCallback((name: string) => {
+    const v = name.trim().toLowerCase();
+    if (!v) return;
+    setCustomCategories(prev => prev.includes(v) ? prev : [...prev, v]);
+  }, []);
+  const upsertTag = useCallback((name: string) => {
+    const v = name.trim().toLowerCase();
+    if (!v) return;
+    setCustomTags(prev => prev.includes(v) ? prev : [...prev, v]);
+  }, []);
+  const updateActivityCategory = useCallback((activityId: string, category?: string) => {
+    setActivities(prev => prev.map(a => a.id === activityId ? { ...a, category } : a));
+  }, [setActivities]);
+  const updateActivityTags = useCallback((activityId: string, tags: string[]) => {
+    setActivities(prev => prev.map(a => a.id === activityId ? { ...a, tags } : a));
+  }, [setActivities]);
+
+  const applyTagSuggestion = useCallback((activityId: string, suggestion: string) => {
+    // Replace the last token with suggestion
+    const raw = tagDraft;
+    const parts = raw.split(',').map(s => s.trim()).filter(() => true);
+    if (parts.length === 0) {
+      setTagDraft(suggestion);
+      updateActivityTags(activityId, [suggestion]);
+      return;
+    }
+    parts[parts.length - 1] = suggestion;
+    const cleaned = Array.from(new Set(parts.filter(Boolean).map(s => s.toLowerCase())));
+    setTagDraft(cleaned.join(', '));
+    updateActivityTags(activityId, cleaned);
+  }, [tagDraft, updateActivityTags]);
+
+  // Any time an activity gains category/tags, ensure there's a matching template for later reuse
+  useEffect(() => {
+    activities.forEach(a => {
+      if ((a.category && a.category.length) || (a.tags && a.tags.length)) {
+        const existing = activityTemplates.find(t => t.name.toLowerCase() === a.name.toLowerCase());
+        const payload: ActivityTemplate = {
+          id: existing?.id || `tpl-${a.name.toLowerCase()}`,
+          name: a.name,
+          color: a.color,
+          category: a.category,
+          tags: a.tags || [],
+        };
+        if (existing) {
+          setActivityTemplates(prev => prev.map(t => t.id === existing.id ? { ...t, ...payload } : t));
+        } else {
+          setActivityTemplates(prev => [...prev, payload]);
+        }
+      }
+    });
+  }, [activities]);
+  const saveActivityQuick = useCallback((activityId: string) => {
+    const a = activities.find(x => x.id === activityId);
+    if (!a) return;
+    // Save as template for later reuse (include category/tags)
+    const existing = activityTemplates.find(t => t.name.toLowerCase() === a.name.toLowerCase());
+    const payload: ActivityTemplate = {
+      id: existing?.id || Date.now().toString(),
+      name: a.name,
+      color: a.color,
+      category: a.category,
+      tags: a.tags || [],
+    };
+    if (existing) {
+      setActivityTemplates(prev => prev.map(t => t.id === existing.id ? { ...t, ...payload } as ActivityTemplate : t));
+    } else {
+      setActivityTemplates(prev => [...prev, payload]);
+    }
+  }, [activities, activityTemplates, setActivityTemplates]);
 
   // Save RPG tags to localStorage
   useEffect(() => {
@@ -7778,7 +7971,30 @@ export default function App() {
       onAddToSession={handleAddToCurrentSession}
       onAddToDaily={handleAddToDaily}
       onAddToBoth={handleAddToBoth}
+  customCategories={customCategories}
+  setCustomCategories={setCustomCategories}
+  customTags={customTags}
+  setCustomTags={setCustomTags}
     />
+  ) : currentPage === 'spider' ? (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+      <div className="flex items-center justify-between mb-4">
+        <CardTitle className="text-2xl font-bold">Activity Overview</CardTitle>
+        <div className="flex items-center gap-2">
+          <label className="text-sm flex items-center gap-1">
+            <input type="checkbox" className="w-4 h-4" checked={settings.showTagsOverlay || false} onChange={(e) => setSettings(s => ({ ...s, showTagsOverlay: e.target.checked }))} />
+            Show Tags
+          </label>
+          <Button size="sm" variant="outline" onClick={() => setCurrentPage('timer')}>Back</Button>
+        </div>
+      </div>
+      <SpiderChart
+        activities={activities}
+        categoryColors={Object.fromEntries(activities.map(a => [(a.category || 'uncategorized').toLowerCase(), a.color]))}
+        showTags={!!settings.showTagsOverlay}
+        size={520}
+      />
+    </div>
   ) : isTimerActive ? (
     <div className="max-w-2xl mx-auto">
       <Card>
@@ -7961,6 +8177,10 @@ export default function App() {
               <Button variant="outline" size="sm" onClick={() => setCurrentPage('manage-activities')} className="flex-1 sm:flex-none h-9 text-sm">
                 <Icon name="settings" className="h-4 w-4 mr-2" />
                 Manage Activities
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setCurrentPage('spider')} className="flex-1 sm:flex-none h-9 text-sm">
+                <Icon name="calendar" className="h-4 w-4 mr-2" />
+                Spider Chart
               </Button>
               {/* RPG Stats button removed */}
               <Button variant="outline" size="sm" onClick={() => {
@@ -9224,6 +9444,20 @@ export default function App() {
           </div>
           <div className="space-y-4">
             <h2 className="text-lg sm:text-xl font-semibold">Time Allocation</h2>
+            {/* Spider Chart controls + inline chart */}
+            <div className="flex items-center gap-3">
+              <label className="text-sm flex items-center gap-1">
+                <input type="checkbox" className="w-4 h-4" checked={settings.showTagsOverlay || false} onChange={(e) => setSettings(s => ({ ...s, showTagsOverlay: e.target.checked }))} />
+                Show Tags
+              </label>
+              <Button size="sm" variant="outline" onClick={() => setCurrentPage('spider')} className="h-8 text-xs">Open Chart</Button>
+            </div>
+            <SpiderChart
+              activities={activities}
+              categoryColors={Object.fromEntries(activities.map(a => [(a.category || 'uncategorized').toLowerCase(), a.color]))}
+              showTags={!!settings.showTagsOverlay}
+              size={300}
+            />
             <div
               className="relative h-16 sm:h-12 bg-gray-200 rounded-lg overflow-hidden flex"
               onMouseDown={handleBarDrag}
@@ -9264,6 +9498,7 @@ export default function App() {
                 <Badge variant={Math.abs(totalPercentage -  100) < 0.1 ? 'default' : 'destructive'} className="text-xs">
                   Total: {Math.round(totalPercentage)}%
                 </Badge>
+                <Button size="sm" variant="outline" onClick={() => setCurrentPage('spider')} className="h-8 text-xs">Spider</Button>
               </div>
             </div>
             <div className="space-y-3">
@@ -9358,6 +9593,87 @@ export default function App() {
                       />
                       <span className="text-sm text-gray-600 font-medium">min</span>
                     </div>
+                  </div>
+
+                  {/* Category + Tags + Save as preset */}
+                  <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
+                    <div className="flex items-center gap-1">
+                      <select
+                        className="h-8 text-sm border rounded px-2"
+                        value={activity.category || ''}
+                        onChange={(e) => updateActivityCategory(activity.id, e.target.value || undefined)}
+                      >
+                        <option value="">No category</option>
+                        {customCategories.map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                      <Button size="sm" variant="ghost" className="h-8 w-8 p-0" title="Add category" onClick={() => {
+                        const name = prompt('New category name?');
+                        if (name) upsertCategory(name);
+                      }}>
+                        <Icon name="plus" className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    <div className="flex items-center gap-1 relative">
+                      <input
+                        className="h-8 text-sm border rounded px-2 w-48"
+                        placeholder="tags comma..."
+                        value={tagFocusId === activity.id ? tagDraft : (activity.tags || []).join(', ')}
+                        onFocus={() => {
+                          setTagFocusId(activity.id);
+                          setTagDraft((activity.tags || []).join(', '));
+                        }}
+                        onBlur={() => {
+                          setTimeout(() => setTagFocusId(current => current === activity.id ? null : current), 150);
+                        }}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setTagDraft(raw);
+                          const list = raw.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+                          updateActivityTags(activity.id, Array.from(new Set(list)));
+                          setTagActiveIndex(0);
+                        }}
+                        onKeyDown={(e) => {
+                          const visible = tagFocusId === activity.id;
+                          if (!visible) return;
+                          const last = tagDraft.split(',').map(s => s.trim()).pop() || '';
+                          const options = allKnownTags.filter(t => t.toLowerCase().startsWith(last.toLowerCase()) && t.toLowerCase() !== last.toLowerCase()).slice(0, 6);
+                          if (e.key === 'ArrowDown') { e.preventDefault(); setTagActiveIndex(i => Math.min(options.length - 1, i + 1)); }
+                          if (e.key === 'ArrowUp') { e.preventDefault(); setTagActiveIndex(i => Math.max(0, i - 1)); }
+                          if (e.key === 'Enter' && options.length > 0) { e.preventDefault(); applyTagSuggestion(activity.id, options[Math.max(0, Math.min(tagActiveIndex, options.length - 1))]); }
+                        }}
+                      />
+                      {tagFocusId === activity.id && (() => {
+                        const last = (tagDraft || '').split(',').map(s => s.trim()).pop() || '';
+                        const suggestions = allKnownTags.filter(t => t.toLowerCase().startsWith(last.toLowerCase()) && t.toLowerCase() !== last.toLowerCase()).slice(0, 6);
+                        return suggestions.length > 0 ? (
+                          <div className="absolute top-full left-0 mt-1 w-48 bg-white border rounded shadow z-50 max-h-40 overflow-auto">
+                            {suggestions.map((s, idx) => (
+                              <button
+                                key={s}
+                                type="button"
+                                className={`w-full text-left px-2 py-1 text-xs hover:bg-gray-100 ${idx === tagActiveIndex ? 'bg-gray-100' : ''}`}
+                                onMouseDown={(e) => { e.preventDefault(); applyTagSuggestion(activity.id, s); }}
+                              >
+                                {s}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
+                      <Button size="sm" variant="ghost" className="h-8 w-8 p-0" title="Add tag" onClick={() => {
+                        const name = prompt('New tag?');
+                        if (name) upsertTag(name);
+                      }}>
+                        <Icon name="plus" className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    <Button size="sm" variant="outline" className="h-8 px-3 text-sm" title="Save preset" onClick={() => saveActivityQuick(activity.id)}>
+                      Save
+                    </Button>
                   </div>
 
                   {/* Third Row: Count Up Timer Checkbox */}
