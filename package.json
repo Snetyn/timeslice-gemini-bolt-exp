@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-  "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
-    "build": "vite build",
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build && node update-sw.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
