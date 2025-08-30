@@ -1698,8 +1698,8 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
           if (activity.isCompleted) {
             fillWidth = 100;
           } else if (inOvertime && !isOvertimeSegment) {
-            // Keep non-current segments visually full while width may shrink
-            fillWidth = 100;
+            // During overtime, non-selected segments should remain empty (no colorful fill)
+            fillWidth = 0;
           } else if (activityTime > 0) {
             // Allow overtime to fully fill the segment (>=100%) visually by capping at 100
             const tr = activity.timeRemaining;
@@ -1793,6 +1793,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   const activityRadius = radius - strokeWidth - 4;
   const circumference = 2 * Math.PI * radius;
   const activityCircumference = 2 * Math.PI * activityRadius;
+  const lastShownRef = useRef<Record<string, number>>({});
   
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
@@ -1921,21 +1922,42 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
         if (!segmentAngle || segmentAngle <= 0) return null;
         const segmentArcLength = (segmentAngle / 360) * circumference;
 
-  // Fill overlay rules:
-  // - Always render each segment's own progress so individual progress remains visible when switching.
-  // - During overtime, only the selected segment should appear prominent (higher opacity), others stay dim but do not pop.
+        // Fill overlay rules with persistence:
+        // - During overtime: only the SELECTED segment continues updating; others keep their last shown progress (do not backfill).
+        // - When not in overtime: all segments show and update their own progress.
         const planned = plannedSeconds[idx];
   let fillAngle = 0;
         const inOvertime = overtimeIndex !== -1;
         const isSelected = idx === currentActivityIndex;
-  if (planned > 0) {
+        if (planned > 0) {
           const tr = activity.timeRemaining;
           let elapsed = 0;
           if (typeof tr === 'number') {
             elapsed = tr >= 0 ? (planned - tr) : (planned + Math.abs(tr));
           }
           const progressWithin = Math.min(1, Math.max(0, elapsed / planned));
-          fillAngle = segmentAngle * progressWithin;
+
+          let shown = progressWithin;
+          if (inOvertime) {
+            if (isSelected) {
+              // Update selected segment's shown progress
+              lastShownRef.current[activity.id] = progressWithin;
+            } else {
+              // Hold the last shown value for non-selected
+              const held = lastShownRef.current[activity.id];
+              // If we haven't stored anything yet (just entered overtime), initialize with current
+              if (typeof held !== 'number') {
+                lastShownRef.current[activity.id] = progressWithin;
+                shown = progressWithin;
+              } else {
+                shown = held;
+              }
+            }
+          } else {
+            // Not in overtime -> keep last shown synced with actual progress
+            lastShownRef.current[activity.id] = progressWithin;
+          }
+          fillAngle = segmentAngle * shown;
         }
         const fillArcLength = (fillAngle / 360) * circumference;
 
@@ -1965,7 +1987,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                 cx={center}
                 cy={center}
                 strokeLinecap="butt"
-                opacity={isSelected ? 1 : (inOvertime ? 0.35 : 0.6)}
+                opacity={0.95}
                 style={{ transition: 'opacity 200ms linear' }}
               />
             )}
