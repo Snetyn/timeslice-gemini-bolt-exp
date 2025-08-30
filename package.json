@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "build": "vite build && node update-sw.js",
     "lint": "eslint .",
-    "preview": "vite preview"
+  "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+  "serve": "npm run build && npm run preview"
   },
   "dependencies": {
     "react": "^19.1.0",

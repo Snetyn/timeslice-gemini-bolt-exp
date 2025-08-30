@@ -1605,7 +1605,7 @@ const Badge = ({ variant = 'default', className = '', children }) => {
   return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
-const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0 }) => {
+const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex }) => {
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
   const totalTime = activities.reduce((sum, act) => {
@@ -1631,8 +1631,19 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0) || 1; // avoid div by 0
     const baseWidths = plannedSeconds.map(sec => (sec / totalPlanned) * 100);
 
-    // Find an activity in overtime (timeRemaining < 0)
-    const overtimeIndex = activities.findIndex(a => (a?.timeRemaining ?? 0) < 0);
+    // Find the activity that is actually in overtime (most negative timeRemaining)
+    const overtimeIndex = (() => {
+      let idx = -1;
+      let mostNeg = 0;
+      activities.forEach((a, i) => {
+        const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : 0;
+        if (tr < mostNeg) {
+          mostNeg = tr;
+          idx = i;
+        }
+      });
+      return idx;
+    })();
 
     let redistributedWidths = [...baseWidths];
     if (overtimeIndex !== -1) {
@@ -1682,7 +1693,12 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
           // Compute fill within segment based on its own planned time
           let activityTime = plannedSeconds[idx];
           let fillWidth = 0;
+          const inOvertime = overtimeIndex !== -1;
+          const isOvertimeSegment = idx === overtimeIndex;
           if (activity.isCompleted) {
+            fillWidth = 100;
+          } else if (inOvertime && !isOvertimeSegment) {
+            // Keep non-current segments visually full while width may shrink
             fillWidth = 100;
           } else if (activityTime > 0) {
             // Allow overtime to fully fill the segment (>=100%) visually by capping at 100
@@ -1700,8 +1716,8 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
           return (
             <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full relative last:border-r-0">
               <div 
-                style={{ backgroundColor: activity.color }} 
-                className="h-full opacity-30"
+                className="h-full"
+                style={{ opacity: inOvertime && !isOvertimeSegment ? 0.25 : 0.35, backgroundColor: activity.color }}
               />
               <div 
                 style={{ 
@@ -1769,7 +1785,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   );
 };
 
-const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0 }) => {
+const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex }) => {
   const size = 200;
   const strokeWidth = 12;
   const center = size / 2;
@@ -1855,8 +1871,19 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
       // Base angles by plan
       let angles = plannedSeconds.map(sec => (sec / totalPlanned) * 360);
 
-      // Overtime redistribution: find first activity in overtime and give it extra angle
-      const overtimeIndex = activities.findIndex(a => (a?.timeRemaining ?? 0) < 0);
+      // Overtime: find the activity truly in overtime (most negative timeRemaining)
+      const overtimeIndex = (() => {
+        let idx = -1;
+        let mostNeg = 0;
+        activities.forEach((a, i) => {
+          const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : 0;
+          if (tr < mostNeg) {
+            mostNeg = tr;
+            idx = i;
+          }
+        });
+        return idx;
+      })();
       if (overtimeIndex !== -1) {
         const overtimeSec = Math.abs(activities[overtimeIndex].timeRemaining || 0);
         let extraAngle = (overtimeSec / totalPlanned) * 360;
@@ -1894,10 +1921,14 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
         if (!segmentAngle || segmentAngle <= 0) return null;
         const segmentArcLength = (segmentAngle / 360) * circumference;
 
-        // Fill within the segment based on planned seconds (cap at 100%)
+  // Fill overlay rules:
+  // - Always render each segment's own progress so individual progress remains visible when switching.
+  // - During overtime, only the selected segment should appear prominent (higher opacity), others stay dim but do not pop.
         const planned = plannedSeconds[idx];
-        let fillAngle = 0;
-        if (planned > 0) {
+  let fillAngle = 0;
+        const inOvertime = overtimeIndex !== -1;
+        const isSelected = idx === currentActivityIndex;
+  if (planned > 0) {
           const tr = activity.timeRemaining;
           let elapsed = 0;
           if (typeof tr === 'number') {
@@ -1934,6 +1965,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                 cx={center}
                 cy={center}
                 strokeLinecap="butt"
+                opacity={isSelected ? 1 : (inOvertime ? 0.35 : 0.6)}
+                style={{ transition: 'opacity 200ms linear' }}
               />
             )}
           </g>
@@ -7762,6 +7795,7 @@ export default function App() {
                 activityProgress={activityProgress}
                 activityColor={currentActivity?.color}
                 totalSessionMinutes={totalSessionMinutes}
+                currentActivityIndex={currentActivityIndex}
               />
             ) : (
               <div className="space-y-1">
@@ -7776,6 +7810,7 @@ export default function App() {
                   overallProgress={getOverallProgress()}
                   currentActivityColor={currentActivity?.color}
                   totalSessionMinutes={totalSessionMinutes}
+                  currentActivityIndex={currentActivityIndex}
                 />
               </div>
             )
@@ -7832,6 +7867,8 @@ export default function App() {
             <div className="space-y-1">{activities.map((activity, index) => {
                 const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - Math.max(0, activity.timeRemaining)) / (activity.duration * 60)) * 100 : 0;
                 const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
+                const anyOvertime = activities.some(a => (a.timeRemaining ?? 0) < 0);
+                const isNonCurrentWhileOvertime = anyOvertime && index !== currentActivityIndex;
                 return (
                   <div
                     key={activity.id}
@@ -7840,7 +7877,16 @@ export default function App() {
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
                     {settings.showActivityProgress && (
-                      <div className="absolute top-0 left-0 h-full opacity-20" style={{ width: `${activity.isCompleted ? 100 : displayProgress}%`, backgroundColor: activity.color, transition: 'width 0.5s linear' }}></div>
+                      <div
+                        className="absolute top-0 left-0 h-full"
+                        style={{
+                          width: `${activity.isCompleted ? 100 : (isNonCurrentWhileOvertime ? 100 : displayProgress)}%`,
+                          backgroundColor: activity.color,
+                          opacity: index === currentActivityIndex ? 0.25 : 0.18,
+                          // When any overtime exists and this row is not selected, freeze width to avoid jumps
+                          transition: isNonCurrentWhileOvertime ? 'opacity 0.25s linear' : 'width 0.5s linear, opacity 0.25s linear'
+                        }}
+                      />
                     )}
                     <div className="flex items-center space-x-2 z-10">
                       <input type="checkbox" className="h-4 w-4 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
