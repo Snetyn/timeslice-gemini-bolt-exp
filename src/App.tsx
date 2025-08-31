@@ -299,6 +299,20 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
   // New: Overview-only time range
   const [timeRange, setTimeRange] = useState<'today' | '3d' | '7d' | 'month' | 'all'>('today');
   
+  // Responsive sizing: shrink chart slightly on small screens (e.g., Android phones)
+  const [effectiveSize, setEffectiveSize] = useState<number>(size);
+  useEffect(() => {
+    const updateSize = () => {
+      // Leave some horizontal padding (~48px). Clamp to [280, size].
+      const w = typeof window !== 'undefined' ? window.innerWidth : size;
+      const target = Math.max(280, Math.min(size, Math.min(420, w - 48)));
+      setEffectiveSize(target);
+    };
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, [size]);
+  
   // Guard: if no stats, show a friendly placeholder instead of rendering the chart
   if (!stats || stats.length === 0) {
     return (
@@ -308,8 +322,10 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
     );
   }
   
-  const center = size / 2;
-  const maxRadius = center - 100; // Increased padding for toggles
+  const center = effectiveSize / 2;
+  // Use smaller padding on small screens so content fits comfortably
+  const padding = effectiveSize < 360 ? 72 : 100;
+  const maxRadius = center - padding;
   
   // Helpers: date ranges
   const getRangeBounds = useCallback((range: 'today' | '3d' | '7d' | 'month' | 'all') => {
@@ -850,7 +866,7 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
         </div>
       </div>
       
-      <svg width={size} height={size} className="bg-slate-50 rounded-lg border transition-all duration-500 ease-in-out">
+  <svg width={effectiveSize} height={effectiveSize} className="bg-slate-50 rounded-lg border transition-all duration-500 ease-in-out" viewBox={`0 0 ${effectiveSize} ${effectiveSize}`} preserveAspectRatio="xMidYMid meet">
         {/* Dynamic grid circles with level indicators */}
         {ringPaths.map((ring, i) => (
           <g key={i}>
