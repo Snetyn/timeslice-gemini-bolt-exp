@@ -6925,11 +6925,10 @@ export default function App() {
   const getAllocatedSeconds = useCallback((activity: Activity) => {
     const totalSeconds = calculateTotalSessionMinutes() * 60;
     const pct = Number(activity.percentage || 0);
-    if (!activity.countUp && pct > 0) {
-      return Math.round((pct / 100) * totalSeconds);
-    }
-    if (activity.duration > 0) {
-      return Math.round(activity.duration * 60);
+    // Allocation for non-countUp activities is derived strictly from percentage.
+    // If percentage is 0, this returns 0 and won't leak previous duration.
+    if (!activity.countUp) {
+      return Math.round((Math.max(0, pct) / 100) * totalSeconds);
     }
     return 0;
   }, [calculateTotalSessionMinutes]);
@@ -6943,17 +6942,18 @@ export default function App() {
     const totalSeconds = totalMins * 60;
 
     setActivities(prev => {
-      // Build allocation info for percentage-based, non-countUp activities
+      // Build allocation info for non-countUp activities based purely on percentages
       const alloc = prev.map((a, idx) => {
-        if (!a.countUp && a.percentage > 0) {
-          const exact = (a.percentage / 100) * totalSeconds;
+        if (!a.countUp) {
+          const exact = Math.max(0, (a.percentage / 100) * totalSeconds);
           const floorSec = Math.floor(exact);
           return { idx, exact, floorSec, remainder: exact - floorSec, type: 'pct' as const };
         }
-        return { idx, exact: Math.round((a.duration || 0) * 60), floorSec: Math.round((a.duration || 0) * 60), remainder: 0, type: 'fixed' as const };
+        // Count-up activities don't receive allocated time
+        return { idx, exact: 0, floorSec: 0, remainder: 0, type: 'countUp' as const };
       });
 
-      // Distribute remaining seconds so sum of pct allocations equals session seconds
+      // Distribute remaining seconds so sum equals total session seconds
       const pctItems = alloc.filter(x => x.type === 'pct');
       const floorSum = pctItems.reduce((s, x) => s + x.floorSec, 0);
       let remainderToGive = Math.max(0, totalSeconds - floorSum);
@@ -6966,12 +6966,7 @@ export default function App() {
       // Map back: set duration to allocatedSeconds/60 (can be fractional minutes), timeRemaining to allocatedSeconds
       const pctMap = new Map(pctItems.map(x => [x.idx, x.floorSec]));
       const next = prev.map((activity, i) => {
-        let allocatedSeconds = 0;
-        if (!activity.countUp && activity.percentage > 0) {
-          allocatedSeconds = pctMap.get(i) || 0;
-        } else if (activity.duration > 0) {
-          allocatedSeconds = Math.round(activity.duration * 60);
-        }
+        const allocatedSeconds = !activity.countUp ? (pctMap.get(i) ?? 0) : 0;
         const newDuration = allocatedSeconds / 60; // keep accurate, may be fractional minutes
         const newTimeRemaining = activity.countUp ? 0 : allocatedSeconds;
         console.log(`Activity ${activity.name}: pct=${activity.percentage}% -> ${newDuration.toFixed(2)}min = ${newTimeRemaining}s (countUp: ${activity.countUp})`);
@@ -7005,8 +7000,10 @@ export default function App() {
     // Handle flowmodoro break countdown first
     if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
       const now = Date.now();
-      const elapsedSeconds = Math.round((now - lastTickTimestampRef.current) / 1000);
-      lastTickTimestampRef.current = now;
+      let diffMs = now - (lastTickTimestampRef.current || now);
+      // Apply same smoothing as main timer to prevent 2-second jumps
+      let elapsedSeconds = diffMs >= 1900 ? Math.floor(diffMs / 1000) : 1;
+      lastTickTimestampRef.current = (lastTickTimestampRef.current || now) + elapsedSeconds * 1000;
 
       if (elapsedSeconds > 0) {
         setFlowmodoroState(prev => {
@@ -7028,10 +7025,13 @@ export default function App() {
       return; // Don't process regular timer during break
     }
 
-    // Calculate elapsed time for both session and daily modes
-    const currentTime = Date.now();
-    const elapsedSeconds = Math.round((currentTime - lastTickTimestampRef.current) / 1000);
-    lastTickTimestampRef.current = currentTime;
+    // Calculate elapsed time with smoothing to avoid 2-second jumps from minor drift
+    const nowMs = Date.now();
+    let diffMs = nowMs - (lastTickTimestampRef.current || nowMs);
+    // If diff is under ~1.9s while tab is visible, treat as 1s to avoid double-stepping
+    let elapsedSeconds = diffMs >= 1900 ? Math.floor(diffMs / 1000) : 1;
+    // Advance by whole seconds to keep a steady cadence and bounded drift
+    lastTickTimestampRef.current = (lastTickTimestampRef.current || nowMs) + elapsedSeconds * 1000;
 
     if (elapsedSeconds <= 0) return;
 
@@ -8107,7 +8107,27 @@ export default function App() {
       const otherUnlockedTotal = otherUnlockedActivities.reduce((sum, a) => sum + a.percentage, 0);
 
       const remainingForOthers = maxAllowed - safeNewPercentage;
-      const scaleFactor = otherUnlockedTotal > 0 ? remainingForOthers / otherUnlockedTotal : 0;
+      
+      // Handle special case where we need to distribute remaining percentage
+      let scaleFactor = 0;
+      if (otherUnlockedActivities.length > 0) {
+        if (otherUnlockedTotal > 0) {
+          // Normal case: scale existing percentages proportionally
+          scaleFactor = remainingForOthers / otherUnlockedTotal;
+        } else if (remainingForOthers > 0) {
+          // Special case: other activities are at 0%, distribute equally
+          const equalShare = remainingForOthers / otherUnlockedActivities.length;
+          return prev.map(act => {
+            if (act.id === idOfChangedActivity) {
+              return { ...act, percentage: safeNewPercentage };
+            }
+            if (act.isLocked || act.countUp) {
+              return act;
+            }
+            return { ...act, percentage: equalShare };
+          });
+        }
+      }
 
       const updatedActivities = prev.map(act => {
         if (act.id === idOfChangedActivity) {
@@ -8116,19 +8136,19 @@ export default function App() {
         if (act.isLocked || act.countUp) {
           return act;
         }
-        // It's another unlocked, non-count-up activity, scale it
+        // Scale other unlocked activities
         return { ...act, percentage: act.percentage * scaleFactor };
       });
 
       // Correct for rounding errors to ensure total is exactly 100
-      const finalTotal = updatedActivities.reduce((sum, p) => sum + p.percentage, 0);
+      const finalTotal = updatedActivities.filter(a => !a.countUp).reduce((sum, p) => sum + p.percentage, 0);
       const diff = 100 - finalTotal;
       if (Math.abs(diff) > 0.001) {
-        const firstUnlocked = updatedActivities.find(a => !a.isLocked && a.id !== idOfChangedActivity);
+        const firstUnlocked = updatedActivities.find(a => !a.isLocked && !a.countUp && a.id !== idOfChangedActivity);
         if (firstUnlocked) {
           firstUnlocked.percentage += diff;
         } else {
-          const changedActivity = updatedActivities.find(a => a.id === idOfChangedActivity);
+          const changedActivity = updatedActivities.find(a => a.id === idOfChangedActivity && !a.countUp);
           if (changedActivity) changedActivity.percentage += diff;
         }
       }
