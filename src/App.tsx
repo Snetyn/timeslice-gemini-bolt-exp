@@ -293,6 +293,11 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
 }) => {
   const [displayMode, setDisplayMode] = useState('overview'); // 'overview', 'today-tasks', 'daily-view', 'progress', 'balance'
   const [showToggles, setShowToggles] = useState(true);
+  // New: global toggles (top-right)
+  const [showTagLabels, setShowTagLabels] = useState(true);
+  const [showYesterdayOverlay, setShowYesterdayOverlay] = useState(false);
+  // New: Overview-only time range
+  const [timeRange, setTimeRange] = useState<'today' | '3d' | '7d' | 'month' | 'all'>('today');
   
   // Guard: if no stats, show a friendly placeholder instead of rendering the chart
   if (!stats || stats.length === 0) {
@@ -305,6 +310,97 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
   
   const center = size / 2;
   const maxRadius = center - 100; // Increased padding for toggles
+  
+  // Helpers: date ranges
+  const getRangeBounds = useCallback((range: 'today' | '3d' | '7d' | 'month' | 'all') => {
+    const end = new Date();
+    const start = new Date(end);
+    // normalize to end of day for inclusive bounds
+    const setStartOfDay = (d: Date) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+    const setEndOfDay = (d: Date) => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
+    switch (range) {
+      case 'today':
+        return { start: setStartOfDay(end), end: setEndOfDay(end) };
+      case '3d':
+        start.setDate(end.getDate() - 2); // last 3 days including today
+        return { start: setStartOfDay(start), end: setEndOfDay(end) };
+      case '7d':
+        start.setDate(end.getDate() - 6);
+        return { start: setStartOfDay(start), end: setEndOfDay(end) };
+      case 'month':
+        start.setDate(1);
+        return { start: setStartOfDay(start), end: setEndOfDay(end) };
+      default:
+        return { start: null as Date | null, end: null as Date | null };
+    }
+  }, []);
+  
+  const parseYMD = (ymd?: string): Date | null => {
+    if (!ymd) return null;
+    const [y, m, d] = ymd.split('-').map(n => parseInt(n, 10));
+    if (!y || !m || !d) return null;
+    const dt = new Date(y, m - 1, d);
+    return dt;
+  };
+  
+  const inRange = (date: Date | null | undefined, start: Date | null, end: Date | null) => {
+    if (!date) return start === null && end === null; // if all-time, accept only when both null handled by caller
+    if (start === null || end === null) return true;
+    const t = date.getTime();
+    return t >= start.getTime() && t <= end.getTime();
+  };
+  
+  // Build range-based totals for Overview display
+  const buildOverviewRangeStats = useCallback((range: 'today' | '3d' | '7d' | 'month' | 'all') => {
+    const bounds = getRangeBounds(range);
+    // Start with zeroed map by tagId to keep axes order
+    const totals = new Map<string, number>();
+    stats.forEach(s => totals.set(s.tagId, 0));
+    
+    // Daily activities: use timeSpent and scheduledDate
+    (dailyActivities || []).forEach(a => {
+      const tags = a.tags || [];
+      const dateFromSchedule = parseYMD(a.scheduledDate);
+      const dateToUse = dateFromSchedule || (a.startedAt ? new Date(a.startedAt) : null);
+      const include = (bounds.start === null && bounds.end === null) || inRange(dateToUse, bounds.start, bounds.end);
+      if (!include) return;
+      const minutes = Math.max(0, a.timeSpent || 0);
+      tags.forEach(tag => {
+        if (!totals.has(tag)) return;
+        totals.set(tag, (totals.get(tag) || 0) + minutes);
+      });
+    });
+    
+    // Session activities: use ACTUAL elapsed (not preset duration) when we can date it (startedAt)
+    (activities || []).forEach(a => {
+      const tags = a.tags || [];
+      const dateToUse = a.startedAt ? new Date(a.startedAt) : null;
+      const include = (bounds.start === null && bounds.end === null) || inRange(dateToUse, bounds.start, bounds.end);
+      if (!include) return;
+      // Compute elapsed minutes consistent with RPGStats
+      const durationSec = Math.max(0, (a.duration || 0) * 60);
+      const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : undefined;
+      let minutes = 0;
+      if (a.countUp) {
+        minutes = Math.max(0, Math.floor((a.timeRemaining || 0) / 60));
+      } else if (typeof tr === 'number') {
+        const elapsedSec = tr >= 0 ? (durationSec - tr) : (durationSec + Math.abs(tr));
+        minutes = Math.max(0, Math.floor(elapsedSec / 60));
+      }
+      tags.forEach(tag => {
+        if (!totals.has(tag)) return;
+        totals.set(tag, (totals.get(tag) || 0) + minutes);
+      });
+    });
+    
+    // Convert to levels mirroring RPGStat calculation
+    return stats.map(s => {
+      const totalMinutes = totals.get(s.tagId) || 0;
+      const level = Math.floor(totalMinutes / 60) + 1;
+      const experience = totalMinutes % 60;
+      return { ...s, totalMinutes, level, experience };
+    });
+  }, [activities, dailyActivities, getRangeBounds, stats]);
   
   // Calculate today's task data per tag
   const calculateTodayTaskData = () => {
@@ -342,10 +438,18 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
       }
     });
     
-    // Process session activities
+    // Process session activities (use actual elapsed)
     activities.forEach(activity => {
       if (activity.tags && activity.tags.length > 0) {
-        const activityProgress = activity.duration - (activity.timeRemaining / 60);
+        let activityProgress = 0;
+        const durationSec = Math.max(0, (activity.duration || 0) * 60);
+        const tr = typeof activity.timeRemaining === 'number' ? activity.timeRemaining : undefined;
+        if (activity.countUp) {
+          activityProgress = Math.max(0, (activity.timeRemaining || 0) / 60);
+        } else if (typeof tr === 'number') {
+          const elapsedSec = tr >= 0 ? (durationSec - tr) : (durationSec + Math.abs(tr));
+          activityProgress = Math.max(0, elapsedSec / 60);
+        }
         activity.tags.forEach(tagId => {
           const data = tagData.get(tagId);
           if (data) {
@@ -470,7 +574,9 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
         });
         
       default: // overview
-        return stats.map((stat, index) => {
+        // Recompute view using selected time range
+        const rangeStats = buildOverviewRangeStats(timeRange);
+        return rangeStats.map((stat, index) => {
           const angle = index * angleStep - Math.PI / 2;
           const scaledLevel = stat.level * scalingFactor;
           const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
@@ -512,6 +618,16 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
       case 'progress': return 'Today\'s Progress';
       case 'balance': return 'Suggested Balance';
       default: return 'Current Stats';
+    }
+  };
+  
+  const getTimeRangeLabel = (r: typeof timeRange) => {
+    switch (r) {
+      case 'today': return 'Today';
+      case '3d': return 'Last 3 Days';
+      case '7d': return 'Last 7 Days';
+      case 'month': return 'This Month';
+      default: return 'All Time';
     }
   };
 
@@ -585,10 +701,68 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
 
   const subCategoryBranches = generateSubCategoryBranches();
   
+  // Yesterday overlay path (Overview only)
+  const yesterdayPath = (() => {
+    if (!showYesterdayOverlay || displayMode !== 'overview') return null;
+    // Calculate yesterday bounds and levels
+    const yesterdayStart = new Date();
+    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+    const b = { start: new Date(yesterdayStart.setHours(0,0,0,0)), end: new Date(new Date().setDate(new Date().getDate() - 1)) };
+    (b.end as Date).setHours(23,59,59,999);
+    // Temporarily reuse buildOverviewRangeStats by mocking a custom range
+    const customRangeStats = (() => {
+      // same as buildOverviewRangeStats but with custom bounds
+      const totals = new Map<string, number>();
+      stats.forEach(s => totals.set(s.tagId, 0));
+      (dailyActivities || []).forEach(a => {
+        const tags = a.tags || [];
+        const dateFromSchedule = parseYMD(a.scheduledDate);
+        const dateToUse = dateFromSchedule || (a.startedAt ? new Date(a.startedAt) : null);
+        const include = inRange(dateToUse, b.start, b.end);
+        if (!include) return;
+        const minutes = Math.max(0, a.timeSpent || 0);
+        tags.forEach(tag => { if (totals.has(tag)) totals.set(tag, (totals.get(tag) || 0) + minutes); });
+      });
+      (activities || []).forEach(a => {
+        const tags = a.tags || [];
+        const dateToUse = a.startedAt ? new Date(a.startedAt) : null;
+        const include = inRange(dateToUse, b.start, b.end);
+        if (!include) return;
+        let minutes = 0;
+        const durationSec = Math.max(0, (a.duration || 0) * 60);
+        const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : undefined;
+        if (a.countUp) {
+          minutes = Math.max(0, Math.floor((a.timeRemaining || 0) / 60));
+        } else if (typeof tr === 'number') {
+          const elapsedSec = tr >= 0 ? (durationSec - tr) : (durationSec + Math.abs(tr));
+          minutes = Math.max(0, Math.floor(elapsedSec / 60));
+        }
+        tags.forEach(tag => { if (totals.has(tag)) totals.set(tag, (totals.get(tag) || 0) + minutes); });
+      });
+      return stats.map(s => {
+        const totalMinutes = totals.get(s.tagId) || 0;
+        const level = Math.floor(totalMinutes / 60) + 1;
+        return { ...s, level };
+      });
+    })();
+    const points = customRangeStats.map((stat, index) => {
+      const angle = index * angleStep - Math.PI / 2;
+      const scaledLevel = stat.level * scalingFactor;
+      const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
+      const radius = maxRadius * normalizedValue;
+      const x = center + Math.cos(angle) * radius;
+      const y = center + Math.sin(angle) * radius;
+      return `${x},${y}`;
+    });
+    return `M ${points.join(' L ')} Z`;
+  })();
+
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center w-full">
       {/* Toggle Controls */}
-      <div className="mb-4 flex flex-wrap gap-2 justify-center">
+      <div className="mb-3 w-full flex flex-wrap items-center justify-between gap-2">
+        {/* View tabs (left) */}
+        <div className="flex flex-wrap gap-2">
         <button
           onClick={() => setDisplayMode('overview')}
           className={`px-3 py-1 text-xs rounded-full transition-all ${
@@ -639,11 +813,38 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
         >
           ⚖️ Balance
         </button>
+        </div>
+        {/* Global toggles (right) */}
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-xs text-slate-700">
+            <input type="checkbox" className="accent-slate-600" checked={showTagLabels} onChange={(e) => setShowTagLabels(e.target.checked)} />
+            Show Tags
+          </label>
+          <label className="flex items-center gap-1 text-xs text-slate-700">
+            <input type="checkbox" className="accent-slate-600" checked={showYesterdayOverlay} onChange={(e) => setShowYesterdayOverlay(e.target.checked)} />
+            Yesterday Overlay
+          </label>
+        </div>
       </div>
+
+      {/* Overview time-range controls */}
+      {displayMode === 'overview' && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {(['today','3d','7d','month','all'] as const).map(r => (
+            <button
+              key={r}
+              onClick={() => setTimeRange(r)}
+              className={`px-3 py-1 text-xs rounded-md border ${timeRange === r ? 'bg-teal-600 text-white border-teal-700' : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'}`}
+            >
+              {getTimeRangeLabel(r)}
+            </button>
+          ))}
+        </div>
+      )}
       
-      <div className="mb-2 text-center">
+    <div className="mb-2 text-center">
         <div className="text-xs text-slate-500">
-          Showing: {getDisplayLabel()} • 
+      Showing: {getDisplayLabel()} {displayMode === 'overview' ? `• ${getTimeRangeLabel(timeRange)}` : ''} • 
           Dynamic Scale: {scalingFactor > 1 ? `${scalingFactor}x Enhanced` : 'Standard'} • 
           {rings} Rings • Range: Lv.{minLevel}-{maxLevel}
         </div>
@@ -706,6 +907,10 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
             strokeDasharray="8,4"
             opacity="0.8"
           />
+        )}
+        {/* Yesterday overlay (overview only) */}
+        {yesterdayPath && (
+          <path d={yesterdayPath} fill="none" stroke="#64748b" strokeWidth="2" strokeDasharray="5,4" opacity="0.9" />
         )}
         
         {/* Main display area with dynamic styling */}
@@ -807,8 +1012,8 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           );
         })}
         
-        {/* Sub-category branches (tree-like visualization) */}
-        {subCategoryBranches.map((branch, branchIndex) => (
+  {/* Sub-category branches (tree-like visualization) */}
+  {showTagLabels && subCategoryBranches.map((branch, branchIndex) => (
           <g key={`branch-${branchIndex}`}>
             {/* Branch line connecting parent to child */}
             <line
@@ -860,10 +1065,10 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
               {branch.child.tag.name}
             </text>
           </g>
-        ))}
+  ))}
         
-        {/* Enhanced labels with mode-specific information */}
-        {stats.map((stat, index) => {
+  {/* Enhanced labels with mode-specific information */}
+  {showTagLabels && stats.map((stat, index) => {
           const angle = index * angleStep - Math.PI / 2;
           const labelRadius = maxRadius + 50;
           const x = center + Math.cos(angle) * labelRadius;
@@ -943,11 +1148,11 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           textAnchor="middle"
           className="text-xs fill-slate-400 font-medium"
         >
-          {getDisplayLabel()}
+      {getDisplayLabel()} {displayMode === 'overview' ? `• ${getTimeRangeLabel(timeRange)}` : ''}
         </text>
       </svg>
       
-      {/* Enhanced legend with mode-specific info */}
+    {/* Enhanced legend with mode-specific info */}
       <div className="mt-4 flex flex-wrap gap-4 justify-center text-sm">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded" style={{ backgroundColor: getDisplayColor() }}></div>
@@ -958,6 +1163,12 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           <div className="flex items-center gap-2">
             <div className="w-4 h-4 border-2 border-purple-400 border-dashed bg-purple-200 rounded"></div>
             <span>Suggested Balance</span>
+          </div>
+        )}
+        {yesterdayPath && (
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 rounded border-2 border-slate-400" style={{ backgroundColor: 'transparent' }}></div>
+            <span>Yesterday</span>
           </div>
         )}
         
@@ -995,6 +1206,25 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
         )}
       </div>
       
+      {/* Per-view context under the chart */}
+      <div className="mt-2 text-xs text-slate-600 max-w-xl text-center">
+        {displayMode === 'overview' && (
+          <p>Overview shows accumulated XP across your activities within the selected range. Use the time filters above to view Today, the last 3 or 7 days, this month, or all time.</p>
+        )}
+        {displayMode === 'today-tasks' && (
+          <p>Today’s Tasks highlights how much time is planned and completed for each area today.</p>
+        )}
+        {displayMode === 'daily-view' && (
+          <p>Daily View compares time spent versus planned time for today, shown as completion rates.</p>
+        )}
+        {displayMode === 'progress' && (
+          <p>Progress shows minutes earned today in each area based on your activity tracking.</p>
+        )}
+        {displayMode === 'balance' && (
+          <p>Balance displays a suggested target distribution to help you keep life areas in harmony.</p>
+        )}
+      </div>
+
       {/* Add CSS animations */}
       <style>{`
         @keyframes pulse {
@@ -7539,15 +7769,15 @@ export default function App() {
 
   // RPG Stats Calculation Functions (driven by Manage Activities tags + actual usage)
   const calculateRPGStats = (): RPGStat[] => {
-    // Build list of axes from used tags and Manage Activities tags
-    const usedTagNames = new Set<string>([
+    // Build axes: only tags that exist in Manage Activities AND are actually used
+    const manageSet = new Set((customTags || []).map(t => String(t).trim().toLowerCase()));
+    const usedOnly = new Set<string>([
       ...activities.flatMap(a => a.tags || []),
       ...dailyActivities.flatMap(a => a.tags || []),
       ...activityTemplates.flatMap(t => t.tags || []),
-      ...(customTags || []),
     ].filter(Boolean).map(t => String(t).trim().toLowerCase()));
 
-    const tagList = Array.from(usedTagNames);
+    const tagList = Array.from(usedOnly).filter(t => manageSet.has(t));
     if (tagList.length === 0) return [];
 
     // Local deterministic color from name (keeps UI consistent, no global sync required)
@@ -7565,11 +7795,28 @@ export default function App() {
     const totals = new Map<string, { totalMinutes: number; sessionMinutes: number; dailyMinutes: number }>();
     tagList.forEach(t => totals.set(t, { totalMinutes: 0, sessionMinutes: 0, dailyMinutes: 0 }));
 
-    // Session activities contribute planned duration to sessionMinutes
+    // Helper: compute elapsed minutes from session activity (supports count-up and overtime)
+    const elapsedMinutesFromActivity = (a: any): number => {
+      const durationSec = Math.max(0, (a.duration || 0) * 60);
+      const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : undefined; // seconds
+      if (a.countUp) {
+        // For count-up timers, timeRemaining stores elapsed seconds
+        return Math.max(0, Math.floor((a.timeRemaining || 0) / 60));
+      }
+      if (typeof tr === 'number') {
+        // elapsed = planned - remaining; if negative remaining, include overtime
+        const elapsedSec = tr >= 0 ? (durationSec - tr) : (durationSec + Math.abs(tr));
+        return Math.max(0, Math.floor(elapsedSec / 60));
+      }
+      return 0;
+    };
+
+    // Session activities contribute ACTUAL elapsed minutes only
     activities.forEach(a => {
       const tags = (a.tags || []).map(x => String(x).toLowerCase());
       if (tags.length === 0) return;
-      const sessionMinutes = Math.max(0, a.duration);
+      const sessionMinutes = elapsedMinutesFromActivity(a);
+      if (sessionMinutes <= 0) return;
       tags.forEach(tag => {
         if (totals.has(tag)) {
           const cur = totals.get(tag)!;
@@ -8251,7 +8498,7 @@ export default function App() {
           ...activityTemplates.flatMap(t => t.tags || []),
         ]);
         const customTagNames = new Set((customTags || []).map(t => t.toLowerCase()));
-        const hasAnyRelevantTags = usedTagIds.size > 0 || (customTags && customTags.length > 0);
+        const hasAnyRelevantTags = rpgBalance.current.length > 0;
         // Filter by used tags if any; else fall back to tags that exist in Manage Activities
         const statsToUse = usedTagIds.size > 0
           ? rpgBalance.current.filter(s => rpgTags.find(rt => rt.name === s.tagName && usedTagIds.has(rt.id)))
@@ -8266,8 +8513,8 @@ export default function App() {
             </div>
           );
         }
-        const finalStats = statsToUse.length ? statsToUse : rpgBalance.current;
-        const finalSuggested = suggestedToUse.length ? suggestedToUse : rpgBalance.suggested;
+  const finalStats = statsToUse.length ? statsToUse : rpgBalance.current;
+  const finalSuggested = suggestedToUse.length ? suggestedToUse : rpgBalance.suggested;
         return (
           <RPGStatsChart 
             stats={finalStats}
@@ -9779,7 +10026,7 @@ export default function App() {
                 ...activityTemplates.flatMap(t => t.tags || []),
               ]);
               const customTagNames = new Set((customTags || []).map(t => t.toLowerCase()));
-              const hasAnyRelevantTags = usedTagIds.size > 0 || (customTags && customTags.length > 0);
+              const hasAnyRelevantTags = rpgBalance.current.length > 0;
               const statsToUse = usedTagIds.size > 0
                 ? rpgBalance.current.filter(s => rpgTags.find(rt => rt.name === s.tagName && usedTagIds.has(rt.id)))
                 : rpgBalance.current.filter(s => customTagNames.has(s.tagName.toLowerCase()));
