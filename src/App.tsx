@@ -5377,6 +5377,10 @@ export default function App() {
       dailyTimelineAnimation: true, // Animate timeline activities (shrink/slide when running)
       // Auto-schedule settings
       autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
+  // UI toggles
+  showTimeAllocationPanel: true,
+  showTagChips: true,
+  showRolloverIndicators: true,
     };
     try {
       const saved = localStorage.getItem('timeSliceSettings');
@@ -8054,14 +8058,22 @@ export default function App() {
       </div>
       {(() => {
         const rpgBalance = getRPGBalance();
+        const allowedCategories = new Set(
+          activityTemplates
+            .map(t => (t.category || '').trim())
+            .filter(Boolean)
+            .map(s => s.toLowerCase())
+        );
+        const filteredStats = rpgBalance.current.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
+        const filteredSuggested = rpgBalance.suggested.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
         return (
           <RPGStatsChart 
-            stats={rpgBalance.current}
-            suggestedStats={rpgBalance.suggested}
+            stats={filteredStats.length ? filteredStats : rpgBalance.current}
+            suggestedStats={filteredSuggested.length ? filteredSuggested : rpgBalance.suggested}
             activities={activities}
             dailyActivities={dailyActivities}
             rpgTags={rpgTags}
-            size={520}
+            size={800}
           />
         );
       })()}
@@ -8249,10 +8261,7 @@ export default function App() {
                 <Icon name="settings" className="h-4 w-4 mr-2" />
                 Manage Activities
               </Button>
-              <Button variant="outline" size="sm" onClick={() => setCurrentPage('spider')} className="flex-1 sm:flex-none h-9 text-sm">
-                <Icon name="calendar" className="h-4 w-4 mr-2" />
-                Spider Chart
-              </Button>
+              {/* Spider Chart button removed */}
               {/* RPG Stats button removed */}
               <Button variant="outline" size="sm" onClick={() => {
                 console.log("showSettings before toggle:", showSettings);
@@ -9031,7 +9040,7 @@ export default function App() {
                         settings.dailyTimelineAnimation && activity.status === 'active' 
                           ? 'transform scale-90 -translate-x-4 shadow-xl transition-all duration-500' 
                           : 'transition-all duration-300'
-          } ${activity.rolledOverFromYesterday ? 'border-dashed border-2' : ''}`}
+          } ${settings.showRolloverIndicators && activity.rolledOverFromYesterday ? 'border-dashed border-2' : ''}`}
                       style={{
                         backgroundColor: activity.status === 'completed' ? '#f0fdf4' : 
                                        activity.status === 'overtime' ? '#fef2f2' :
@@ -9151,7 +9160,7 @@ export default function App() {
                           <div className="flex items-center justify-between text-xs">
                             <div className="flex items-center gap-3">
                               {/* Tags (chips) */}
-                              {activity.tags && activity.tags.length > 0 && (
+                              {settings.showTagChips && activity.tags && activity.tags.length > 0 && (
                                 <div className="hidden sm:flex flex-wrap items-center gap-1">
                                   {activity.tags.map((t, idx) => (
                                     <span key={idx} className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">#{String(t).toLowerCase()}</span>
@@ -9548,24 +9557,42 @@ export default function App() {
             </div>
           </div>
           <div className="space-y-4">
-            <h2 className="text-lg sm:text-xl font-semibold">Time Allocation</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg sm:text-xl font-semibold">Time Allocation</h2>
+              <Button size="sm" variant="outline" onClick={() => setSettings(s => ({ ...s, showTimeAllocationPanel: !s.showTimeAllocationPanel}))} className="h-8 text-xs">
+                {settings.showTimeAllocationPanel ? 'Hide' : 'Show'}
+              </Button>
+            </div>
+            {settings.showTimeAllocationPanel && (
+            <>
             {/* RPG Balance Chart */}
             <div className="flex items-center gap-3">
               <Button size="sm" variant="outline" onClick={() => setCurrentPage('spider')} className="h-8 text-xs">Open RPG Chart</Button>
             </div>
             {(() => {
               const rpgBalance = getRPGBalance();
+              // Only include tags/categories that exist in manage activities
+              const allowedCategories = new Set(
+                activityTemplates
+                  .map(t => (t.category || '').trim())
+                  .filter(Boolean)
+                  .map(s => s.toLowerCase())
+              );
+              const filteredStats = rpgBalance.current.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
+              const filteredSuggested = rpgBalance.suggested.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
               return (
                 <RPGStatsChart 
-                  stats={rpgBalance.current}
-                  suggestedStats={rpgBalance.suggested}
+                  stats={filteredStats.length ? filteredStats : rpgBalance.current}
+                  suggestedStats={filteredSuggested.length ? filteredSuggested : rpgBalance.suggested}
                   activities={activities}
                   dailyActivities={dailyActivities}
                   rpgTags={rpgTags}
-                  size={300}
+                  size={600}
                 />
               );
             })()}
+            </>
+            )}
             <div
               className="relative h-16 sm:h-12 bg-gray-200 rounded-lg overflow-hidden flex"
               onMouseDown={handleBarDrag}
