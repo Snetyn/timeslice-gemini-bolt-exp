@@ -294,6 +294,15 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
   const [displayMode, setDisplayMode] = useState('overview'); // 'overview', 'today-tasks', 'daily-view', 'progress', 'balance'
   const [showToggles, setShowToggles] = useState(true);
   
+  // Guard: if no stats, show a friendly placeholder instead of rendering the chart
+  if (!stats || stats.length === 0) {
+    return (
+      <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-md">
+        No tag data yet. Create tags and assign them to activities to see your RPG balance.
+      </div>
+    );
+  }
+  
   const center = size / 2;
   const maxRadius = center - 100; // Increased padding for toggles
   
@@ -2566,12 +2575,29 @@ const SiphonTimeModal = ({ isOpen, onClose, onSiphon, activities, vaultTime, sou
 interface AddActivityModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAdd: (name: string, color: string, presetTime?: number, countUp?: boolean) => void;
+  // Allow passing category and tags from modal
+  onAdd: (
+    name: string,
+    color: string,
+    presetTime?: number,
+    countUp?: boolean,
+    category?: string,
+    tags?: string[]
+  ) => void;
   templates: ActivityTemplate[];
-  onSaveTemplate: (name: string, color: string) => void;
+  // Save template with category/tags as well
+  onSaveTemplate: (name: string, color: string, category?: string, tags?: string[]) => void;
+  // Existing options and adders
+  customCategories: string[];
+  customTags: string[];
+  onAddCategory: (name: string) => void;
+  rpgTags: RPGTag[]; // kept for compatibility but no longer used as source for selection
+  onAddRPGTag: (name: string, color?: string) => void; // kept for compatibility
+  // Also add to Manage Activity tags (string list)
+  onAddCustomTag?: (name: string) => void;
 }
 
-const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTemplate }: AddActivityModalProps) => {
+const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTemplate, customCategories = [], customTags = [], onAddCategory, rpgTags = [], onAddRPGTag, onAddCustomTag }: AddActivityModalProps) => {
   const [activityName, setActivityName] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<ActivityTemplate | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -2579,6 +2605,9 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
   const [presetSeconds, setPresetSeconds] = useState(0);
   const [usePresetTime, setUsePresetTime] = useState(false);
   const [useCountUp, setUseCountUp] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string | undefined>(undefined);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [newTagText, setNewTagText] = useState<string>('');
   
   // Predefined color palette (same as quickAddDailyActivity) - for reference only
   const colorPalette = [
@@ -2601,6 +2630,8 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
     if (selectedTemplate) {
       name = selectedTemplate.name;
       color = selectedTemplate.color; // ✅ Use template's saved color (like UI test 5)
+      if (selectedTemplate.category) setSelectedCategory(selectedTemplate.category);
+      if (selectedTemplate.tags) setSelectedTagIds(selectedTemplate.tags);
     } else if (!name) {
       name = "New Activity";
     }
@@ -2609,7 +2640,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
       timeInSeconds = (presetMinutes * 60) + presetSeconds;
     }
     
-    onAdd(name, color, timeInSeconds, useCountUp);
+  onAdd(name, color, timeInSeconds, useCountUp, selectedCategory, selectedTagIds);
     setActivityName("");
     setSelectedTemplate(null);
     setShowTemplates(false);
@@ -2617,6 +2648,8 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
     setPresetSeconds(0);
     setUsePresetTime(false);
     setUseCountUp(false);
+  setSelectedCategory(undefined);
+  setSelectedTagIds([]);
     onClose();
   };
 
@@ -2625,7 +2658,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
     // Use the same random color logic as UI test 5
     const color = `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`;
     if (name && onSaveTemplate) {
-      onSaveTemplate(name, color);
+      onSaveTemplate(name, color, selectedCategory, selectedTagIds);
       setActivityName("");
     }
   };
@@ -2644,6 +2677,8 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
     setPresetSeconds(0);
     setUsePresetTime(false);
     setUseCountUp(false);
+  setSelectedCategory(undefined);
+  setSelectedTagIds([]);
     onClose();
   };
 
@@ -2680,6 +2715,8 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
                         setSelectedTemplate(template);
                         setActivityName(template.name);
                         // Remove color selection - colors are now random
+                        setSelectedCategory(template.category);
+                        setSelectedTagIds(template.tags || []);
                       }}
                       className="h-8 text-xs justify-start"
                     >
@@ -2710,6 +2747,124 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
                 autoFocus
                 className="text-base py-3"
               />
+            </div>
+
+            {/* Category Selection with create option (typed input) */}
+            <div className="space-y-2">
+              <Label className="text-sm">Category</Label>
+              <div className="flex items-center gap-2">
+                <input
+                  className="w-full border rounded-md h-9 px-2 text-sm"
+                  placeholder="Type a category or leave blank"
+                  value={selectedCategory || ''}
+                  onChange={(e) => setSelectedCategory(e.target.value || undefined)}
+                  list="manage-categories-list"
+                />
+                <datalist id="manage-categories-list">
+                  {customCategories.map(cat => (
+                    <option key={cat} value={cat} />
+                  ))}
+                </datalist>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9"
+                  onClick={() => {
+                    const v = (selectedCategory || '').trim().toLowerCase();
+                    if (v) {
+                      onAddCategory?.(v);
+                      setSelectedCategory(v);
+                    }
+                  }}
+                >
+                  New
+                </Button>
+              </div>
+            </div>
+
+            {/* Tags multi-select with create option (using Manage Activities tags) */}
+            <div className="space-y-2">
+              <Label className="text-sm">Tags</Label>
+              {customTags.length === 0 ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500">No tags yet.</span>
+          <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7"
+                    onClick={() => {
+                      const name = prompt('New tag name?');
+                      if (name) {
+                        const nm = name.trim().toLowerCase();
+                        if (nm) {
+                          onAddCustomTag?.(nm);
+                          setSelectedTagIds(prev => Array.from(new Set([...prev, nm])));
+                        }
+                      }
+                    }}
+                  >
+                    Create one
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-2 max-h-28 overflow-y-auto">
+                    {customTags.map(tagName => {
+                      // use tagName as id since activities store strings for tags
+                      const tagId = tagName;
+                      const checked = selectedTagIds.includes(tagId);
+                      return (
+                        <label key={tagId} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4"
+                            checked={checked}
+                            onChange={(e) => {
+                              setSelectedTagIds(prev => {
+                                if (e.target.checked) return Array.from(new Set([...prev, tagId]));
+                                return prev.filter(id => id !== tagId);
+                              });
+                            }}
+                          />
+                          <span className="inline-flex items-center gap-2">
+                            <span className="w-3 h-3 rounded-full bg-gray-400" />
+                            {tagName}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      className="flex-1 border rounded-md h-8 px-2 text-sm"
+                      placeholder="Type new tag"
+                      value={newTagText}
+                      onChange={(e) => setNewTagText(e.target.value)}
+                      list="manage-tags-list"
+                    />
+                    <datalist id="manage-tags-list">
+                      {customTags.map(tag => (
+                        <option key={tag} value={tag} />
+                      ))}
+                    </datalist>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      onClick={() => {
+                        const nm = (newTagText || '').trim().toLowerCase();
+                        if (nm) {
+                          onAddCustomTag?.(nm);
+                          setSelectedTagIds(prev => Array.from(new Set([...prev, nm])));
+                          setNewTagText('');
+                        }
+                      }}
+                    >
+                      New
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Save as Template Option */}
@@ -6936,7 +7091,14 @@ export default function App() {
     setActivities(prev => [...prev, sessionActivity]);
   };
 
-  const addActivity = (customName: string | null = null, customColor: string | null = null, presetTime = 0, countUp = false) => {
+  const addActivity = (
+    customName: string | null = null,
+    customColor: string | null = null,
+    presetTime = 0,
+    countUp = false,
+    category?: string,
+    tags?: string[]
+  ) => {
     // Always open modal if no custom name provided - this ensures all activity creation goes through naming dialog
     // This is especially important for mobile users who shouldn't need to click into input fields to rename
     if (customName === null || customName === undefined || customName === '') {
@@ -6968,6 +7130,8 @@ export default function App() {
       isCompleted: false,
       isLocked: false,
       countUp: countUp,
+      category: category,
+      tags: tags && tags.length ? tags : [],
     };
     
     setActivities(prev => {
@@ -6990,7 +7154,7 @@ export default function App() {
     });
   };
 
-  const handleAddActivityWithName = (name, color, presetTime = 0, countUp = false) => {
+  const handleAddActivityWithName = (name, color, presetTime = 0, countUp = false, category?: string, tags?: string[]) => {
     console.log('handleAddActivityWithName called with:', { name, color, presetTime, countUp, currentMode });
     
     if (currentMode === 'daily') {
@@ -7025,13 +7189,15 @@ export default function App() {
   startedAt: null,
   scheduledDate: getLocalDateStr(),
   rolledOverFromYesterday: false,
+        category: category,
+        tags: tags && tags.length ? tags : [],
       };
       
       setDailyActivities(prev => [...prev, newActivity]);
       console.log('Added daily activity via modal:', newActivity);
     } else {
       // Session mode - use existing addActivity function
-      addActivity(name, color, presetTime, countUp);
+  addActivity(name, color, presetTime, countUp, category, tags);
     }
   };
 
@@ -7371,60 +7537,78 @@ export default function App() {
     };
   };
 
-  // RPG Stats Calculation Functions
+  // RPG Stats Calculation Functions (driven by Manage Activities tags + actual usage)
   const calculateRPGStats = (): RPGStat[] => {
-    // Combine time from both session and daily activities based on their tags
-    const tagStats = new Map<string, { totalMinutes: number; sessionMinutes: number; dailyMinutes: number; }>();
-    
-    // Initialize all tags with 0 minutes
-    rpgTags.forEach(tag => {
-      tagStats.set(tag.id, { totalMinutes: 0, sessionMinutes: 0, dailyMinutes: 0 });
-    });
-    
-    // Process session activities
-    activities.forEach(activity => {
-      if (activity.tags && activity.tags.length > 0) {
-        const sessionMinutes = Math.max(0, activity.duration);
-        activity.tags.forEach(tagId => {
-          const existing = tagStats.get(tagId);
-          if (existing) {
-            existing.sessionMinutes += sessionMinutes;
-            existing.totalMinutes += sessionMinutes;
-          }
-        });
+    // Build list of axes from used tags and Manage Activities tags
+    const usedTagNames = new Set<string>([
+      ...activities.flatMap(a => a.tags || []),
+      ...dailyActivities.flatMap(a => a.tags || []),
+      ...activityTemplates.flatMap(t => t.tags || []),
+      ...(customTags || []),
+    ].filter(Boolean).map(t => String(t).trim().toLowerCase()));
+
+    const tagList = Array.from(usedTagNames);
+    if (tagList.length === 0) return [];
+
+    // Local deterministic color from name (keeps UI consistent, no global sync required)
+    const colorFor = (name: string) => {
+      let hash = 0;
+      for (let i = 0; i < name.length; i++) {
+        hash = name.charCodeAt(i) + ((hash << 5) - hash);
+        hash |= 0;
       }
+      const hue = Math.abs(hash) % 360;
+      return `hsl(${hue}, 65%, 50%)`;
+    };
+
+    // Initialize totals
+    const totals = new Map<string, { totalMinutes: number; sessionMinutes: number; dailyMinutes: number }>();
+    tagList.forEach(t => totals.set(t, { totalMinutes: 0, sessionMinutes: 0, dailyMinutes: 0 }));
+
+    // Session activities contribute planned duration to sessionMinutes
+    activities.forEach(a => {
+      const tags = (a.tags || []).map(x => String(x).toLowerCase());
+      if (tags.length === 0) return;
+      const sessionMinutes = Math.max(0, a.duration);
+      tags.forEach(tag => {
+        if (totals.has(tag)) {
+          const cur = totals.get(tag)!;
+          cur.sessionMinutes += sessionMinutes;
+          cur.totalMinutes += sessionMinutes;
+        }
+      });
     });
-    
-    // Process daily activities
-    dailyActivities.forEach(activity => {
-      if (activity.tags && activity.tags.length > 0) {
-        const dailyMinutes = activity.timeSpent || 0;
-        activity.tags.forEach(tagId => {
-          const existing = tagStats.get(tagId);
-          if (existing) {
-            existing.dailyMinutes += dailyMinutes;
-            existing.totalMinutes += dailyMinutes;
-          }
-        });
-      }
+
+    // Daily activities contribute timeSpent to dailyMinutes
+    dailyActivities.forEach(a => {
+      const tags = (a.tags || []).map(x => String(x).toLowerCase());
+      if (tags.length === 0) return;
+      const dailyMinutes = Math.max(0, a.timeSpent || 0);
+      tags.forEach(tag => {
+        if (totals.has(tag)) {
+          const cur = totals.get(tag)!;
+          cur.dailyMinutes += dailyMinutes;
+          cur.totalMinutes += dailyMinutes;
+        }
+      });
     });
-    
-    // Convert to RPGStat format with levels and experience
-    return rpgTags.map(tag => {
-      const stats = tagStats.get(tag.id) || { totalMinutes: 0, sessionMinutes: 0, dailyMinutes: 0 };
-      const level = Math.floor(stats.totalMinutes / 60) + 1; // 1 hour = 1 level
-      const experience = stats.totalMinutes % 60; // Remaining minutes as XP
-      
+
+    // Map to RPGStat[]
+    return tagList.map(name => {
+      const key = name.toLowerCase();
+      const stats = totals.get(key) || { totalMinutes: 0, sessionMinutes: 0, dailyMinutes: 0 };
+      const level = Math.floor(stats.totalMinutes / 60) + 1;
+      const experience = stats.totalMinutes % 60;
       return {
-        tagId: tag.id,
-        tagName: tag.name,
+        tagId: key,
+        tagName: name,
         totalMinutes: stats.totalMinutes,
         sessionMinutes: stats.sessionMinutes,
         dailyMinutes: stats.dailyMinutes,
-        weeklyMinutes: stats.totalMinutes, // TODO: Add weekly calculation
+        weeklyMinutes: stats.totalMinutes,
         level,
         experience,
-        color: tag.color
+        color: colorFor(name),
       };
     });
   };
@@ -7596,15 +7780,17 @@ export default function App() {
     }
   };
 
-  const saveActivityTemplate = (name, color) => {
+  const saveActivityTemplate = (name, color, category?: string, tags?: string[]) => {
     const newTemplate = {
       id: Date.now().toString(),
       name: name.trim(),
-      color: color
+      color: color,
+      category: category,
+      tags: tags && tags.length ? tags : undefined
     };
     
     // Check if template with same name already exists
-    const existingTemplate = activityTemplates.find(t => t.name.toLowerCase() === name.toLowerCase());
+  const existingTemplate = activityTemplates.find(t => t.name.toLowerCase() === name.toLowerCase());
     if (!existingTemplate) {
       setActivityTemplates(prev => [...prev, newTemplate]);
     }
@@ -8058,18 +8244,34 @@ export default function App() {
       </div>
       {(() => {
         const rpgBalance = getRPGBalance();
-        const allowedCategories = new Set(
-          activityTemplates
-            .map(t => (t.category || '').trim())
-            .filter(Boolean)
-            .map(s => s.toLowerCase())
-        );
-        const filteredStats = rpgBalance.current.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
-        const filteredSuggested = rpgBalance.suggested.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
+        // Determine which tags to show on the chart
+        const usedTagIds = new Set<string>([
+          ...activities.flatMap(a => a.tags || []),
+          ...dailyActivities.flatMap(a => a.tags || []),
+          ...activityTemplates.flatMap(t => t.tags || []),
+        ]);
+        const customTagNames = new Set((customTags || []).map(t => t.toLowerCase()));
+        const hasAnyRelevantTags = usedTagIds.size > 0 || (customTags && customTags.length > 0);
+        // Filter by used tags if any; else fall back to tags that exist in Manage Activities
+        const statsToUse = usedTagIds.size > 0
+          ? rpgBalance.current.filter(s => rpgTags.find(rt => rt.name === s.tagName && usedTagIds.has(rt.id)))
+          : rpgBalance.current.filter(s => customTagNames.has(s.tagName.toLowerCase()));
+        const suggestedToUse = usedTagIds.size > 0
+          ? rpgBalance.suggested.filter(s => rpgTags.find(rt => rt.name === s.tagName && usedTagIds.has(rt.id)))
+          : rpgBalance.suggested.filter(s => customTagNames.has(s.tagName.toLowerCase()));
+        if (!hasAnyRelevantTags) {
+          return (
+            <div className="text-sm text-gray-600 bg-gray-50 p-4 rounded-md">
+              No tags yet. Create tags in Manage Activities or add some to activities to see the chart.
+            </div>
+          );
+        }
+        const finalStats = statsToUse.length ? statsToUse : rpgBalance.current;
+        const finalSuggested = suggestedToUse.length ? suggestedToUse : rpgBalance.suggested;
         return (
           <RPGStatsChart 
-            stats={filteredStats.length ? filteredStats : rpgBalance.current}
-            suggestedStats={filteredSuggested.length ? filteredSuggested : rpgBalance.suggested}
+            stats={finalStats}
+            suggestedStats={finalSuggested}
             activities={activities}
             dailyActivities={dailyActivities}
             rpgTags={rpgTags}
@@ -9571,19 +9773,32 @@ export default function App() {
             </div>
             {(() => {
               const rpgBalance = getRPGBalance();
-              // Only include tags/categories that exist in manage activities
-              const allowedCategories = new Set(
-                activityTemplates
-                  .map(t => (t.category || '').trim())
-                  .filter(Boolean)
-                  .map(s => s.toLowerCase())
-              );
-              const filteredStats = rpgBalance.current.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
-              const filteredSuggested = rpgBalance.suggested.filter(s => allowedCategories.has(s.tagName.toLowerCase()));
+              const usedTagIds = new Set<string>([
+                ...activities.flatMap(a => a.tags || []),
+                ...dailyActivities.flatMap(a => a.tags || []),
+                ...activityTemplates.flatMap(t => t.tags || []),
+              ]);
+              const customTagNames = new Set((customTags || []).map(t => t.toLowerCase()));
+              const hasAnyRelevantTags = usedTagIds.size > 0 || (customTags && customTags.length > 0);
+              const statsToUse = usedTagIds.size > 0
+                ? rpgBalance.current.filter(s => rpgTags.find(rt => rt.name === s.tagName && usedTagIds.has(rt.id)))
+                : rpgBalance.current.filter(s => customTagNames.has(s.tagName.toLowerCase()));
+              const suggestedToUse = usedTagIds.size > 0
+                ? rpgBalance.suggested.filter(s => rpgTags.find(rt => rt.name === s.tagName && usedTagIds.has(rt.id)))
+                : rpgBalance.suggested.filter(s => customTagNames.has(s.tagName.toLowerCase()));
+              if (!hasAnyRelevantTags) {
+                return (
+                  <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-md">
+                    No tags yet. Create tags in Manage Activities or add some to activities to see the chart.
+                  </div>
+                );
+              }
+              const finalStats = statsToUse.length ? statsToUse : rpgBalance.current;
+              const finalSuggested = suggestedToUse.length ? suggestedToUse : rpgBalance.suggested;
               return (
                 <RPGStatsChart 
-                  stats={filteredStats.length ? filteredStats : rpgBalance.current}
-                  suggestedStats={filteredSuggested.length ? filteredSuggested : rpgBalance.suggested}
+                  stats={finalStats}
+                  suggestedStats={finalSuggested}
                   activities={activities}
                   dailyActivities={dailyActivities}
                   rpgTags={rpgTags}
@@ -9730,86 +9945,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Category + Tags + Save as preset */}
-                  <div className="flex flex-wrap items-center justify-center gap-2 mt-3">
-                    <div className="flex items-center gap-1">
-                      <select
-                        className="h-8 text-sm border rounded px-2"
-                        value={activity.category || ''}
-                        onChange={(e) => updateActivityCategory(activity.id, e.target.value || undefined)}
-                      >
-                        <option value="">No category</option>
-                        {customCategories.map(cat => (
-                          <option key={cat} value={cat}>{cat}</option>
-                        ))}
-                      </select>
-                      <Button size="sm" variant="ghost" className="h-8 w-8 p-0" title="Add category" onClick={() => {
-                        const name = prompt('New category name?');
-                        if (name) upsertCategory(name);
-                      }}>
-                        <Icon name="plus" className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    <div className="flex items-center gap-1 relative">
-                      <input
-                        className="h-8 text-sm border rounded px-2 w-48"
-                        placeholder="tags comma..."
-                        value={tagFocusId === activity.id ? tagDraft : (activity.tags || []).join(', ')}
-                        onFocus={() => {
-                          setTagFocusId(activity.id);
-                          setTagDraft((activity.tags || []).join(', '));
-                        }}
-                        onBlur={() => {
-                          setTimeout(() => setTagFocusId(current => current === activity.id ? null : current), 150);
-                        }}
-                        onChange={(e) => {
-                          const raw = e.target.value;
-                          setTagDraft(raw);
-                          const list = raw.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
-                          updateActivityTags(activity.id, Array.from(new Set(list)));
-                          setTagActiveIndex(0);
-                        }}
-                        onKeyDown={(e) => {
-                          const visible = tagFocusId === activity.id;
-                          if (!visible) return;
-                          const last = tagDraft.split(',').map(s => s.trim()).pop() || '';
-                          const options = allKnownTags.filter(t => t.toLowerCase().startsWith(last.toLowerCase()) && t.toLowerCase() !== last.toLowerCase()).slice(0, 6);
-                          if (e.key === 'ArrowDown') { e.preventDefault(); setTagActiveIndex(i => Math.min(options.length - 1, i + 1)); }
-                          if (e.key === 'ArrowUp') { e.preventDefault(); setTagActiveIndex(i => Math.max(0, i - 1)); }
-                          if (e.key === 'Enter' && options.length > 0) { e.preventDefault(); applyTagSuggestion(activity.id, options[Math.max(0, Math.min(tagActiveIndex, options.length - 1))]); }
-                        }}
-                      />
-                      {tagFocusId === activity.id && (() => {
-                        const last = (tagDraft || '').split(',').map(s => s.trim()).pop() || '';
-                        const suggestions = allKnownTags.filter(t => t.toLowerCase().startsWith(last.toLowerCase()) && t.toLowerCase() !== last.toLowerCase()).slice(0, 6);
-                        return suggestions.length > 0 ? (
-                          <div className="absolute top-full left-0 mt-1 w-48 bg-white border rounded shadow z-50 max-h-40 overflow-auto">
-                            {suggestions.map((s, idx) => (
-                              <button
-                                key={s}
-                                type="button"
-                                className={`w-full text-left px-2 py-1 text-xs hover:bg-gray-100 ${idx === tagActiveIndex ? 'bg-gray-100' : ''}`}
-                                onMouseDown={(e) => { e.preventDefault(); applyTagSuggestion(activity.id, s); }}
-                              >
-                                {s}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null;
-                      })()}
-                      <Button size="sm" variant="ghost" className="h-8 w-8 p-0" title="Add tag" onClick={() => {
-                        const name = prompt('New tag?');
-                        if (name) upsertTag(name);
-                      }}>
-                        <Icon name="plus" className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    <Button size="sm" variant="outline" className="h-8 px-3 text-sm" title="Save preset" onClick={() => saveActivityQuick(activity.id)}>
-                      Save
-                    </Button>
-                  </div>
+                  {/* Category/Tags/Save controls removed; use Add New Activity modal instead */}
 
                   {/* Third Row: Count Up Timer Checkbox */}
                   <div className="flex items-center justify-center gap-2 mt-3">
@@ -9888,6 +10024,16 @@ export default function App() {
           onAdd={handleAddActivityWithName}
           templates={activityTemplates}
           onSaveTemplate={saveActivityTemplate}
+          customCategories={customCategories}
+          customTags={customTags}
+          onAddCategory={(name) => upsertCategory(name)}
+          rpgTags={rpgTags}
+          onAddRPGTag={(name, color) => {
+            // Reuse addRPGTag with generated color if not supplied
+            const c = color || `hsl(${Math.floor(Math.random()*360)}, 70%, 50%)`;
+            addRPGTag(name, c);
+          }}
+          onAddCustomTag={(nm) => upsertTag(nm)}
         />
       )}
       
