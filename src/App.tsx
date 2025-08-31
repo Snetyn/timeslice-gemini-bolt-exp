@@ -27,6 +27,9 @@ interface Activity {
   startedAt?: Date | null;
   subtasks?: Subtask[];
   countUp?: boolean;
+  // New: schedule tracking for rollover logic
+  scheduledDate?: string; // YYYY-MM-DD of the day this activity is scheduled for
+  rolledOverFromYesterday?: boolean; // show dashed style if rolled over
 }
 
 interface ActivityTemplate {
@@ -5220,6 +5223,14 @@ const SingleActivityMode = ({
 
 // --- Main Application Component ---
 export default function App() {
+  // Local date helper for rollover logic
+  const getLocalDateStr = (d: Date = new Date()) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
   const [activities, setActivities] = useState(() => {
     try {
       const savedActivities = localStorage.getItem('timeSliceActivities');
@@ -5442,6 +5453,10 @@ export default function App() {
       }
     ];
   });
+
+  // Selected tag filters for list views
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [tagQuery, setTagQuery] = useState('');
   
   const [activeDailyActivity, setActiveDailyActivity] = useState(() => {
     try {
@@ -6313,6 +6328,51 @@ export default function App() {
     }
   }, [dailyActivities]);
 
+  // Initialize scheduledDate and rollover flag for existing items on first load
+  useEffect(() => {
+    const today = getLocalDateStr();
+    setDailyActivities(prev => prev.map(a => ({
+      ...a,
+      scheduledDate: a.scheduledDate || today,
+      rolledOverFromYesterday: a.rolledOverFromYesterday || false,
+    })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Detect day change and mark rollover for unfinished activities from yesterday
+  const lastDateRef = useRef<string>(getLocalDateStr());
+  useEffect(() => {
+    const tick = () => {
+      const today = getLocalDateStr();
+      if (today !== lastDateRef.current) {
+        setDailyActivities(prev => prev.map(a => {
+          const wasYesterday = (a.scheduledDate && a.scheduledDate !== today);
+          if (wasYesterday) {
+            // Carry forward unfinished work and mark dashed
+            if (a.status !== 'completed') {
+              return {
+                ...a,
+                scheduledDate: today,
+                rolledOverFromYesterday: true,
+                // Reset accidental active/overtime states when rolling to a new day
+                status: a.status === 'active' ? 'scheduled' : a.status,
+                startedAt: null,
+              };
+            }
+            // Completed yesterday: just reset date and clear rollover
+            return { ...a, scheduledDate: today, rolledOverFromYesterday: false };
+          }
+          return a;
+        }));
+        lastDateRef.current = today;
+      }
+    };
+    const id = setInterval(tick, 60 * 1000);
+    tick();
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Save active daily activity to localStorage
   useEffect(() => {
     try {
@@ -6810,7 +6870,9 @@ export default function App() {
       startedAt: null,
       subtasks: [],
       tags: template.tags || [],
-      templateId: template.id // Link to template for shared progress
+  templateId: template.id, // Link to template for shared progress
+  scheduledDate: getLocalDateStr(),
+  rolledOverFromYesterday: false,
     };
     setDailyActivities(prev => [...prev, newActivity]);
   };
@@ -6844,7 +6906,9 @@ export default function App() {
         subtasks: [],
         tags: template.tags || [],
         templateId: template.id,
-        sharedId: sharedId // Link for shared progress
+  sharedId: sharedId, // Link for shared progress
+  scheduledDate: getLocalDateStr(),
+  rolledOverFromYesterday: false,
       };
       
       setDailyActivities(prev => [...prev, dailyActivity]);
@@ -6954,7 +7018,9 @@ export default function App() {
         status: 'scheduled',
         isActive: false,
         timeSpent: 0,
-        startedAt: null
+  startedAt: null,
+  scheduledDate: getLocalDateStr(),
+  rolledOverFromYesterday: false,
       };
       
       setDailyActivities(prev => [...prev, newActivity]);
@@ -7008,7 +7074,9 @@ export default function App() {
       isActive: false,
       timeSpent: 0,
       startedAt: null,
-      subtasks: [] // Add subtasks array
+  subtasks: [], // Add subtasks array
+  scheduledDate: getLocalDateStr(),
+  rolledOverFromYesterday: false,
     };
     
     setDailyActivities(prev => [...prev, newActivity]);
@@ -7979,21 +8047,24 @@ export default function App() {
   ) : currentPage === 'spider' ? (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
       <div className="flex items-center justify-between mb-4">
-        <CardTitle className="text-2xl font-bold">Activity Overview</CardTitle>
+        <CardTitle className="text-2xl font-bold">RPG Balance</CardTitle>
         <div className="flex items-center gap-2">
-          <label className="text-sm flex items-center gap-1">
-            <input type="checkbox" className="w-4 h-4" checked={settings.showTagsOverlay || false} onChange={(e) => setSettings(s => ({ ...s, showTagsOverlay: e.target.checked }))} />
-            Show Tags
-          </label>
           <Button size="sm" variant="outline" onClick={() => setCurrentPage('timer')}>Back</Button>
         </div>
       </div>
-      <SpiderChart
-        activities={activities}
-        categoryColors={Object.fromEntries(activities.map(a => [(a.category || 'uncategorized').toLowerCase(), a.color]))}
-        showTags={!!settings.showTagsOverlay}
-        size={520}
-      />
+      {(() => {
+        const rpgBalance = getRPGBalance();
+        return (
+          <RPGStatsChart 
+            stats={rpgBalance.current}
+            suggestedStats={rpgBalance.suggested}
+            activities={activities}
+            dailyActivities={dailyActivities}
+            rpgTags={rpgTags}
+            size={520}
+          />
+        );
+      })()}
     </div>
   ) : isTimerActive ? (
     <div className="max-w-2xl mx-auto">
@@ -8890,9 +8961,35 @@ export default function App() {
                     </div>
                   </div>
                   
+                  {/* Tag filter/search */}
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      value={tagQuery}
+                      onChange={(e) => setTagQuery(e.target.value)}
+                      placeholder="Filter by tag..."
+                      className="border rounded px-2 py-1 text-sm"
+                    />
+                    <Button size="sm" variant="outline" onClick={() => {
+                      const q = tagQuery.trim().toLowerCase();
+                      if (!q) return;
+                      if (!tagFilter.includes(q)) setTagFilter([...tagFilter, q]);
+                      setTagQuery('');
+                    }}>Add Filter</Button>
+                    {tagFilter.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {tagFilter.map(t => (
+                          <span key={t} className="px-2 py-0.5 bg-slate-200 rounded-full text-xs flex items-center gap-1">
+                            #{t}
+                            <button onClick={() => setTagFilter(tagFilter.filter(x => x !== t))} className="text-slate-600 hover:text-slate-900">×</button>
+                          </span>
+                        ))}
+                        <button className="text-xs text-blue-600" onClick={() => setTagFilter([])}>Clear</button>
+                      </div>
+                    )}
+                  </div>
                   {/* Dynamic Activity Cards */}
                   <div className="space-y-2">
-                    {dailyActivities.map((activity) => {
+                    {(tagFilter.length ? dailyActivities.filter(a => (a.tags || []).some(t => tagFilter.includes(String(t).toLowerCase()))) : dailyActivities).map((activity) => {
                       // Calculate activity progress for daily mode with real-time updates
                       const realTimeSpent = getRealTimeSpent(activity);
                       
@@ -8920,25 +9017,25 @@ export default function App() {
                       const earnedRestMinutes = settings.flowmodoroEnabled ? 
                         Math.floor(realTimeSpent / settings.flowmodoroRatio) : 0;
                       
-                      return (
-                      <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
+          return (
+          <div key={activity.id} className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
                         activity.status === 'completed'
                           ? 'border-green-200 hover:bg-green-100 cursor-pointer completion-glow'
                           : activity.status === 'overtime'
                             ? 'border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer'
                           : activity.status === 'active' 
                             ? 'border-blue-400 shadow-md ring-1 ring-blue-200 cursor-pointer' 
-                            : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer'
+            : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer'
                       } ${
                         // Add animation effects when enabled and activity is active
                         settings.dailyTimelineAnimation && activity.status === 'active' 
                           ? 'transform scale-90 -translate-x-4 shadow-xl transition-all duration-500' 
                           : 'transition-all duration-300'
-                      }`}
+          } ${activity.rolledOverFromYesterday ? 'border-dashed border-2' : ''}`}
                       style={{
                         backgroundColor: activity.status === 'completed' ? '#f0fdf4' : 
                                        activity.status === 'overtime' ? '#fef2f2' :
-                                       activity.status === 'active' ? '#eff6ff' : '#ffffff',
+               activity.status === 'active' ? '#eff6ff' : (activity.rolledOverFromYesterday ? '#fafafa' : '#ffffff'),
                         boxShadow: activity.status === 'completed' ? '0 0 15px rgba(34, 197, 94, 0.3)' : undefined
                       }}
                       onClick={() => {
@@ -9053,6 +9150,14 @@ export default function App() {
                           {/* Bottom row: Compact info display */}
                           <div className="flex items-center justify-between text-xs">
                             <div className="flex items-center gap-3">
+                              {/* Tags (chips) */}
+                              {activity.tags && activity.tags.length > 0 && (
+                                <div className="hidden sm:flex flex-wrap items-center gap-1">
+                                  {activity.tags.map((t, idx) => (
+                                    <span key={idx} className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">#{String(t).toLowerCase()}</span>
+                                  ))}
+                                </div>
+                              )}
                               {/* Duration */}
                               <div className="flex items-center gap-1">
                                 <span className="text-gray-500">Duration:</span>
@@ -9444,20 +9549,23 @@ export default function App() {
           </div>
           <div className="space-y-4">
             <h2 className="text-lg sm:text-xl font-semibold">Time Allocation</h2>
-            {/* Spider Chart controls + inline chart */}
+            {/* RPG Balance Chart */}
             <div className="flex items-center gap-3">
-              <label className="text-sm flex items-center gap-1">
-                <input type="checkbox" className="w-4 h-4" checked={settings.showTagsOverlay || false} onChange={(e) => setSettings(s => ({ ...s, showTagsOverlay: e.target.checked }))} />
-                Show Tags
-              </label>
-              <Button size="sm" variant="outline" onClick={() => setCurrentPage('spider')} className="h-8 text-xs">Open Chart</Button>
+              <Button size="sm" variant="outline" onClick={() => setCurrentPage('spider')} className="h-8 text-xs">Open RPG Chart</Button>
             </div>
-            <SpiderChart
-              activities={activities}
-              categoryColors={Object.fromEntries(activities.map(a => [(a.category || 'uncategorized').toLowerCase(), a.color]))}
-              showTags={!!settings.showTagsOverlay}
-              size={300}
-            />
+            {(() => {
+              const rpgBalance = getRPGBalance();
+              return (
+                <RPGStatsChart 
+                  stats={rpgBalance.current}
+                  suggestedStats={rpgBalance.suggested}
+                  activities={activities}
+                  dailyActivities={dailyActivities}
+                  rpgTags={rpgTags}
+                  size={300}
+                />
+              );
+            })()}
             <div
               className="relative h-16 sm:h-12 bg-gray-200 rounded-lg overflow-hidden flex"
               onMouseDown={handleBarDrag}
