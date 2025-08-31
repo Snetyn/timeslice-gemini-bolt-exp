@@ -7003,7 +7003,14 @@ export default function App() {
       let diffMs = now - (lastTickTimestampRef.current || now);
       // Apply same smoothing as main timer to prevent 2-second jumps
       let elapsedSeconds = diffMs >= 1900 ? Math.floor(diffMs / 1000) : 1;
-      lastTickTimestampRef.current = (lastTickTimestampRef.current || now) + elapsedSeconds * 1000;
+      // In visible session context, clamp to 1s to avoid UI double-steps
+      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
+      if (currentMode === 'session' && isVisible) {
+        elapsedSeconds = 1;
+        lastTickTimestampRef.current = now; // reset anchor to drop drift
+      } else {
+        lastTickTimestampRef.current = (lastTickTimestampRef.current || now) + elapsedSeconds * 1000;
+      }
 
       if (elapsedSeconds > 0) {
         setFlowmodoroState(prev => {
@@ -7030,8 +7037,15 @@ export default function App() {
     let diffMs = nowMs - (lastTickTimestampRef.current || nowMs);
     // If diff is under ~1.9s while tab is visible, treat as 1s to avoid double-stepping
     let elapsedSeconds = diffMs >= 1900 ? Math.floor(diffMs / 1000) : 1;
-    // Advance by whole seconds to keep a steady cadence and bounded drift
-    lastTickTimestampRef.current = (lastTickTimestampRef.current || nowMs) + elapsedSeconds * 1000;
+    // In visible session context, clamp to 1s to avoid UI double-steps
+    const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
+    if (currentMode === 'session' && isVisible) {
+      elapsedSeconds = 1;
+      lastTickTimestampRef.current = nowMs; // reset anchor to drop drift
+    } else {
+      // Advance by whole seconds to keep a steady cadence and bounded drift
+      lastTickTimestampRef.current = (lastTickTimestampRef.current || nowMs) + elapsedSeconds * 1000;
+    }
 
     if (elapsedSeconds <= 0) return;
 
@@ -7165,7 +7179,9 @@ export default function App() {
       const shouldHandleTick = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
       
       if (document.visibilityState === 'visible' && shouldHandleTick) {
-        handleTimerTick();
+        // Reset the tick anchor instead of forcing an immediate tick,
+        // which could cause a quick double-decrement with the interval tick.
+        lastTickTimestampRef.current = Date.now();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
