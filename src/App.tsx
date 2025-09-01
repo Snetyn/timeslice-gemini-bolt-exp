@@ -789,46 +789,7 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
         >
           📊 Overview
         </button>
-        <button
-          onClick={() => setDisplayMode('today-tasks')}
-          className={`px-3 py-1 text-xs rounded-full transition-all ${
-            displayMode === 'today-tasks' 
-              ? 'bg-green-500 text-white shadow-md' 
-              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-          }`}
-        >
-          📅 Today's Tasks
-        </button>
-        <button
-          onClick={() => setDisplayMode('daily-view')}
-          className={`px-3 py-1 text-xs rounded-full transition-all ${
-            displayMode === 'daily-view' 
-              ? 'bg-teal-500 text-white shadow-md' 
-              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-          }`}
-        >
-          🌅 Daily View
-        </button>
-        <button
-          onClick={() => setDisplayMode('progress')}
-          className={`px-3 py-1 text-xs rounded-full transition-all ${
-            displayMode === 'progress' 
-              ? 'bg-amber-500 text-white shadow-md' 
-              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-          }`}
-        >
-          ⏱️ Progress
-        </button>
-        <button
-          onClick={() => setDisplayMode('balance')}
-          className={`px-3 py-1 text-xs rounded-full transition-all ${
-            displayMode === 'balance' 
-              ? 'bg-purple-500 text-white shadow-md' 
-              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-          }`}
-        >
-          ⚖️ Balance
-        </button>
+  {/* Other tabs removed to keep only Overview */}
         </div>
         {/* Global toggles (right) */}
         <div className="flex items-center gap-2">
@@ -860,9 +821,8 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
       
     <div className="mb-2 text-center">
         <div className="text-xs text-slate-500">
-      Showing: {getDisplayLabel()} {displayMode === 'overview' ? `• ${getTimeRangeLabel(timeRange)}` : ''} • 
-          Dynamic Scale: {scalingFactor > 1 ? `${scalingFactor}x Enhanced` : 'Standard'} • 
-          {rings} Rings • Range: Lv.{minLevel}-{maxLevel}
+    Showing: {getDisplayLabel()} {displayMode === 'overview' ? `• ${getTimeRangeLabel(timeRange)}` : ''} • 
+      {rings} Rings • Range: Lv.{minLevel}-{maxLevel}
         </div>
       </div>
       
@@ -913,19 +873,8 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
           );
         })}
         
-        {/* Suggested stats area (shown in balance mode or as reference) */}
-        {(displayMode === 'balance' || displayMode === 'overview') && (
-          <path
-            d={`M ${suggestedPath.join(' L ')} Z`}
-            fill="rgba(139, 92, 246, 0.12)"
-            stroke="rgba(139, 92, 246, 0.35)"
-            strokeWidth="2"
-            strokeDasharray="8,4"
-            opacity="0.8"
-          />
-        )}
-        {/* Yesterday overlay (overview only) */}
-        {yesterdayPath && (
+        {/* Yesterday overlay (controlled by toggle) */}
+        {yesterdayPath && showYesterdayOverlay && (
           <path d={yesterdayPath} fill="none" stroke="#64748b" strokeWidth="2" strokeDasharray="5,4" opacity="0.9" />
         )}
         
@@ -1168,78 +1117,7 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
         </text>
       </svg>
       
-    {/* Enhanced legend with mode-specific info */}
-      <div className="mt-4 flex flex-wrap gap-4 justify-center text-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded" style={{ backgroundColor: getDisplayColor() }}></div>
-          <span>{getDisplayLabel()}</span>
-        </div>
-        
-        {(displayMode === 'balance' || displayMode === 'overview') && (
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 border-2 border-purple-400 border-dashed bg-purple-200 rounded"></div>
-            <span>Suggested Balance</span>
-          </div>
-        )}
-        {yesterdayPath && (
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded border-2 border-slate-400" style={{ backgroundColor: 'transparent' }}></div>
-            <span>Yesterday</span>
-          </div>
-        )}
-        
-        {displayMode === 'today-tasks' && (
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-green-500 rounded-full border-2 border-green-300"></div>
-            <span>Completed Today</span>
-          </div>
-        )}
-        
-        {displayMode === 'daily-view' && (
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-teal-500 rounded-full border-2 border-teal-300"></div>
-            <span>Daily Completion Rate</span>
-          </div>
-        )}
-        
-        {subCategoryBranches.length > 0 && (
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-gray-400 rounded-full border-2 border-gray-300 opacity-80"></div>
-            <span>Sub-categories</span>
-          </div>
-        )}
-        
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-slate-400 rounded-full"></div>
-          <span>{rings} Dynamic Rings</span>
-        </div>
-        
-        {scalingFactor > 1 && (
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-amber-400 rounded animate-pulse"></div>
-            <span>Enhanced Scale Active</span>
-          </div>
-        )}
-      </div>
-      
-      {/* Per-view context under the chart */}
-      <div className="mt-2 text-xs text-slate-600 max-w-xl text-center">
-        {displayMode === 'overview' && (
-          <p>Overview shows accumulated XP across your activities within the selected range. Use the time filters above to view Today, the last 3 or 7 days, this month, or all time.</p>
-        )}
-        {displayMode === 'today-tasks' && (
-          <p>Today’s Tasks highlights how much time is planned and completed for each area today.</p>
-        )}
-        {displayMode === 'daily-view' && (
-          <p>Daily View compares time spent versus planned time for today, shown as completion rates.</p>
-        )}
-        {displayMode === 'progress' && (
-          <p>Progress shows minutes earned today in each area based on your activity tracking.</p>
-        )}
-        {displayMode === 'balance' && (
-          <p>Balance displays a suggested target distribution to help you keep life areas in harmony.</p>
-        )}
-      </div>
+  {/* Legend removed per request */}
 
       {/* Add CSS animations */}
       <style>{`
@@ -3284,7 +3162,7 @@ const ActivityManagementPage = ({
       repeatDays?: number;
       isFlexible?: boolean;
       alternatesDays?: boolean;
-    };
+    }
   }) => {
     if (editingTemplate && editingTemplate.id) {
       // Update existing template
@@ -10158,10 +10036,7 @@ export default function App() {
             </div>
             {settings.showTimeAllocationPanel && (
             <>
-            {/* RPG Balance Chart */}
-            <div className="flex items-center gap-3">
-              <Button size="sm" variant="outline" onClick={() => setCurrentPage('spider')} className="h-8 text-xs">Open RPG Chart</Button>
-            </div>
+            {/* RPG Balance Chart button removed for simplified UI */}
             {(() => {
               const rpgBalance = getRPGBalance();
               const usedTagIds = new Set<string>([
