@@ -6813,6 +6813,11 @@ export default function App() {
         
         // If the session was active when the user left, handle the time gap
         if (sessionState.isTimerActive && !sessionState.isPaused && sessionState.lastActiveTimestamp) {
+          // Populate baseline allocated seconds if missing
+          try {
+            const baseline = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
+            if (baseline > 0) initialTotalAllocatedRef.current = baseline;
+          } catch {}
           const timeGapMs = Date.now() - sessionState.lastActiveTimestamp;
           const timeGapSeconds = Math.floor(timeGapMs / 1000);
           
@@ -6919,6 +6924,8 @@ export default function App() {
   const lastTickTimestampRef = useRef(0);
   const lastDrainedIndex = useRef(-1);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  // Stable baseline for overall progress (sum of allocated seconds at session start)
+  const initialTotalAllocatedRef = useRef<number>(0);
 
   const calculateTotalSessionMinutes = useCallback(() => {
     if (durationType === 'endTime') {
@@ -6981,7 +6988,7 @@ export default function App() {
 
       // Map back: set duration to allocatedSeconds/60 (can be fractional minutes), timeRemaining to allocatedSeconds
       const pctMap = new Map(pctItems.map(x => [x.idx, x.floorSec]));
-      const next = prev.map((activity, i) => {
+    const next = prev.map((activity, i) => {
         const allocatedSeconds = !activity.countUp ? (pctMap.get(i) ?? 0) : 0;
         const newDuration = allocatedSeconds / 60; // keep accurate, may be fractional minutes
         const newTimeRemaining = activity.countUp ? 0 : allocatedSeconds;
@@ -7016,17 +7023,12 @@ export default function App() {
     // Handle flowmodoro break countdown first
     if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
       const now = Date.now();
-      let diffMs = now - (lastTickTimestampRef.current || now);
-      // Apply same smoothing as main timer to prevent 2-second jumps
-      let elapsedSeconds = diffMs >= 1900 ? Math.floor(diffMs / 1000) : 1;
-      // In visible session context, clamp to 1s to avoid UI double-steps
-      const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-      if (currentMode === 'session' && isVisible) {
-        elapsedSeconds = 1;
-        lastTickTimestampRef.current = now; // reset anchor to drop drift
-      } else {
-        lastTickTimestampRef.current = (lastTickTimestampRef.current || now) + elapsedSeconds * 1000;
-      }
+      const last = lastTickTimestampRef.current || now;
+      const diffMs = now - last;
+      // Treat small drift as 1s, but process real backlog when large
+      let elapsedSeconds = diffMs < 1500 ? 1 : Math.floor(diffMs / 1000);
+      // Advance anchor by the processed whole seconds to keep remainder
+      lastTickTimestampRef.current = last + (elapsedSeconds * 1000);
 
       if (elapsedSeconds > 0) {
         setFlowmodoroState(prev => {
@@ -7049,19 +7051,13 @@ export default function App() {
     }
 
     // Calculate elapsed time with smoothing to avoid 2-second jumps from minor drift
-    const nowMs = Date.now();
-    let diffMs = nowMs - (lastTickTimestampRef.current || nowMs);
-    // If diff is under ~1.9s while tab is visible, treat as 1s to avoid double-stepping
-    let elapsedSeconds = diffMs >= 1900 ? Math.floor(diffMs / 1000) : 1;
-    // In visible session context, clamp to 1s to avoid UI double-steps
-    const isVisible = typeof document !== 'undefined' && document.visibilityState === 'visible';
-    if (currentMode === 'session' && isVisible) {
-      elapsedSeconds = 1;
-      lastTickTimestampRef.current = nowMs; // reset anchor to drop drift
-    } else {
-      // Advance by whole seconds to keep a steady cadence and bounded drift
-      lastTickTimestampRef.current = (lastTickTimestampRef.current || nowMs) + elapsedSeconds * 1000;
-    }
+  const nowMs = Date.now();
+  const last = lastTickTimestampRef.current || nowMs;
+  const diffMs = nowMs - last;
+  // Treat minor drift as 1s, but allow real catch-up for larger gaps (sleep/background)
+  const elapsedSeconds = diffMs < 1500 ? 1 : Math.floor(diffMs / 1000);
+  // Advance by whole seconds to keep a steady cadence and keep remainder
+  lastTickTimestampRef.current = last + (elapsedSeconds * 1000);
 
     if (elapsedSeconds <= 0) return;
 
@@ -7185,7 +7181,19 @@ export default function App() {
       const interval = setInterval(handleTimerTick, 1000);
       return () => clearInterval(interval);
     }
-  }, [isTimerActive, isPaused, handleTimerTick, currentMode, dailyActivities, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining]);
+  }, [
+    isTimerActive,
+    isPaused,
+    handleTimerTick,
+    currentMode,
+    dailyActivities,
+    flowmodoroState.isOnBreak,
+    flowmodoroState.breakTimeRemaining,
+    currentActivityIndex,
+    settings.overtimeType,
+    settings.flowmodoroEnabled,
+    settings.flowmodoroRatio,
+  ]);
 
   // Handle returning to the tab
   useEffect(() => {
@@ -7195,9 +7203,85 @@ export default function App() {
       const shouldHandleTick = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
       
       if (document.visibilityState === 'visible' && shouldHandleTick) {
-        // Reset the tick anchor instead of forcing an immediate tick,
-        // which could cause a quick double-decrement with the interval tick.
-        lastTickTimestampRef.current = Date.now();
+        // On resume, compute wall-clock delta since last tick and process catch-up seconds
+        const now = Date.now();
+        const last = lastTickTimestampRef.current || now;
+        const deltaSec = Math.floor((now - last) / 1000);
+        if (deltaSec > 0 && deltaSec < 86400) {
+          // Temporarily apply catch-up by advancing anchor and running the same logic deltaSec times in batch
+          lastTickTimestampRef.current = now;
+          // Process catch-up by simulating a single batched tick
+          setActivities(prev => {
+            let newActivities = [...prev];
+            let secondsToProcess = deltaSec;
+            while (secondsToProcess > 0) {
+              const current = newActivities[currentActivityIndex];
+              if (!current) break;
+              if (current.countUp) {
+                current.timeRemaining += secondsToProcess;
+                secondsToProcess = 0;
+              } else {
+                if (current.timeRemaining > 0) {
+                  const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
+                  current.timeRemaining -= timeToTake;
+                  secondsToProcess -= timeToTake;
+                }
+                if (current.timeRemaining <= 0) {
+                  if (settings.overtimeType === 'drain') {
+                    const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
+                      .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
+                    if (donors.length > 0) {
+                      const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
+                      const donorToDrain = donors[donorIndex];
+                      newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
+                    }
+                    current.timeRemaining -= 1;
+                    secondsToProcess -= 1;
+                  } else if (settings.overtimeType === 'postpone') {
+                    current.timeRemaining -= secondsToProcess;
+                    secondsToProcess = 0;
+                  } else {
+                    if (!current.isCompleted) {
+                      current.isCompleted = true;
+                      const nextIndex = newActivities.findIndex(act => !act.isCompleted);
+                      if (nextIndex !== -1) {
+                        setCurrentActivityIndex(nextIndex);
+                      } else {
+                        setIsTimerActive(false);
+                        try { localStorage.removeItem('timeSliceSessionState'); } catch {}
+                      }
+                    }
+                    secondsToProcess = 0;
+                  }
+                }
+              }
+            }
+            return newActivities;
+          });
+          // Also advance flowmodoro if applicable
+          if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+            setFlowmodoroState(prevFlow => {
+              const workSecondsPerRestSecond = settings.flowmodoroRatio;
+              const newAccum = (prevFlow.accumulatedFractionalTime || 0) + deltaSec;
+              const restSecondsToAdd = Math.floor(newAccum / workSecondsPerRestSecond);
+              const remainingFractional = newAccum % workSecondsPerRestSecond;
+              if (restSecondsToAdd > 0) {
+                const updatedAvailable = (prevFlow.availableRestTime || 0) + restSecondsToAdd;
+                return {
+                  ...prevFlow,
+                  availableRestTime: updatedAvailable,
+                  totalEarnedToday: (prevFlow.totalEarnedToday || 0) + restSecondsToAdd,
+                  availableRestMinutes: Math.floor(updatedAvailable / 60),
+                  accumulatedFractionalTime: remainingFractional,
+                };
+              }
+              return { ...prevFlow, accumulatedFractionalTime: newAccum };
+            });
+          }
+        } else {
+          // Nothing meaningful to catch up; just reset anchor
+          lastTickTimestampRef.current = now;
+        }
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -8257,6 +8341,14 @@ export default function App() {
       console.log('Starting session with activities:', activities);
       setIsTimerActive(true);
       setIsPaused(false);
+      // Capture baseline allocated seconds at session start for stable progress calculations
+      try {
+        const baseline = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
+        initialTotalAllocatedRef.current = baseline;
+        console.log('Session baseline (allocated seconds):', baseline);
+      } catch (e) {
+        initialTotalAllocatedRef.current = 0;
+      }
       const firstIncompleteIndex = activities.findIndex(a => !a.isCompleted);
       const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
       console.log('Setting current activity index to:', newIndex, 'activity:', activities[newIndex]);
@@ -8274,6 +8366,7 @@ export default function App() {
     setIsTimerActive(false);
     setIsPaused(false);
     setVaultTime(0);
+  initialTotalAllocatedRef.current = 0; // clear baseline on reset
     const totalMins = calculateTotalSessionMinutes();
     setActivities((prev) =>
       prev.map((activity) => ({
@@ -8447,17 +8540,16 @@ export default function App() {
   };
 
   const getOverallProgress = () => {
-    const totalElapsedSeconds = activities.reduce((sum, act) => {
-      const allocated = getAllocatedSeconds(act);
-      if (allocated > 0) {
-        const elapsed = allocated - Math.max(0, act.timeRemaining);
-        return sum + Math.max(0, elapsed);
-      }
-      return sum;
+    // Prefer stable baseline captured at session start
+    const liveAllocated = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
+    const totalAllocatedSeconds = initialTotalAllocatedRef.current > 0 ? initialTotalAllocatedRef.current : liveAllocated;
+  if (!Number.isFinite(totalAllocatedSeconds) || totalAllocatedSeconds <= 0) return 0;
+    // Compute elapsed as baseline minus remaining to avoid drift from changing allocations
+    const totalRemaining = activities.reduce((sum, act) => {
+      if (act.countUp) return sum; // count-up doesn't contribute to baseline
+      return sum + Math.max(0, act.timeRemaining || 0);
     }, 0);
-
-    const totalAllocatedSeconds = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
-    if (totalAllocatedSeconds <= 0) return 0;
+    const totalElapsedSeconds = Math.max(0, totalAllocatedSeconds - totalRemaining);
     const pct = (totalElapsedSeconds / totalAllocatedSeconds) * 100;
     return Math.max(0, Math.min(100, pct));
   };
