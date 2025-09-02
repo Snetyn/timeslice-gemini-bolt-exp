@@ -1754,7 +1754,45 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     return sum;
   }, 0);
 
+  // Helper: compute actual elapsed seconds per activity (includes overtime and count-up)
+  const perActivityElapsed = activities.map(act => {
+    let planned = 0;
+    if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
+    else if (act.duration && act.duration > 0) planned = act.duration * 60;
+
+    if (act.countUp) {
+      return Math.max(0, act.timeRemaining || 0);
+    }
+    const tr = act.timeRemaining;
+    if (typeof tr === 'number') {
+      // If tr >= 0, elapsed = planned - tr; if tr < 0, elapsed = planned + |tr| (overtime)
+      return Math.max(0, planned - tr);
+    }
+    // No timer yet → zero elapsed
+    return 0;
+  });
+  const totalElapsed = perActivityElapsed.reduce((s, v) => s + v, 0);
+  const hasAnyCountUp = activities.some(a => a.countUp);
+
+  // If no planned time exists but there is elapsed time (e.g., count-up), fall back to elapsed-based rendering
   if (totalTime === 0) {
+    if (totalElapsed > 0) {
+      return (
+        <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
+          {activities.map((activity, idx) => {
+            const widthPercentage = totalElapsed > 0 ? (perActivityElapsed[idx] / totalElapsed) * 100 : 0;
+            if (!widthPercentage || widthPercentage <= 0) return null;
+            return (
+              <div
+                key={activity.id}
+                style={{ width: `${widthPercentage}%`, backgroundColor: activity.color }}
+                className="h-full"
+              />
+            );
+          })}
+        </div>
+      );
+    }
     return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
   }
 
@@ -1765,7 +1803,32 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       if (act.duration && act.duration > 0) return act.duration * 60;
       return 0;
     });
-    const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0) || 1; // avoid div by 0
+    const totalPlannedRaw = plannedSeconds.reduce((s, v) => s + v, 0);
+    const useElapsedFallback = totalPlannedRaw <= 0 || (hasAnyCountUp && totalElapsed > 0);
+
+    // Fallback: if there's no meaningful planned time (or count-up active with elapsed), show elapsed-based distribution
+    if (useElapsedFallback) {
+      if (totalElapsed <= 0) {
+        return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
+      }
+      return (
+        <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
+          {activities.map((activity, idx) => {
+            const widthPercentage = (perActivityElapsed[idx] / totalElapsed) * 100;
+            if (!widthPercentage || widthPercentage <= 0) return null;
+            return (
+              <div
+                key={activity.id}
+                style={{ width: `${widthPercentage}%`, backgroundColor: activity.color }}
+                className="h-full"
+              />
+            );
+          })}
+        </div>
+      );
+    }
+
+    const totalPlanned = totalPlannedRaw || 1; // avoid div by 0
     const baseWidths = plannedSeconds.map(sec => (sec / totalPlanned) * 100);
 
     // Find the activity that is actually in overtime (most negative timeRemaining)
@@ -1952,7 +2015,48 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   };
 
   const renderOuterRing = () => {
-    if (totalTime === 0) return null;
+    // If no planned time, but elapsed exists (e.g., count-up), render elapsed-based ring instead of nothing
+    const perElapsedForFallback = activities.map(act => {
+      let planned = 0;
+      if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
+      else if (act.duration && act.duration > 0) planned = act.duration * 60;
+
+      if (act.countUp) {
+        return Math.max(0, act.timeRemaining || 0);
+      }
+      const tr = act.timeRemaining;
+      if (typeof tr === 'number') {
+        return tr >= 0 ? Math.max(0, planned - tr) : planned + Math.abs(tr);
+      }
+      return 0;
+    });
+    const totalElapsedForFallback = perElapsedForFallback.reduce((s, v) => s + v, 0);
+    if (totalTime === 0) {
+      if (totalElapsedForFallback <= 0) return null;
+      let cumulativeRotation = -90;
+      return activities.map((activity, idx) => {
+        const share = perElapsedForFallback[idx] / totalElapsedForFallback;
+        if (!share || share <= 0) return null;
+        const angle = share * 360;
+        const arcLength = (angle / 360) * circumference;
+        const rotation = cumulativeRotation;
+        cumulativeRotation += angle;
+        return (
+          <circle
+            key={`progress-fallback-${activity.id}`}
+            stroke={activity.color}
+            fill="transparent"
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${arcLength} ${circumference}`}
+            r={radius}
+            cx={center}
+            cy={center}
+            transform={`rotate(${rotation} ${center} ${center})`}
+            strokeLinecap="butt"
+          />
+        );
+      });
+    }
 
     if (style === 'dynamicColor') {
       // Compute elapsed seconds per activity (includes overtime and count-up)
@@ -2005,7 +2109,38 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
         if (a.duration && a.duration > 0) return a.duration * 60;
         return 0;
       });
-      const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0) || 1;
+      const totalPlannedRaw = plannedSeconds.reduce((s, v) => s + v, 0);
+
+      // If we lack planned time but do have elapsed (or count-ups are present), use the dynamic/elapsed distribution
+      const hasAnyCountUp = activities.some(a => a.countUp);
+      if (totalPlannedRaw <= 0 || (hasAnyCountUp && totalElapsedForFallback > 0)) {
+        if (totalElapsedForFallback <= 0) return null;
+        let cumulativeRotation = -90;
+        return activities.map((activity, idx) => {
+          const share = perElapsedForFallback[idx] / totalElapsedForFallback;
+          if (!share || share <= 0) return null;
+          const angle = share * 360;
+          const arcLength = (angle / 360) * circumference;
+          const rotation = cumulativeRotation;
+          cumulativeRotation += angle;
+          return (
+            <circle
+              key={`progress-elapsed-${activity.id}`}
+              stroke={activity.color}
+              fill="transparent"
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${arcLength} ${circumference}`}
+              r={radius}
+              cx={center}
+              cy={center}
+              transform={`rotate(${rotation} ${center} ${center})`}
+              strokeLinecap="butt"
+            />
+          );
+        });
+      }
+
+      const totalPlanned = totalPlannedRaw || 1;
       // Base angles by plan
       let angles = plannedSeconds.map(sec => (sec / totalPlanned) * 360);
 
