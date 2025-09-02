@@ -1802,7 +1802,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     // Build planned seconds per activity based on percentage or fixed duration
     // Planned seconds per activity (completed count-up keeps its preserved elapsed for width)
     const plannedSeconds = activities.map(act => {
-      if (act.isCompleted && act.countUp) {
+      if (act.isCompleted) {
         return Math.max(0, act.completedElapsedSeconds || 0);
       }
       if (act.percentage && act.percentage > 0) return (act.percentage / 100) * totalSessionSeconds;
@@ -2112,7 +2112,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     if (style === 'segmented') {
       // Planned seconds per activity
       const plannedSeconds = activities.map(a => {
-        if (a.isCompleted && a.countUp) {
+        if (a.isCompleted) {
           return Math.max(0, a.completedElapsedSeconds || 0);
         }
         if (a.percentage && a.percentage > 0) return (a.percentage / 100) * totalSessionSeconds;
@@ -6557,9 +6557,10 @@ export default function App() {
   // Siphon Time functionality (NEW)
   const siphonTime = (sourceActivityId, targetActivityId, amount, targetIsVault = false) => {
     if (targetIsVault) {
-      setActivities(prev => prev.map(act => {
+    setActivities(prev => prev.map(act => {
         if (act.id === sourceActivityId) {
-          return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
+      if (act.isCompleted) return act; // Do not modify completed preserved segments
+      return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
         }
         return act;
       }));
@@ -6567,19 +6568,22 @@ export default function App() {
     } else if (sourceActivityId === 'vault') {
       const actualAmount = Math.min(amount, vaultTime);
       setVaultTime(prev => prev - actualAmount);
-      setActivities(prev => prev.map(act => {
+    setActivities(prev => prev.map(act => {
         if (act.id === targetActivityId) {
-          return { ...act, timeRemaining: act.timeRemaining + actualAmount };
+      if (act.isCompleted) return act; // Do not modify completed preserved segments
+      return { ...act, timeRemaining: act.timeRemaining + actualAmount };
         }
         return act;
       }));
     } else {
-      setActivities(prev => prev.map(act => {
+    setActivities(prev => prev.map(act => {
         if (act.id === sourceActivityId) {
-          return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
+      if (act.isCompleted) return act; // Do not modify completed preserved segments
+      return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
         }
         if (act.id === targetActivityId) {
-          return { ...act, timeRemaining: act.timeRemaining + amount };
+      if (act.isCompleted) return act; // Do not modify completed preserved segments
+      return { ...act, timeRemaining: act.timeRemaining + amount };
         }
         return act;
       }));
@@ -7150,6 +7154,21 @@ export default function App() {
               secondsToProcess = 0;
             } else { // 'none'
               if (!current.isCompleted) {
+                // Preserve elapsed when auto-completing
+                const plannedSec = (!current.countUp) ? Math.max(0, Math.round((Number(current.duration || 0)) * 60)) : 0;
+                let elapsedSec = 0;
+                if (current.countUp) {
+                  elapsedSec = Math.max(0, current.timeRemaining || 0);
+                } else {
+                  const tr = typeof current.timeRemaining === 'number' ? current.timeRemaining : plannedSec;
+                  if (tr >= 0) {
+                    elapsedSec = Math.max(0, plannedSec - tr);
+                  } else {
+                    // include overtime on completion
+                    elapsedSec = plannedSec + Math.abs(tr);
+                  }
+                }
+                current.completedElapsedSeconds = Math.round(elapsedSec);
                 current.isCompleted = true;
 
                 const nextIndex = newActivities.findIndex(act => !act.isCompleted);
@@ -7265,6 +7284,19 @@ export default function App() {
                     secondsToProcess = 0;
                   } else {
                     if (!current.isCompleted) {
+                      const plannedSec = (!current.countUp) ? Math.max(0, Math.round((Number(current.duration || 0)) * 60)) : 0;
+                      let elapsedSec = 0;
+                      if (current.countUp) {
+                        elapsedSec = Math.max(0, current.timeRemaining || 0);
+                      } else {
+                        const tr2 = typeof current.timeRemaining === 'number' ? current.timeRemaining : plannedSec;
+                        if (tr2 >= 0) {
+                          elapsedSec = Math.max(0, plannedSec - tr2);
+                        } else {
+                          elapsedSec = plannedSec + Math.abs(tr2);
+                        }
+                      }
+                      current.completedElapsedSeconds = Math.round(elapsedSec);
                       current.isCompleted = true;
                       const nextIndex = newActivities.findIndex(act => !act.isCompleted);
                       if (nextIndex !== -1) {
@@ -8396,6 +8428,7 @@ export default function App() {
         ...activity,
         timeRemaining: activity.countUp ? 0 : Math.round((activity.percentage / 100) * totalMins) * 60,
         isCompleted: false,
+        completedElapsedSeconds: 0,
       })),
     );
     setCurrentActivityIndex(0);
@@ -8442,8 +8475,8 @@ export default function App() {
           elapsedSec = Math.max(0, act.timeRemaining || 0);
         } else {
           const tr = typeof act.timeRemaining === 'number' ? act.timeRemaining : plannedSec;
-          // elapsed = planned - remaining, clamp to [0, planned]
-          elapsedSec = Math.max(0, plannedSec - Math.max(0, tr));
+          // Include overtime if negative remaining
+          elapsedSec = tr >= 0 ? Math.max(0, plannedSec - tr) : (plannedSec + Math.abs(tr));
         }
 
         // Preserve this elapsed for rendering after completion
@@ -8451,6 +8484,7 @@ export default function App() {
 
         // Vault only meaningful positive remaining for countdown; for count-up, don't siphon elapsed time to vault
         if (!act.countUp) {
+          // Only vault positive remaining
           timeToVault = Math.max(0, act.timeRemaining || 0);
         }
 
