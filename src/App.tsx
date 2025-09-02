@@ -27,6 +27,8 @@ interface Activity {
   startedAt?: Date | null;
   subtasks?: Subtask[];
   countUp?: boolean;
+  // When an activity is completed, preserve its elapsed seconds so segmented/donut can keep its share
+  completedElapsedSeconds?: number;
   // New: schedule tracking for rollover logic
   scheduledDate?: string; // YYYY-MM-DD of the day this activity is scheduled for
   rolledOverFromYesterday?: boolean; // show dashed style if rolled over
@@ -1798,7 +1800,11 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
 
   if (style === 'segmented') {
     // Build planned seconds per activity based on percentage or fixed duration
+    // Planned seconds per activity (completed count-up keeps its preserved elapsed for width)
     const plannedSeconds = activities.map(act => {
+      if (act.isCompleted && act.countUp) {
+        return Math.max(0, act.completedElapsedSeconds || 0);
+      }
       if (act.percentage && act.percentage > 0) return (act.percentage / 100) * totalSessionSeconds;
       if (act.duration && act.duration > 0) return act.duration * 60;
       return 0;
@@ -1854,7 +1860,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       // Subtract this equally from all other non-zero segments without going negative
       let indices = redistributedWidths
         .map((_, i) => i)
-        .filter(i => i !== overtimeIndex && redistributedWidths[i] > 0);
+        .filter(i => i !== overtimeIndex && redistributedWidths[i] > 0 && !activities[i].isCompleted);
 
       let remainingToSubtract = extraPercent;
       let actuallySubtracted = 0;
@@ -1896,6 +1902,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
           const inOvertime = overtimeIndex !== -1;
           const isOvertimeSegment = idx === overtimeIndex;
           if (activity.isCompleted) {
+            // For completed count-up, show as fully filled within its preserved width; for countdown, also full
             fillWidth = 100;
           } else if (inOvertime && !isOvertimeSegment) {
             // During overtime, non-selected segments should remain empty (no colorful fill)
@@ -2105,6 +2112,9 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     if (style === 'segmented') {
       // Planned seconds per activity
       const plannedSeconds = activities.map(a => {
+        if (a.isCompleted && a.countUp) {
+          return Math.max(0, a.completedElapsedSeconds || 0);
+        }
         if (a.percentage && a.percentage > 0) return (a.percentage / 100) * totalSessionSeconds;
         if (a.duration && a.duration > 0) return a.duration * 60;
         return 0;
@@ -2161,7 +2171,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
         const overtimeSec = Math.abs(activities[overtimeIndex].timeRemaining || 0);
         let extraAngle = (overtimeSec / totalPlanned) * 360;
         // Subtract evenly from others without going below 0
-        let idxs = angles.map((_, i) => i).filter(i => i !== overtimeIndex && angles[i] > 0);
+  let idxs = angles.map((_, i) => i).filter(i => i !== overtimeIndex && angles[i] > 0 && !activities[i].isCompleted);
         let remaining = extraAngle;
         let taken = 0;
         while (remaining > 1e-6 && idxs.length > 0) {
@@ -2201,7 +2211,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   let fillAngle = 0;
         const inOvertime = overtimeIndex !== -1;
         const isSelected = idx === currentActivityIndex;
-        if (planned > 0) {
+  if (planned > 0) {
           const tr = activity.timeRemaining;
           let elapsed = 0;
           if (typeof tr === 'number') {
@@ -8423,14 +8433,43 @@ export default function App() {
     let completedActivity: Activity | null = null;
     const updatedActivities = activities.map(act => {
       if (act.id === activityId && !act.isCompleted) {
-        timeToVault = act.timeRemaining || 0;
-        completedActivity = { ...act, timeRemaining: 0, isCompleted: true };
+        // Compute actual elapsed seconds for this activity
+        const plannedSec = (!act.countUp)
+          ? Math.max(0, Math.round((Number(act.duration || 0)) * 60))
+          : 0;
+        let elapsedSec = 0;
+        if (act.countUp) {
+          elapsedSec = Math.max(0, act.timeRemaining || 0);
+        } else {
+          const tr = typeof act.timeRemaining === 'number' ? act.timeRemaining : plannedSec;
+          // elapsed = planned - remaining, clamp to [0, planned]
+          elapsedSec = Math.max(0, plannedSec - Math.max(0, tr));
+        }
+
+        // Preserve this elapsed for rendering after completion
+        const preserved = Math.round(elapsedSec);
+
+        // Vault only meaningful positive remaining for countdown; for count-up, don't siphon elapsed time to vault
+        if (!act.countUp) {
+          timeToVault = Math.max(0, act.timeRemaining || 0);
+        }
+
+        // For completed activities:
+        // - freeze timeRemaining to 0 for countdown (already consumed)
+        // - for count-up, keep timeRemaining as elapsed so dynamic modes still show contribution
+        // - mark isCompleted
+        completedActivity = {
+          ...act,
+          timeRemaining: act.countUp ? preserved : 0,
+          isCompleted: true,
+          completedElapsedSeconds: preserved,
+        };
         return completedActivity;
       }
       return act;
     });
 
-    if (timeToVault > 0) {
+  if (timeToVault > 0) {
       setVaultTime(prev => prev + timeToVault);
     }
 
@@ -8450,7 +8489,7 @@ export default function App() {
       return;
     }
 
-    if (updatedActivities[currentActivityIndex].isCompleted) {
+  if (updatedActivities[currentActivityIndex].isCompleted) {
       const nextIndex = updatedActivities.findIndex((act) => !act.isCompleted);
       if (nextIndex !== -1) {
         setCurrentActivityIndex(nextIndex);
