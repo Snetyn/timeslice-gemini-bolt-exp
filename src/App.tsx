@@ -6556,34 +6556,47 @@ export default function App() {
 
   // Siphon Time functionality (NEW)
   const siphonTime = (sourceActivityId, targetActivityId, amount, targetIsVault = false) => {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    // Protect against modifying completed or count-up activities
+    const src = activities.find(a => a.id === sourceActivityId);
+    const tgt = activities.find(a => a.id === targetActivityId);
+
+    if (!targetIsVault && targetActivityId !== 'vault') {
+      if (tgt && (tgt.isCompleted || tgt.countUp)) return; // don't add to completed or count-up
+    }
+    if (sourceActivityId !== 'vault') {
+      if (src && (src.isCompleted || src.countUp)) return; // don't siphon from completed or count-up
+    }
+
     if (targetIsVault) {
-    setActivities(prev => prev.map(act => {
+      setActivities(prev => prev.map(act => {
         if (act.id === sourceActivityId) {
-      if (act.isCompleted) return act; // Do not modify completed preserved segments
-      return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
+          if (act.isCompleted || act.countUp) return act; // Do not modify preserved or count-up
+          return { ...act, timeRemaining: Math.max(0, (act.timeRemaining || 0) - amount) };
         }
         return act;
       }));
       setVaultTime(prev => prev + amount);
     } else if (sourceActivityId === 'vault') {
       const actualAmount = Math.min(amount, vaultTime);
+      if (actualAmount <= 0) return;
       setVaultTime(prev => prev - actualAmount);
-    setActivities(prev => prev.map(act => {
+      setActivities(prev => prev.map(act => {
         if (act.id === targetActivityId) {
-      if (act.isCompleted) return act; // Do not modify completed preserved segments
-      return { ...act, timeRemaining: act.timeRemaining + actualAmount };
+          if (act.isCompleted || act.countUp) return act; // Do not add to preserved or count-up
+          return { ...act, timeRemaining: (act.timeRemaining || 0) + actualAmount };
         }
         return act;
       }));
     } else {
-    setActivities(prev => prev.map(act => {
+      setActivities(prev => prev.map(act => {
         if (act.id === sourceActivityId) {
-      if (act.isCompleted) return act; // Do not modify completed preserved segments
-      return { ...act, timeRemaining: Math.max(0, act.timeRemaining - amount) };
+          if (act.isCompleted || act.countUp) return act;
+          return { ...act, timeRemaining: Math.max(0, (act.timeRemaining || 0) - amount) };
         }
         if (act.id === targetActivityId) {
-      if (act.isCompleted) return act; // Do not modify completed preserved segments
-      return { ...act, timeRemaining: act.timeRemaining + amount };
+          if (act.isCompleted || act.countUp) return act;
+          return { ...act, timeRemaining: (act.timeRemaining || 0) + amount };
         }
         return act;
       }));
@@ -8619,10 +8632,15 @@ export default function App() {
   }, [activities]);
 
   const getTotalRemainingTime = () => {
+    // Predicted end time should be based on remaining planned work only.
+    // - Ignore completed activities
+    // - Ignore count-up activities (they represent elapsed, not remaining)
+    // - Do NOT include vault time (banked time isn't a commitment)
     return activities.reduce((sum, activity) => {
       if (activity.isCompleted) return sum;
-      return sum + Math.max(0, activity.timeRemaining);
-    }, 0) + vaultTime;
+      if (activity.countUp) return sum;
+      return sum + Math.max(0, activity.timeRemaining || 0);
+    }, 0);
   };
 
   const getOverallProgress = () => {
@@ -8869,6 +8887,16 @@ export default function App() {
                 const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
                 const anyOvertime = activities.some(a => (a.timeRemaining ?? 0) < 0);
                 const isNonCurrentWhileOvertime = anyOvertime && index !== currentActivityIndex;
+                // Compute numeric time spent for completed items to show in the switcher
+                const spentForCompleted = (() => {
+                  if (!activity.isCompleted) return 0;
+                  if (Number.isFinite(activity.completedElapsedSeconds)) return Math.max(0, activity.completedElapsedSeconds || 0);
+                  if (activity.countUp) return Math.max(0, activity.timeRemaining || 0);
+                  const plannedSec = Math.max(0, Math.round((Number(activity.duration || 0)) * 60));
+                  const tr = typeof activity.timeRemaining === 'number' ? (activity.timeRemaining as number) : 0;
+                  const elapsed = tr >= 0 ? Math.max(0, plannedSec - tr) : (plannedSec + Math.abs(tr));
+                  return Math.max(0, Math.round(elapsed));
+                })();
                 return (
                   <div
                     key={activity.id}
@@ -8895,7 +8923,11 @@ export default function App() {
                     </div>
                     <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
                       {settings.showActivityTime && (
-                        <span className="text-xs font-mono z-10">{formatTime(activity.timeRemaining)}</span>
+                        <span className="text-xs font-mono z-10">
+                          {activity.isCompleted
+                            ? formatTime(spentForCompleted)
+                            : formatTime(activity.timeRemaining)}
+                        </span>
                       )}
                       <Button 
                         size="sm" 
@@ -8910,7 +8942,7 @@ export default function App() {
                             targetIsVault: true
                           });
                         }}
-                        disabled={activity.timeRemaining <= 0}
+                        disabled={activity.countUp || activity.timeRemaining <= 0}
                         title="Transfer time to vault"
                         className="bg-blue-100 hover:bg-blue-200 z-20 relative h-6 w-6 p-0"
                       >
