@@ -1805,6 +1805,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       if (act.isCompleted) {
         return Math.max(0, act.completedElapsedSeconds || 0);
       }
+      // If this activity was added mid-session with 0%, it shouldn't occupy planned width yet.
       if (act.percentage && act.percentage > 0) return (act.percentage / 100) * totalSessionSeconds;
       if (act.duration && act.duration > 0) return act.duration * 60;
       return 0;
@@ -6962,6 +6963,8 @@ export default function App() {
   // --- End of State Saving Logic ---
 
   const lastTickTimestampRef = useRef(0);
+  // Carry millisecond remainder between ticks to prevent ETA drift
+  const tickRemainderMsRef = useRef(0);
   const lastDrainedIndex = useRef(-1);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // Stable baseline for overall progress (sum of allocated seconds at session start)
@@ -7064,11 +7067,13 @@ export default function App() {
     if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
       const now = Date.now();
       const last = lastTickTimestampRef.current || now;
-      const diffMs = now - last;
-      // Treat small drift as 1s, but process real backlog when large
-      let elapsedSeconds = diffMs < 1500 ? 1 : Math.floor(diffMs / 1000);
-      // Advance anchor by the processed whole seconds to keep remainder
-      lastTickTimestampRef.current = last + (elapsedSeconds * 1000);
+      let diffMs = now - last;
+      // Add remainder from previous cycles to avoid losing sub-second time
+      diffMs += tickRemainderMsRef.current || 0;
+      const elapsedSeconds = Math.floor(diffMs / 1000);
+      tickRemainderMsRef.current = diffMs - (elapsedSeconds * 1000);
+      // Advance anchor by the processed chunk
+      lastTickTimestampRef.current = now;
 
       if (elapsedSeconds > 0) {
         setFlowmodoroState(prev => {
@@ -7093,11 +7098,13 @@ export default function App() {
     // Calculate elapsed time with smoothing to avoid 2-second jumps from minor drift
   const nowMs = Date.now();
   const last = lastTickTimestampRef.current || nowMs;
-  const diffMs = nowMs - last;
-  // Treat minor drift as 1s, but allow real catch-up for larger gaps (sleep/background)
-  const elapsedSeconds = diffMs < 1500 ? 1 : Math.floor(diffMs / 1000);
-  // Advance by whole seconds to keep a steady cadence and keep remainder
-  lastTickTimestampRef.current = last + (elapsedSeconds * 1000);
+  let diffMs = nowMs - last;
+  // Accumulate remainder to prevent cumulative slip in ETA
+  diffMs += tickRemainderMsRef.current || 0;
+  const elapsedSeconds = Math.floor(diffMs / 1000);
+  tickRemainderMsRef.current = diffMs - (elapsedSeconds * 1000);
+  // Anchor to wall clock to avoid anchoring drift
+  lastTickTimestampRef.current = nowMs;
 
     if (elapsedSeconds <= 0) return;
 
@@ -7261,10 +7268,12 @@ export default function App() {
         // On resume, compute wall-clock delta since last tick and process catch-up seconds
         const now = Date.now();
         const last = lastTickTimestampRef.current || now;
-        const deltaSec = Math.floor((now - last) / 1000);
+        let deltaMs = (now - last) + (tickRemainderMsRef.current || 0);
+        const deltaSec = Math.floor(deltaMs / 1000);
         if (deltaSec > 0 && deltaSec < 86400) {
           // Temporarily apply catch-up by advancing anchor and running the same logic deltaSec times in batch
           lastTickTimestampRef.current = now;
+          tickRemainderMsRef.current = deltaMs - (deltaSec * 1000);
           // Process catch-up by simulating a single batched tick
           setActivities(prev => {
             let newActivities = [...prev];
@@ -8904,15 +8913,15 @@ export default function App() {
                       } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}`}
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
-                    {settings.showActivityProgress && (
+        {settings.showActivityProgress && (
                       <div
                         className="absolute top-0 left-0 h-full"
                         style={{
-                          width: `${activity.isCompleted ? 100 : (isNonCurrentWhileOvertime ? 100 : displayProgress)}%`,
+          // Always show actual drain level here to reflect real progress per activity
+          width: `${activity.isCompleted ? 100 : displayProgress}%`,
                           backgroundColor: activity.color,
-                          opacity: index === currentActivityIndex ? 0.25 : 0.18,
-                          // When any overtime exists and this row is not selected, freeze width to avoid jumps
-                          transition: isNonCurrentWhileOvertime ? 'opacity 0.25s linear' : 'width 0.5s linear, opacity 0.25s linear'
+          opacity: index === currentActivityIndex ? 0.25 : 0.18,
+          transition: 'width 0.5s linear, opacity 0.25s linear'
                         }}
                       />
                     )}
