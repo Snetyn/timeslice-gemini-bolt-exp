@@ -6253,58 +6253,67 @@ export default function App() {
   // Helper function to sync progress between shared activities
   const syncSharedProgress = useCallback((updatedActivity: Activity, isSessionActivity: boolean) => {
     if (!updatedActivity.sharedId) return;
-    
+    const sharedId = updatedActivity.sharedId;
+
     if (isSessionActivity) {
-      // Update corresponding daily activity by accumulating ALL session activities with same sharedId
+      // Compute current total elapsed seconds across all session activities with this sharedId
+      const totalSessionElapsedSec = activities
+        .filter(sa => sa.sharedId === sharedId)
+        .reduce((sum, sa) => {
+          // If completed with preserved elapsed, prefer that for accuracy
+          if (sa.isCompleted && Number.isFinite(sa.completedElapsedSeconds)) {
+            return sum + Math.max(0, sa.completedElapsedSeconds || 0);
+          }
+          if (sa.countUp) {
+            return sum + Math.max(0, sa.timeRemaining || 0);
+          }
+          let planned = 0;
+          if (sa.percentage && sa.percentage > 0) planned = (sa.percentage / 100) * (calculateTotalSessionMinutes() * 60);
+          else if (sa.duration && sa.duration > 0) planned = sa.duration * 60;
+          const tr = sa.timeRemaining;
+          if (typeof tr === 'number') {
+            const elapsed = tr >= 0 ? Math.max(0, planned - tr) : planned + Math.abs(tr);
+            return sum + elapsed;
+          }
+          return sum;
+        }, 0);
+
+      const prevSnapshot = sharedElapsedSnapshotRef.current[sharedId] || 0;
+      const deltaSec = Math.max(0, Math.floor(totalSessionElapsedSec - prevSnapshot));
+      // Update snapshot immediately to avoid double-adding
+      sharedElapsedSnapshotRef.current[sharedId] = Math.max(prevSnapshot, totalSessionElapsedSec);
+
+      if (deltaSec <= 0) return;
+
+      const deltaMin = deltaSec / 60; // allow fractional minutes
       setDailyActivities(prev => prev.map(dailyActivity => {
-        if (dailyActivity.sharedId === updatedActivity.sharedId) {
-          // Find ALL session activities that share this ID
-          const relatedSessionActivities = activities.filter(
-            sessionActivity => sessionActivity.sharedId === updatedActivity.sharedId
-          );
-          
-          // Calculate total time spent across all related session activities
-          const totalSessionTimeSpent = relatedSessionActivities.reduce((total, sessionActivity) => {
-            const sessionTimeSpentMinutes = sessionActivity.duration > 0 ? 
-              (sessionActivity.duration * 60 - (sessionActivity.timeRemaining || 0)) / 60 : 0;
-            
-            // For completed activities, use the full session duration as time spent
-            const actualTimeSpent = sessionActivity.isCompleted ? 
-              sessionActivity.duration : sessionTimeSpentMinutes;
-              
-            return total + actualTimeSpent;
-          }, 0);
-          
-          // Only mark daily activity as completed if it has actually reached its full duration
-          const isFullyCompleted = totalSessionTimeSpent >= dailyActivity.duration;
-          
-          return {
-            ...dailyActivity,
-            timeSpent: Math.round(totalSessionTimeSpent),
-            status: isFullyCompleted ? 'completed' : 
-                   totalSessionTimeSpent > 0 ? 'active' : dailyActivity.status
-          };
-        }
-        return dailyActivity;
+        if (dailyActivity.sharedId !== sharedId) return dailyActivity;
+        const targetDuration = Math.max(0, dailyActivity.duration || 0);
+        const currentSpent = Number.isFinite(dailyActivity.timeSpent) ? (dailyActivity.timeSpent || 0) : 0;
+        const newSpent = Math.min(targetDuration, currentSpent + deltaMin);
+        return {
+          ...dailyActivity,
+          timeSpent: newSpent,
+          status: newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled')),
+        };
       }));
     } else {
-      // Update corresponding session activity
+      // Daily -> Session: only apply monotonic progress (never increase timeRemaining or clear session data)
       setActivities(prev => prev.map(sessionActivity => {
-        if (sessionActivity.sharedId === updatedActivity.sharedId) {
-          const dailyProgress = updatedActivity.duration > 0 ? 
-            ((updatedActivity.timeSpent || 0) / updatedActivity.duration) * 100 : 0;
-          
-          return {
-            ...sessionActivity,
-            isCompleted: updatedActivity.status === 'completed',
-            timeRemaining: updatedActivity.status === 'completed' ? 0 : 
-              Math.max(0, (sessionActivity.duration || 0) * 60 - Math.round((dailyProgress / 100) * (sessionActivity.duration || 0) * 60))
-          };
-        }
-        return sessionActivity;
+        if (sessionActivity.sharedId !== sharedId) return sessionActivity;
+        const durationMin = Math.max(0, sessionActivity.duration || 0);
+        const desiredProgressPct = durationMin > 0 ? ((updatedActivity.timeSpent || 0) / durationMin) * 100 : 0;
+        const desiredRemainingSec = Math.max(0, Math.round((1 - Math.min(1, desiredProgressPct / 100)) * durationMin * 60));
+        const currentRemainingSec = Math.max(0, Math.round(sessionActivity.timeRemaining || 0));
+        const nextRemaining = Math.min(currentRemainingSec, desiredRemainingSec); // only move forward (reduce remaining)
+        return {
+          ...sessionActivity,
+          isCompleted: updatedActivity.status === 'completed' || nextRemaining === 0 ? true : sessionActivity.isCompleted,
+          timeRemaining: nextRemaining,
+        };
       }));
     }
-  }, [activities]);
+  }, [activities, calculateTotalSessionMinutes]);
 
   // Helper function to check if a template should be active based on recurring schedule
   const isTemplateActiveToday = useCallback((template: ActivityTemplate, currentDate: Date) => {
@@ -6965,6 +6974,8 @@ export default function App() {
   const lastTickTimestampRef = useRef(0);
   // Carry millisecond remainder between ticks to prevent ETA drift
   const tickRemainderMsRef = useRef(0);
+  // Track total elapsed seconds per sharedId to sync only additive deltas to daily
+  const sharedElapsedSnapshotRef = useRef<Record<string, number>>({});
   const lastDrainedIndex = useRef(-1);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // Stable baseline for overall progress (sum of allocated seconds at session start)
