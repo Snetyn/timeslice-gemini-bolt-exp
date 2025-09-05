@@ -6267,8 +6267,21 @@ export default function App() {
           if (sa.countUp) {
             return sum + Math.max(0, sa.timeRemaining || 0);
           }
+          // Compute planned seconds for this session based on current duration settings
+          const sessionMinutes = (() => {
+            if (durationType === 'endTime') {
+              const now = new Date();
+              const [endHour, endMinute] = endTime.split(':').map(Number);
+              const endDate = new Date();
+              endDate.setHours(endHour, endMinute, 0, 0);
+              if (endDate < now) endDate.setDate(endDate.getDate() + 1);
+              return Math.max(0, Math.round((endDate.getTime() - now.getTime()) / 60000));
+            }
+            return totalHours * 60 + totalMinutes;
+          })();
+          const totalSessionSeconds = sessionMinutes * 60;
           let planned = 0;
-          if (sa.percentage && sa.percentage > 0) planned = (sa.percentage / 100) * (calculateTotalSessionMinutes() * 60);
+          if (sa.percentage && sa.percentage > 0) planned = (sa.percentage / 100) * totalSessionSeconds;
           else if (sa.duration && sa.duration > 0) planned = sa.duration * 60;
           const tr = sa.timeRemaining;
           if (typeof tr === 'number') {
@@ -6313,7 +6326,7 @@ export default function App() {
         };
       }));
     }
-  }, [activities, calculateTotalSessionMinutes]);
+  }, [activities, durationType, endTime, totalHours, totalMinutes]);
 
   // Helper function to check if a template should be active based on recurring schedule
   const isTemplateActiveToday = useCallback((template: ActivityTemplate, currentDate: Date) => {
