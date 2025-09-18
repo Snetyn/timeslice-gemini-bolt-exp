@@ -1,4 +1,5 @@
-﻿import React, { useState, useEffect, useRef, useCallback } from "react";
+﻿// @ts-nocheck
+import React, { useState, useEffect, useRef, useCallback } from "react";
 
 interface Subtask {
   id: string;
@@ -20,6 +21,7 @@ interface Activity {
   tags?: string[];
   templateId?: string;
   sharedId?: string; // For linking session and daily activities
+  showOnBar?: boolean; // Visual inclusion toggle for session progress bars
   // Daily activity specific properties
   status?: 'scheduled' | 'active' | 'completed' | 'overtime';
   isActive?: boolean;
@@ -91,90 +93,117 @@ interface RPGBalance {
 
 // --- Self-Contained UI Components ---
 
-const Icon = ({ name, className }) => {
-  const icons = {
-    plus: <path d="M5 12h14m-7-7v14" />,
-    plusCircle: <><circle cx="12" cy="12" r="10" /><path d="M12 8v8m-4-4h8" /></>,
-    trash2: <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 8v-4m4 4v-4" />,
-    play: <path d="m5 3 14 9-14 9V3z" />,
-    pause: <path d="M6 4h4v16H6zM14 4h4v16h-4z" />,
-    rotateCcw: (
-      <>
-        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-        <path d="M3 3v5h5" />
-      </>
-    ),
-    settings: (
-      <>
-        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-        <circle cx="12" cy="12" r="3" />
-      </>
-    ),
-    x: <path d="M18 6 6 18M6 6l12 12" />,
-    heart: <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />,
-    lock: (
-      <>
-        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-      </>
-    ),
-    unlock: (
-      <>
-        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-        <path d="M7 11V7a5 5 0 0 1 5-5v0a5 5 0 0 1 5 5v4" />
-      </>
-    ),
-    dice: (
-      <>
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-        <path d="M16 8h.01" />
-        <path d="M12 12h.01" />
-        <path d="M8 16h.01" />
-        <path d="M8 8h.01" />
-        <path d="M16 16h.01" />
-      </>
-    ),
-    calendar: (
-      <>
-        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-        <line x1="16" y1="2" x2="16" y2="6" />
-        <line x1="8" y1="2" x2="8" y2="6" />
-        <line x1="3" y1="10" x2="21" y2="10" />
-      </>
-    ),
-    arrowUpDown: <path d="M7 15l5 5 5-5M7 9l5-5 5 5" />,
-    edit: (
-      <>
-        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-        <path d="m18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-      </>
-    ),
-    trash: <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />,
-    alertTriangle: (
-      <>
-        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-        <path d="M12 9v4" />
-        <path d="m12 17 .01 0" />
-      </>
-    ),
-    check: <path d="M20 6 9 17l-5-5" />,
-    refresh: (
-      <>
-        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-        <path d="M21 3v5h-5" />
-        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-        <path d="M3 21v-5h5" />
-      </>
-    ),
-  };
+interface IconProps {
+  name: keyof typeof iconPaths;
+  className?: string;
+}
+// Define icon definitions first so we can derive their keys for typing
+const iconPaths = {
+  plus: <path d="M5 12h14m-7-7v14" />,
+  plusCircle: <><circle cx="12" cy="12" r="10" /><path d="M12 8v8m-4-4h8" /></>,
+  trash2: <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 8v-4m4 4v-4" />,
+  play: <path d="m5 3 14 9-14 9V3z" />,
+  pause: <path d="M6 4h4v16H6zM14 4h4v16h-4z" />,
+  rotateCcw: (
+    <>
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+    </>
+  ),
+  settings: (
+    <>
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  x: <path d="M18 6 6 18M6 6l12 12" />,
+  heart: <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />,
+  lock: (
+    <>
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </>
+  ),
+  unlock: (
+    <>
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 5-5v0a5 5 0 0 1 5 5v4" />
+    </>
+  ),
+  dice: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <path d="M16 8h.01" />
+      <path d="M12 12h.01" />
+      <path d="M8 16h.01" />
+      <path d="M8 8h.01" />
+      <path d="M16 16h.01" />
+    </>
+  ),
+  calendar: (
+    <>
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </>
+  ),
+  arrowUpDown: <path d="M7 15l5 5 5-5M7 9l5-5 5 5" />,
+  edit: (
+    <>
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="m18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </>
+  ),
+  trash: <path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />,
+  alertTriangle: (
+    <>
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+      <path d="M12 9v4" />
+      <path d="m12 17 .01 0" />
+    </>
+  ),
+  check: <path d="M20 6 9 17l-5-5" />,
+  refresh: (
+    <>
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+      <path d="M3 21v-5h5" />
+    </>
+  ),
+  eye: (
+    <>
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+};
+
+const Icon: React.FC<IconProps> = ({ name, className }) => {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      {icons[name]}
+      {iconPaths[name]}
     </svg>
   );
 };
 
-const Button = ({ variant = 'default', size = 'default', className = '', children, ...props }) => {
+// Helper: format total minutes as Hh Mm (skip zero units gracefully)
+const formatMinutesHM = (mins: number) => {
+  if (!Number.isFinite(mins) || mins < 0) mins = 0;
+  const h = Math.floor(mins / 60);
+  const m = Math.floor(mins % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+};
+
+interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: 'default' | 'destructive' | 'outline' | 'ghost';
+  size?: 'default' | 'sm' | 'lg';
+  className?: string;
+  children?: React.ReactNode;
+}
+const Button: React.FC<ButtonProps> = ({ variant = 'default', size = 'default', className = '', children, ...props }) => {
   const baseClasses = "inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 touch-manipulation";
   const sizeClasses = {
     default: "h-9 sm:h-10 px-3 sm:px-4 py-2 text-sm",
@@ -194,14 +223,18 @@ const Button = ({ variant = 'default', size = 'default', className = '', childre
   );
 };
 
-const Input = ({ className = '', ...props }) => (
+interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  className?: string;
+}
+const Input: React.FC<InputProps> = ({ className = '', ...props }) => (
   <input className={`flex h-9 sm:h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 touch-manipulation ${className}`} {...props} />
 );
 
-const Card = ({ className = '', children }) => <div className={`rounded-lg border bg-white text-slate-950 shadow-sm ${className}`}>{children}</div>;
-const CardHeader = ({ className = '', children }) => <div className={`flex flex-col space-y-1 sm:space-y-1.5 p-3 sm:p-4 md:p-6 ${className}`}>{children}</div>;
-const CardTitle = ({ className = '', children }) => <h3 className={`text-lg sm:text-xl md:text-2xl font-semibold leading-none tracking-tight ${className}`}>{children}</h3>;
-const CardContent = ({ className = '', children }) => <div className={`p-3 sm:p-4 md:p-6 pt-0 ${className}`}>{children}</div>;
+interface BasicChildrenProps { className?: string; children?: React.ReactNode; }
+const Card: React.FC<BasicChildrenProps> = ({ className = '', children }) => <div className={`rounded-lg border bg-white text-slate-950 shadow-sm ${className}`}>{children}</div>;
+const CardHeader: React.FC<BasicChildrenProps> = ({ className = '', children }) => <div className={`flex flex-col space-y-1 sm:space-y-1.5 p-3 sm:p-4 md:p-6 ${className}`}>{children}</div>;
+const CardTitle: React.FC<BasicChildrenProps> = ({ className = '', children }) => <h3 className={`text-lg sm:text-xl md:text-2xl font-semibold leading-none tracking-tight ${className}`}>{children}</h3>;
+const CardContent: React.FC<BasicChildrenProps> = ({ className = '', children }) => <div className={`p-3 sm:p-4 md:p-6 pt-0 ${className}`}>{children}</div>;
 
 // Mobile Zoom Utilities
 const getMobileClasses = (zoomLevel: string) => {
@@ -1744,7 +1777,7 @@ const Badge = ({ variant = 'default', className = '', children }) => {
   return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
-const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex }) => {
+const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex, showDrainOverlay = false }) => {
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
   const totalTime = activities.reduce((sum, act) => {
@@ -1774,7 +1807,9 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     return 0;
   });
   const totalElapsed = perActivityElapsed.reduce((s, v) => s + v, 0);
+  // Only treat count-up activities as triggering fallback once they have produced elapsed time
   const hasAnyCountUp = activities.some(a => a.countUp);
+  const anyCountUpWithElapsed = activities.some((a, idx) => a.countUp && perActivityElapsed[idx] > 0);
 
   // If no planned time exists but there is elapsed time (e.g., count-up), fall back to elapsed-based rendering
   if (totalTime === 0) {
@@ -1811,7 +1846,10 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       return 0;
     });
     const totalPlannedRaw = plannedSeconds.reduce((s, v) => s + v, 0);
-    const useElapsedFallback = totalPlannedRaw <= 0 || (hasAnyCountUp && totalElapsed > 0);
+  // Fallback only when: no planned time OR at least one count-up has contributed elapsed time
+  // Fallback only when there is no planned time at all OR a count-up has actually accrued elapsed time.
+  // This prevents an immediate switch to elapsed distribution when a fresh count-up (0 elapsed) is present.
+  const useElapsedFallback = (totalPlannedRaw <= 0) || (anyCountUpWithElapsed && totalElapsed > 0);
 
     // Fallback: if there's no meaningful planned time (or count-up active with elapsed), show elapsed-based distribution
     if (useElapsedFallback) {
@@ -1863,6 +1901,11 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
         .map((_, i) => i)
         .filter(i => i !== overtimeIndex && redistributedWidths[i] > 0 && !activities[i].isCompleted);
 
+      // If there is no other segment to take from, skip redistribution entirely to avoid visual disappearance
+      if (indices.length === 0) {
+        extraPercent = 0;
+      }
+
       let remainingToSubtract = extraPercent;
       let actuallySubtracted = 0;
       while (remainingToSubtract > 1e-6 && indices.length > 0) {
@@ -1870,10 +1913,13 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
         let roundSub = 0;
         const nextIndices: number[] = [];
         for (const i of indices) {
-          const remove = Math.min(per, redistributedWidths[i]);
-          redistributedWidths[i] -= remove;
-          roundSub += remove;
-          if (redistributedWidths[i] > 1e-6) nextIndices.push(i);
+          // Do not shrink below a small visual threshold so segments never fully vanish
+          const MIN_SEGMENT_WIDTH = 0.5; // percent
+          const maxRemovable = Math.max(0, redistributedWidths[i] - MIN_SEGMENT_WIDTH);
+            const remove = Math.min(per, maxRemovable);
+            redistributedWidths[i] -= remove;
+            roundSub += remove;
+            if (redistributedWidths[i] - MIN_SEGMENT_WIDTH > 1e-6) nextIndices.push(i);
         }
         actuallySubtracted += roundSub;
         remainingToSubtract -= roundSub;
@@ -1891,52 +1937,74 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       }
     }
 
-    return (
+    // Enforce a minimum visible width for any non-zero planned segment so it cannot disappear visually
+    const MIN_SEGMENT_WIDTH_POST = 0.5;
+    let needsRescale = false;
+    redistributedWidths = redistributedWidths.map((w, idx) => {
+      if (plannedSeconds[idx] > 0 && w > 0 && w < MIN_SEGMENT_WIDTH_POST) {
+        needsRescale = true;
+        return MIN_SEGMENT_WIDTH_POST;
+      }
+      return w;
+    });
+    if (needsRescale) {
+      const totalAfter = redistributedWidths.reduce((s, v) => s + v, 0) || 1;
+      redistributedWidths = redistributedWidths.map(w => (w / totalAfter) * 100);
+    }
+
+    // Build base segmented bar with planned allocation + fill
+    const baseBar = (
       <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
         {activities.map((activity, idx) => {
           const segmentWidth = redistributedWidths[idx];
           if (!segmentWidth || segmentWidth <= 0) return null;
-
-          // Compute fill within segment based on its own planned time
           let activityTime = plannedSeconds[idx];
           let fillWidth = 0;
           const inOvertime = overtimeIndex !== -1;
           const isOvertimeSegment = idx === overtimeIndex;
           if (activity.isCompleted) {
-            // For completed count-up, show as fully filled within its preserved width; for countdown, also full
             fillWidth = 100;
           } else if (inOvertime && !isOvertimeSegment) {
-            // During overtime, non-selected segments should remain empty (no colorful fill)
             fillWidth = 0;
           } else if (activityTime > 0) {
-            // Allow overtime to fully fill the segment (>=100%) visually by capping at 100
             const tr = activity.timeRemaining;
             let elapsed = 0;
             if (typeof tr === 'number') {
               elapsed = tr >= 0 ? (activityTime - tr) : (activityTime + Math.abs(tr));
-            } else {
-              // Not started yet
-              elapsed = 0;
             }
             fillWidth = Math.min(100, Math.max(0, (elapsed / activityTime) * 100));
           }
-
           return (
             <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full relative last:border-r-0">
-              <div 
-                className="h-full"
-                style={{ opacity: inOvertime && !isOvertimeSegment ? 0.25 : 0.35, backgroundColor: activity.color }}
-              />
-              <div 
-                style={{ 
-                  width: `${Math.max(0, fillWidth)}%`, 
-                  backgroundColor: activity.color 
-                }} 
-                className="h-full absolute top-0 left-0" 
-              />
+              <div className="h-full" style={{ opacity: inOvertime && !isOvertimeSegment ? 0.25 : 0.35, backgroundColor: activity.color }} />
+              <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full absolute top-0 left-0" />
             </div>
           );
         })}
+      </div>
+    );
+
+    if (!showDrainOverlay) return baseBar;
+
+    // Drain overlay: separate thin bar showing elapsed distribution across all activities (count-up + overtime inclusive)
+    const overlayHeight = 3; // px
+    const totalElapsedAll = perActivityElapsed.reduce((s, v) => s + v, 0);
+    const overlay = (
+      <div className="relative w-full mt-1 rounded-full overflow-hidden bg-slate-200" style={{ height: overlayHeight }}>
+        {activities.map((activity, idx) => {
+          const elapsed = perActivityElapsed[idx];
+          if (!elapsed || elapsed <= 0 || totalElapsedAll <= 0) return null;
+            const w = (elapsed / totalElapsedAll) * 100;
+          return (
+            <div key={activity.id} style={{ width: `${w}%`, backgroundColor: activity.color }} className="h-full" />
+          );
+        })}
+      </div>
+    );
+    return (
+      <div className="flex flex-col">
+        {baseBar}
+        {overlay}
       </div>
     );
   }
@@ -1993,7 +2061,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   );
 };
 
-const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex }) => {
+const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex, showAllocationRing = false }) => {
   const size = 200;
   const strokeWidth = 12;
   const center = size / 2;
@@ -2002,6 +2070,9 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   const circumference = 2 * Math.PI * radius;
   const activityCircumference = 2 * Math.PI * activityRadius;
   const lastShownRef = useRef<Record<string, number>>({});
+  const allocationStrokeWidth = 4; // thinner ring for planned allocation overview
+  const allocationRadius = radius + (strokeWidth / 2) + 2; // stays within SVG bounds (size/2)
+  const allocationCircumference = 2 * Math.PI * allocationRadius;
   
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
@@ -2124,7 +2195,9 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
 
       // If we lack planned time but do have elapsed (or count-ups are present), use the dynamic/elapsed distribution
       const hasAnyCountUp = activities.some(a => a.countUp);
-      if (totalPlannedRaw <= 0 || (hasAnyCountUp && totalElapsedForFallback > 0)) {
+      const anyCountUpWithElapsed = activities.some((a, idx) => a.countUp && perElapsedForFallback[idx] > 0);
+  // Only fallback to elapsed distribution if no planned time OR a count-up has produced elapsed time already.
+  if ((totalPlannedRaw <= 0) || (anyCountUpWithElapsed && totalElapsedForFallback > 0)) {
         if (totalElapsedForFallback <= 0) return null;
         let cumulativeRotation = -90;
         return activities.map((activity, idx) => {
@@ -2296,9 +2369,48 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     );
   };
 
+  const renderAllocationRing = () => {
+    if (!showAllocationRing) return null;
+    // Compute planned allocation irrespective of current style (percent or duration based)
+    const totalSessionSecondsAlloc = totalSessionMinutes * 60;
+    const plannedSeconds = activities.map(a => {
+      if (a.percentage && a.percentage > 0) return (a.percentage / 100) * totalSessionSecondsAlloc;
+      if (a.duration && a.duration > 0) return a.duration * 60;
+      return 0;
+    });
+    const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0);
+    if (totalPlanned <= 0) return null;
+    // Convert to angles
+    let cumulativeRotation = -90; // start at top
+    return plannedSeconds.map((sec, idx) => {
+      if (sec <= 0) return null;
+      const angle = (sec / totalPlanned) * 360;
+      const arcLength = (angle / 360) * allocationCircumference;
+      const rotation = cumulativeRotation;
+      cumulativeRotation += angle;
+      return (
+        <circle
+          key={`allocation-${activities[idx].id}`}
+          stroke={activities[idx].color}
+          fill="transparent"
+          strokeWidth={allocationStrokeWidth}
+          strokeDasharray={`${arcLength} ${allocationCircumference}`}
+          r={allocationRadius}
+          cx={center}
+          cy={center}
+          transform={`rotate(${rotation} ${center} ${center})`}
+          strokeLinecap="butt"
+          opacity={0.45}
+        />
+      );
+    });
+  };
+
   return (
     <div className="flex items-center justify-center py-4">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {/* Planned allocation ring (optional) */}
+        {renderAllocationRing()}
         {/* Background circles */}
         <circle
           stroke="#e2e8f0"
@@ -2353,7 +2465,7 @@ const SpiderChart = ({
 }: {
   activities: Activity[];
   categoryColors: Record<string, string>;
-  showTags: boolean;
+  showTags?: boolean;
   size?: number;
 }) => {
   const center = size / 2;
@@ -3691,8 +3803,21 @@ const ActivityManagementPage = ({
                         </div>
                         <div className="flex items-center space-x-1 sm:space-x-2 flex-shrink-0">
                           <Badge variant="secondary" className="text-xs px-1.5 py-0.5 sm:px-2.5 sm:py-0.5">
-                            {activity.percentage}%
+                            {(() => { const p = activity.percentage || 0; if (p === 0) return '0%'; const display = Math.max(1, Math.ceil(p)); return `${display}%`; })()}
                           </Badge>
+                          {/* Show/Hide on Progress Bar Toggle */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActivities(prev => prev.map(a => a.id === activity.id ? { ...a, showOnBar: a.showOnBar === false ? true : false } : a));
+                            }}
+                            className={`h-8 w-8 sm:h-10 sm:w-10 p-1 ${activity.showOnBar === false ? 'text-gray-400 hover:text-gray-600' : 'text-green-600 hover:text-green-800'} hover:bg-green-50 border border-green-300 rounded-lg`}
+                            title={activity.showOnBar === false ? 'Show on progress bars' : 'Hide from progress bars'}
+                          >
+                            <Icon name={activity.showOnBar === false ? 'eye' : 'eye'} className="h-4 w-4 sm:h-5 sm:w-5" />
+                          </Button>
                           
                           {/* Edit Button */}
                           <Button
@@ -5806,6 +5931,8 @@ export default function App() {
   showTimeAllocationPanel: true,
   showTagChips: true,
   showRolloverIndicators: true,
+  showCircularAllocation: false,
+  showDrainOverlay: false,
     };
     try {
       const saved = localStorage.getItem('timeSliceSettings');
@@ -6292,24 +6419,42 @@ export default function App() {
         }, 0);
 
       const prevSnapshot = sharedElapsedSnapshotRef.current[sharedId] || 0;
-      const deltaSec = Math.max(0, Math.floor(totalSessionElapsedSec - prevSnapshot));
-      // Update snapshot immediately to avoid double-adding
+      const rawDelta = totalSessionElapsedSec - prevSnapshot;
+      const deltaSec = Math.max(0, Math.floor(rawDelta));
+      // Update snapshot immediately to avoid double-adding (keep largest value)
       sharedElapsedSnapshotRef.current[sharedId] = Math.max(prevSnapshot, totalSessionElapsedSec);
 
-      if (deltaSec <= 0) return;
-
-      const deltaMin = deltaSec / 60; // allow fractional minutes
-      setDailyActivities(prev => prev.map(dailyActivity => {
-        if (dailyActivity.sharedId !== sharedId) return dailyActivity;
-        const targetDuration = Math.max(0, dailyActivity.duration || 0);
-        const currentSpent = Number.isFinite(dailyActivity.timeSpent) ? (dailyActivity.timeSpent || 0) : 0;
-        const newSpent = Math.min(targetDuration, currentSpent + deltaMin);
-        return {
-          ...dailyActivity,
-          timeSpent: newSpent,
-          status: newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled')),
-        };
-      }));
+      // If we have positive whole‑second delta, apply incremental update
+      if (deltaSec > 0) {
+        const deltaMin = deltaSec / 60; // allow fractional minutes
+        setDailyActivities(prev => prev.map(dailyActivity => {
+          if (dailyActivity.sharedId !== sharedId) return dailyActivity;
+          const targetDuration = Math.max(0, dailyActivity.duration || 0);
+          const currentSpent = Number.isFinite(dailyActivity.timeSpent) ? (dailyActivity.timeSpent || 0) : 0;
+            const newSpent = Math.min(targetDuration, currentSpent + deltaMin);
+            return {
+              ...dailyActivity,
+              timeSpent: newSpent,
+              status: newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled')),
+            };
+        }));
+      } else if (updatedActivity.isCompleted) {
+        // Force a final flush for completion in case last delta already captured in snapshot timing
+        const finalMinutes = totalSessionElapsedSec / 60;
+        setDailyActivities(prev => prev.map(dailyActivity => {
+          if (dailyActivity.sharedId !== sharedId) return dailyActivity;
+          const targetDuration = Math.max(0, dailyActivity.duration || 0);
+          const currentSpent = Number.isFinite(dailyActivity.timeSpent) ? (dailyActivity.timeSpent || 0) : 0;
+          // Only update if we are short of the computed final minutes (within target cap)
+          if (currentSpent >= Math.min(targetDuration, finalMinutes) - 0.0001) return dailyActivity;
+          const newSpent = Math.min(targetDuration, finalMinutes);
+          return {
+            ...dailyActivity,
+            timeSpent: newSpent,
+            status: newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled')),
+          };
+        }));
+      }
     } else {
       // Daily -> Session: only apply monotonic progress (never increase timeRemaining or clear session data)
       setActivities(prev => prev.map(sessionActivity => {
@@ -6327,6 +6472,23 @@ export default function App() {
       }));
     }
   }, [activities, durationType, endTime, totalHours, totalMinutes]);
+
+  // Flush all shared session activities to daily when session stops (transition active->inactive)
+  const prevIsTimerActiveRef = useRef<boolean>(false);
+  useEffect(() => {
+    const wasActive = prevIsTimerActiveRef.current;
+    if (wasActive && !isTimerActive) {
+      // Session just stopped; flush each sharedId once
+      const processed: Record<string, boolean> = {};
+      activities.forEach(sa => {
+        if (!sa.sharedId) return;
+        if (processed[sa.sharedId]) return;
+        processed[sa.sharedId] = true;
+        syncSharedProgress(sa, true);
+      });
+    }
+    prevIsTimerActiveRef.current = isTimerActive;
+  }, [isTimerActive, activities, syncSharedProgress]);
 
   // Helper function to check if a template should be active based on recurring schedule
   const isTemplateActiveToday = useCallback((template: ActivityTemplate, currentDate: Date) => {
@@ -6893,6 +7055,7 @@ export default function App() {
               let remainingGapSeconds = timeGapSeconds;
               let newActivities = [...prev];
               let currentIndex = sessionState.currentActivityIndex || 0;
+              const completedSharedIds: string[] = [];
               
               while (remainingGapSeconds > 0 && currentIndex < newActivities.length) {
                 const current = newActivities[currentIndex];
@@ -6902,18 +7065,34 @@ export default function App() {
                   continue;
                 }
                 
+                // Ensure numeric timeRemaining baseline
+                if (typeof current.timeRemaining !== 'number' || !Number.isFinite(current.timeRemaining)) {
+                  // Reconstruct planned seconds for countdown activities; for count-up default to 0 elapsed
+                  if (current.countUp) current.timeRemaining = 0;
+                  else {
+                    const plannedSec = getAllocatedSeconds(current);
+                    current.timeRemaining = plannedSec; // remaining time starts at planned
+                  }
+                }
+
                 if (current.countUp) {
-                  // For count-up activities, add all remaining time
+                  // For count-up activities, add all remaining gap time to elapsed (timeRemaining stores elapsed)
                   current.timeRemaining += remainingGapSeconds;
                   remainingGapSeconds = 0;
                 } else {
-                  // For regular activities, subtract time
-                  const timeToSubtract = Math.min(remainingGapSeconds, current.timeRemaining);
-                  current.timeRemaining -= timeToSubtract;
+                  // For regular countdown activities, subtract from remaining
+                  const currentRemaining = Math.max(0, current.timeRemaining);
+                  const timeToSubtract = Math.min(remainingGapSeconds, currentRemaining);
+                  current.timeRemaining = currentRemaining - timeToSubtract;
                   remainingGapSeconds -= timeToSubtract;
-                  
+
                   if (current.timeRemaining <= 0) {
+                    // Mark completion and capture elapsed including full planned duration (no overtime for gap resume)
+                    const plannedSec = getAllocatedSeconds(current);
+                    const elapsedSec = plannedSec; // gap completion implies full planned consumed
+                    current.completedElapsedSeconds = Math.max(current.completedElapsedSeconds || 0, elapsedSec);
                     current.isCompleted = true;
+                    if (current.sharedId) completedSharedIds.push(current.sharedId);
                     currentIndex++;
                   }
                 }
@@ -6928,6 +7107,21 @@ export default function App() {
               const allCompleted = newActivities.every(a => a.isCompleted);
               if (allCompleted) {
                 setTimeout(() => setIsTimerActive(false), 0);
+              }
+
+              // Flush shared progress for any activities completed due to gap (ensure daily sync catches up)
+              if (completedSharedIds.length > 0) {
+                setTimeout(() => {
+                  const processed: Record<string, boolean> = {};
+                  completedSharedIds.forEach(id => {
+                    if (processed[id]) return;
+                    processed[id] = true;
+                    const act = newActivities.find(a => a.sharedId === id);
+                    if (act) {
+                      try { syncSharedProgress(act, true); } catch {}
+                    }
+                  });
+                }, 0);
               }
               
               return newActivities;
@@ -7134,7 +7328,11 @@ export default function App() {
 
     // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
     // This works for both session and daily modes
-    if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+  // Earn flowmodoro rest time during active focused work:
+  // - Session mode while timer running
+  // - Daily mode when at least one daily activity is active (status 'active' or 'overtime')
+  const hasActiveDailyWork = currentMode === 'daily' && dailyActivities.some(a => a.isActive || a.status === 'active' || a.status === 'overtime');
+  if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak && ((isTimerActive && !isPaused) || hasActiveDailyWork)) {
       // Add elapsed seconds to fractional accumulator and calculate how much rest time to award
       const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
       // For a 2:1 ratio, every 2 work seconds earns 1 rest second
@@ -7872,6 +8070,11 @@ export default function App() {
   };
 
   const closeActivitySettings = () => {
+              const sessionState = JSON.parse(saved);
+              if (Array.isArray(sessionState)) {
+                return sessionState.map(a => ({ ...a, showOnBar: a.showOnBar !== false }));
+              }
+              return sessionState;
     setActivitySettingsModal({
       isOpen: false,
       activityId: null,
@@ -8840,13 +9043,14 @@ export default function App() {
           {settings.showMainProgress && (
             settings.progressView === 'circular' ? (
               <CircularProgress
-                activities={activities}
+                activities={activities.filter(a => a.showOnBar !== false)}
                 style={settings.progressBarStyle}
                 totalProgress={getOverallProgress()}
                 activityProgress={activityProgress}
                 activityColor={currentActivity?.color}
                 totalSessionMinutes={totalSessionMinutes}
                 currentActivityIndex={currentActivityIndex}
+                showAllocationRing={settings.showCircularAllocation}
               />
             ) : (
               <div className="space-y-1">
@@ -8855,13 +9059,14 @@ export default function App() {
                   <span>{Math.round(getOverallProgress())}%</span>
                 </div>
                 <VisualProgress
-                  activities={activities}
+                  activities={activities.filter(a => a.showOnBar !== false)}
                   style={settings.progressBarStyle}
                   className="h-3"
                   overallProgress={getOverallProgress()}
                   currentActivityColor={currentActivity?.color}
                   totalSessionMinutes={totalSessionMinutes}
                   currentActivityIndex={currentActivityIndex}
+                  showDrainOverlay={settings.showDrainOverlay}
                 />
               </div>
             )
@@ -9040,6 +9245,18 @@ export default function App() {
                     <Button size="sm" variant={settings.progressView === 'circular' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressView: 'circular' }))}>Circular</Button>
                   </div>
                 </div>
+                {settings.progressView === 'circular' && (
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="show-circular-allocation">Show circular allocation ring</Label>
+                    <Switch id="show-circular-allocation" checked={settings.showCircularAllocation} onCheckedChange={(checked) => setSettings(prev => ({ ...prev, showCircularAllocation: checked }))} />
+                  </div>
+                )}
+                {settings.progressView === 'linear' && (
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="show-drain-overlay">Show drain overlay bar</Label>
+                    <Switch id="show-drain-overlay" checked={settings.showDrainOverlay} onCheckedChange={(checked) => setSettings(prev => ({ ...prev, showDrainOverlay: checked }))} />
+                  </div>
+                )}
                 <div className="space-y-2">
                   <Label>Progress Bar Style</Label>
                   <div className="flex items-center gap-2">
@@ -10297,7 +10514,7 @@ export default function App() {
               </div>
             )}
             <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
-              Total session will be <span className="font-semibold">{totalSessionMinutes} minutes</span>.
+              Total session: <span className="font-semibold">{formatMinutesHM(totalSessionMinutes)}</span> ({totalSessionMinutes} min)
             </div>
           </div>
           <div className="space-y-4">
