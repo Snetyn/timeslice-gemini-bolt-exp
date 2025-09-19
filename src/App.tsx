@@ -34,6 +34,11 @@ interface Activity {
   // New: schedule tracking for rollover logic
   scheduledDate?: string; // YYYY-MM-DD of the day this activity is scheduled for
   rolledOverFromYesterday?: boolean; // show dashed style if rolled over
+  // Soft deadline (Daily mode): optional visual goal time where remaining time compresses as deadline approaches
+  softDeadlineEnabled?: boolean; // opt-in per activity
+  softDeadlineTime?: string; // HH:MM 24h local time
+  // Early complete: marked done before reaching planned duration (daily-only)
+  earlyCompleted?: boolean;
 }
 
 interface ActivityTemplate {
@@ -4702,7 +4707,9 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
     duration: 60,
     percentage: 4.2,
     status: 'scheduled',
-    subtasks: [] as Subtask[]
+    subtasks: [] as Subtask[],
+    softDeadlineEnabled: false,
+    softDeadlineTime: ''
   });
 
   const [newSubtaskName, setNewSubtaskName] = useState('');
@@ -4715,7 +4722,9 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
         duration: activity.duration || 60,
         percentage: activity.percentage || 4.2,
         status: activity.status || 'scheduled',
-        subtasks: activity.subtasks || []
+        subtasks: activity.subtasks || [],
+        softDeadlineEnabled: !!activity.softDeadlineEnabled,
+        softDeadlineTime: activity.softDeadlineTime || ''
       });
     }
   }, [activity]);
@@ -4940,6 +4949,31 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
                   No subtasks added yet
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Soft Deadline (Optional) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Soft Deadline (optional)
+            </label>
+            <div className="flex items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={formData.softDeadlineEnabled}
+                  onChange={(e) => setFormData(prev => ({ ...prev, softDeadlineEnabled: e.target.checked }))}
+                />
+                Enable
+              </label>
+              <input
+                type="time"
+                value={formData.softDeadlineTime}
+                onChange={(e) => setFormData(prev => ({ ...prev, softDeadlineTime: e.target.value }))}
+                disabled={!formData.softDeadlineEnabled}
+                className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              />
+              <span className="text-xs text-gray-500">Visual urgency and time-left adapt near this time</span>
             </div>
           </div>
 
@@ -5953,6 +5987,10 @@ export default function App() {
       dailyShowActivityProgress: true, // Show progress bars in daily activity cards
       dailyActivityProgressType: 'fill', // 'fill' or 'drain'
       dailyTimelineAnimation: true, // Animate timeline activities (shrink/slide when running)
+  // Soft deadline visuals
+  dailySoftDeadlineVisuals: true, // enable visual urgency effects for soft deadlines
+    // Daily timeline visibility
+    dailyHideCompleted: false, // hide completed items from the daily timeline view
       // Auto-schedule settings
       autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
   // UI toggles
@@ -5987,7 +6025,10 @@ export default function App() {
           ...activity,
           startedAt: activity.startedAt ? new Date(activity.startedAt) : null,
           subtasks: activity.subtasks || [],
-          tags: activity.tags || [] // Ensure tags array exists
+          tags: activity.tags || [], // Ensure tags array exists
+          softDeadlineEnabled: activity.softDeadlineEnabled || false,
+          softDeadlineTime: activity.softDeadlineTime || '',
+          earlyCompleted: !!activity.earlyCompleted
         }));
       }
     } catch (e) {
@@ -6007,7 +6048,10 @@ export default function App() {
         timeSpent: 0,
         startedAt: null,
         subtasks: [],
-        tags: ['1'] // Default to Work tag
+        tags: ['1'], // Default to Work tag
+        softDeadlineEnabled: false,
+        softDeadlineTime: '',
+        earlyCompleted: false
       },
       {
         id: 'exercise-1', 
@@ -6020,7 +6064,10 @@ export default function App() {
         timeSpent: 0,
         startedAt: null,
         subtasks: [],
-        tags: ['2'] // Default to Health tag
+        tags: ['2'], // Default to Health tag
+        softDeadlineEnabled: false,
+        softDeadlineTime: '',
+        earlyCompleted: false
       },
       {
         id: 'reading-1',
@@ -6033,7 +6080,10 @@ export default function App() {
         timeSpent: 0,
         startedAt: null,
         subtasks: [],
-        tags: ['3'] // Default to Learning tag
+        tags: ['3'], // Default to Learning tag
+        softDeadlineEnabled: false,
+        softDeadlineTime: '',
+        earlyCompleted: false
       }
     ];
   });
@@ -6153,6 +6203,46 @@ export default function App() {
       return (activity.timeSpent * 60) + currentSessionSeconds;
     }
     return activity.timeSpent * 60; // Convert minutes to seconds
+  };
+
+  // Soft Deadline helpers (visual-only)
+  const parseHHMMToDateToday = (hhmm: string) => {
+    if (!hhmm || typeof hhmm !== 'string' || !hhmm.includes(':')) return null;
+    const [hh, mm] = hhmm.split(':').map(x => parseInt(x, 10));
+    if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    return d;
+  };
+
+  // Returns a multiplier (>=1) to visually accelerate progress/urgency as we get within last 25% of time to soft deadline.
+  // 1 at >=25% window; up to 1.5 near deadline; 2x if past deadline (overtime urgency).
+  const getSoftDeadlineUrgencyFactor = (activity) => {
+    if (!settings.dailySoftDeadlineVisuals || !activity?.softDeadlineEnabled || !activity.softDeadlineTime) return 1;
+    const deadline = parseHHMMToDateToday(activity.softDeadlineTime);
+    if (!deadline) return 1;
+    const now = new Date();
+    const totalPlannedMs = (activity.duration || 0) * 60 * 1000;
+    if (!totalPlannedMs) return 1;
+    const startWindow = new Date(deadline.getTime() - totalPlannedMs);
+    const quarterWindowMs = totalPlannedMs * 0.25;
+    // If before startWindow + 75% of planned window → factor 1
+    if (now.getTime() <= (deadline.getTime() - quarterWindowMs)) return 1;
+    // If past deadline → stronger urgency
+    if (now.getTime() >= deadline.getTime()) return 2;
+    // Between 75% mark and deadline: ramp 1 → 1.5
+    const span = quarterWindowMs;
+    const elapsedInRamp = now.getTime() - (deadline.getTime() - span);
+    const t = Math.min(Math.max(elapsedInRamp / span, 0), 1);
+    return 1 + 0.5 * t;
+  };
+
+  // Visual-only remaining seconds adjusted by urgency factor (doesn't change saved state)
+  const getVisualRemainingSeconds = (activity) => {
+    const baseRemaining = (activity.duration * 60) - getRealTimeSpentInSeconds(activity);
+    const factor = getSoftDeadlineUrgencyFactor(activity);
+    // Compress remaining visually: show as if remaining is divided by factor
+    return Math.floor(baseRemaining / Math.max(1, factor));
   };
 
   // Step 14: Calculate real-time timeline position for sliding animation
@@ -6460,10 +6550,11 @@ export default function App() {
           const targetDuration = Math.max(0, dailyActivity.duration || 0);
           const currentSpent = Number.isFinite(dailyActivity.timeSpent) ? (dailyActivity.timeSpent || 0) : 0;
             const newSpent = Math.min(targetDuration, currentSpent + deltaMin);
+            const computedStatus = newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled'));
             return {
               ...dailyActivity,
               timeSpent: newSpent,
-              status: newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled')),
+              status: dailyActivity.earlyCompleted ? 'completed' : computedStatus,
             };
         }));
       } else if (updatedActivity.isCompleted) {
@@ -6476,15 +6567,16 @@ export default function App() {
           // Only update if we are short of the computed final minutes (within target cap)
           if (currentSpent >= Math.min(targetDuration, finalMinutes) - 0.0001) return dailyActivity;
           const newSpent = Math.min(targetDuration, finalMinutes);
+          const computedStatus = newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled'));
           return {
             ...dailyActivity,
             timeSpent: newSpent,
-            status: newSpent >= targetDuration ? 'completed' : (newSpent > 0 ? 'active' : (dailyActivity.status || 'scheduled')),
+            status: dailyActivity.earlyCompleted ? 'completed' : computedStatus,
           };
         }));
       }
     } else {
-      // Daily -> Session: only apply monotonic progress (never increase timeRemaining or clear session data)
+      // Daily -> Session: only apply monotonic progress (never increase timeRemaining or force-complete session)
       setActivities(prev => prev.map(sessionActivity => {
         if (sessionActivity.sharedId !== sharedId) return sessionActivity;
         const durationMin = Math.max(0, sessionActivity.duration || 0);
@@ -6492,9 +6584,11 @@ export default function App() {
         const desiredRemainingSec = Math.max(0, Math.round((1 - Math.min(1, desiredProgressPct / 100)) * durationMin * 60));
         const currentRemainingSec = Math.max(0, Math.round(sessionActivity.timeRemaining || 0));
         const nextRemaining = Math.min(currentRemainingSec, desiredRemainingSec); // only move forward (reduce remaining)
+        // If daily was marked completed via early-complete, do NOT force session completion; only reduce remaining
+        const shouldForceComplete = updatedActivity.status === 'completed' && !updatedActivity.earlyCompleted;
         return {
           ...sessionActivity,
-          isCompleted: updatedActivity.status === 'completed' || nextRemaining === 0 ? true : sessionActivity.isCompleted,
+          isCompleted: shouldForceComplete || nextRemaining === 0 ? true : sessionActivity.isCompleted,
           timeRemaining: nextRemaining,
         };
       }));
@@ -6514,6 +6608,22 @@ export default function App() {
         processed[sa.sharedId] = true;
         syncSharedProgress(sa, true);
       });
+      // Also ensure any daily active activity is stopped to prevent stuck active state
+      setDailyActivities(prev => prev.map(d => {
+        if (d.isActive || d.status === 'active') {
+          const startedAt = d.startedAt ? new Date(d.startedAt) : null;
+          const extraMinutes = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt.getTime()) / 60000)) : 0;
+          const newTimeSpent = (d.timeSpent || 0) + extraMinutes;
+          return {
+            ...d,
+            isActive: false,
+            status: newTimeSpent >= Math.max(0, d.duration || 0) ? 'completed' : 'scheduled',
+            timeSpent: newTimeSpent,
+            startedAt: null,
+          };
+        }
+        return d;
+      }));
     }
     prevIsTimerActiveRef.current = isTimerActive;
   }, [isTimerActive, activities, syncSharedProgress]);
@@ -7955,32 +8065,42 @@ export default function App() {
 
   const toggleDailyActivityCompletion = (activityId: string) => {
     setDailyActivities(prev => prev.map(activity => {
-      if (activity.id === activityId) {
-        let updatedActivity;
-        // If currently completed, mark as scheduled and reset all subtasks
-        if (activity.status === 'completed') {
-          updatedActivity = { 
-            ...activity, 
-            status: 'scheduled',
-            subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: false }))
-          };
-        } else {
-          // If not completed, mark as completed and complete all subtasks
-          updatedActivity = { 
-            ...activity, 
-            status: 'completed',
-            subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: true }))
-          };
-        }
-        
-        // Sync progress with shared session activity if it exists
-        if (updatedActivity.sharedId) {
-          syncSharedProgress(updatedActivity, false);
-        }
-        
-        return updatedActivity;
+      if (activity.id !== activityId) return activity;
+      // Stop active timer and fold elapsed into timeSpent
+      let timeSpent = activity.timeSpent || 0;
+      if (activity.isActive && activity.startedAt) {
+        const currentSessionSeconds = Math.floor((Date.now() - (activity.startedAt as any).getTime()) / 1000);
+        timeSpent += Math.floor(currentSessionSeconds / 60);
       }
-      return activity;
+      if (activity.status === 'completed') {
+        // Uncomplete -> scheduled, clear earlyCompleted and reset subtasks
+        const updated = {
+          ...activity,
+          status: 'scheduled',
+          isActive: false,
+          startedAt: null,
+          earlyCompleted: false,
+          subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: false }))
+        };
+        if (updated.sharedId) try { syncSharedProgress(updated, false); } catch {}
+        // If this was the active card, clear header state
+        if (activeDailyActivity === activityId) setActiveDailyActivity(null);
+        return updated;
+      }
+      // Complete -> set completed; if finished early, flag it
+      const early = timeSpent < (activity.duration || 0);
+      const updatedCompleted = {
+        ...activity,
+        status: 'completed',
+        isActive: false,
+        startedAt: null,
+        timeSpent,
+        earlyCompleted: early,
+        subtasks: (activity.subtasks || []).map(subtask => ({ ...subtask, completed: true }))
+      };
+      if (updatedCompleted.sharedId) try { syncSharedProgress(updatedCompleted, false); } catch {}
+      if (activeDailyActivity === activityId) setActiveDailyActivity(null);
+      return updatedCompleted;
     }));
   };
 
@@ -9644,13 +9764,24 @@ export default function App() {
 
                 {/* Dynamic Timeline Bar */}
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <h3 className="text-md font-semibold">Daily Timeline</h3>
-                    <div className="text-sm text-gray-600">
-                      <span className="font-medium text-emerald-600">
-                        {Math.round(getDailyOverallProgress())}%
-                      </span>
-                      <span className="ml-1">complete</span>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1 text-xs text-gray-600 select-none cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="h-3 w-3"
+                          checked={!!settings.dailyHideCompleted}
+                          onChange={(e) => setSettings(s => ({ ...s, dailyHideCompleted: e.target.checked }))}
+                        />
+                        Hide completed
+                      </label>
+                      <div className="text-sm text-gray-600">
+                        <span className="font-medium text-emerald-600">
+                          {Math.round(getDailyOverallProgress())}%
+                        </span>
+                        <span className="ml-1">complete</span>
+                      </div>
                     </div>
                   </div>
                   
@@ -9671,14 +9802,24 @@ export default function App() {
                       title={`Daily Progress: ${Math.round(getDailyOverallProgress())}% complete`}
                     />
 
-                    {/* NOW Indicator (Fixed at start) */}
-                    <div 
-                      className="absolute top-0 w-1 h-full bg-red-500 z-30 shadow-lg"
-                      style={{ left: '0%' }}
-                      title="NOW"
-                    >
-                      <div className="absolute -top-7 -left-3 text-xs font-bold text-red-600 bg-white px-1 rounded shadow">NOW</div>
-                    </div>
+                    {/* NOW Indicator (dynamic) */}
+                    {(() => {
+                      if (timelineViewMode !== 'full') return null; // Only meaningful in full-day view
+                      const now = currentTime;
+                      const minutesNow = now.getHours() * 60 + now.getMinutes();
+                      let minutesSinceStart = minutesNow - 30; // day starts at 00:30
+                      if (minutesSinceStart < 0) minutesSinceStart += 24 * 60; // wrap to previous day start
+                      const nowLeftPercent = Math.min(100, Math.max(0, (minutesSinceStart / (24 * 60)) * 100));
+                      return (
+                        <div 
+                          className="absolute top-0 w-1 h-full bg-red-500 z-30 shadow-lg"
+                          style={{ left: `${nowLeftPercent}%` }}
+                          title="NOW"
+                        >
+                          <div className="absolute -top-7 -left-3 text-xs font-bold text-red-600 bg-white px-1 rounded shadow">NOW</div>
+                        </div>
+                      );
+                    })()}
                     
                     {/* Flowmodoro Rest Time Bar (if enabled) */}
                     {settings.flowmodoroEnabled && (
@@ -9704,17 +9845,25 @@ export default function App() {
                     {(() => {
                       const now = new Date();
                       const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
-                      const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
+                      const allPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
+                      const timelineActivities = settings.dailyHideCompleted
+                        ? dailyActivities.filter(a => a.status !== 'completed')
+                        : dailyActivities;
+                      const visiblePlannedMinutes = Math.max(1, timelineActivities.reduce((sum, a) => sum + a.duration, 0));
                       
                       if (timelineViewMode === 'scheduled') {
                         // Show only scheduled activities, filling the entire bar
                         // Always show consistent view regardless of active state
                         let currentPosition = 0;
-                        return dailyActivities.map((activity) => {
-                          const activityWidth = (activity.duration / totalPlannedMinutes) * 100;
+                        return timelineActivities.map((activity) => {
+                          const activityWidth = (activity.duration / visiblePlannedMinutes) * 100;
                           const isActive = activity.status === 'active' || activity.status === 'overtime';
                           const realTimeSpent = getRealTimeSpent(activity);
-                          const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                          const urgency = getSoftDeadlineUrgencyFactor(activity);
+                          // Visual-only: increase progress subtly when urgency > 1 and cap at 100; treat early-completed as 100
+                          const basePct = activity.duration > 0 ? (realTimeSpent / activity.duration) * 100 : 0;
+                          const boosted = Math.min(100, basePct * (urgency > 1 ? (1 + (urgency - 1) * 0.2) : 1));
+                          const progress = (activity.status === 'completed' && activity.earlyCompleted) ? 100 : boosted;
                           
                           const element = (
                             <div 
@@ -9738,7 +9887,7 @@ export default function App() {
                               <div 
                                 className={`absolute top-0 left-0 h-full smooth-progress ${
                                   isActive ? 'real-time-active' : ''
-                                }`}
+                                } ${settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled && urgency > 1 ? 'ring-2 ring-red-300' : ''}`}
                                 style={{ 
                                   width: `${progress}%`,
                                   backgroundColor: activity.color
@@ -9761,7 +9910,7 @@ export default function App() {
                         });
                       } else {
                         // Show full day view with unscheduled time
-                        const plannedPercentageOfDay = Math.min((totalPlannedMinutes / totalRemainingMinutes) * 100, 95);
+                        const plannedPercentageOfDay = Math.min(((allPlannedMinutes || 0) / totalRemainingMinutes) * 100, 95);
                         const unscheduledPercentage = Math.max(100 - plannedPercentageOfDay, 5);
                         
                         return (
@@ -9770,10 +9919,10 @@ export default function App() {
                             <div 
                               className="absolute top-0 h-full bg-blue-50 border-r-2 border-blue-300 z-5"
                               style={{ left: '0%', width: `${plannedPercentageOfDay}%` }}
-                              title={`Planned activities: ${Math.floor(totalPlannedMinutes / 60)}h ${totalPlannedMinutes % 60}m`}
+                              title={`Planned activities: ${Math.floor(allPlannedMinutes / 60)}h ${allPlannedMinutes % 60}m`}
                             >
                               <div className="absolute top-1 left-1 text-xs font-medium text-blue-700">
-                                Scheduled ({Math.floor(totalPlannedMinutes / 60)}h {totalPlannedMinutes % 60}m)
+                                Scheduled (${Math.floor(allPlannedMinutes / 60)}h ${allPlannedMinutes % 60}m)
                               </div>
                             </div>
                             
@@ -9781,11 +9930,13 @@ export default function App() {
                             {(() => {
                               // Always show consistent view regardless of active state
                               let currentPosition = 0;
-                              return dailyActivities.map((activity) => {
-                                const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                              return timelineActivities.map((activity) => {
+                                const activityWidth = visiblePlannedMinutes > 0 ? (activity.duration / visiblePlannedMinutes) * plannedPercentageOfDay : 0;
                                 const isActive = activity.status === 'active' || activity.status === 'overtime';
                                 const realTimeSpent = getRealTimeSpent(activity);
-                                const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                                const urgency = getSoftDeadlineUrgencyFactor(activity);
+                                const visualProgressBase = activity.duration > 0 ? (realTimeSpent / activity.duration) * 100 : 0;
+                                const progress = Math.min(100, visualProgressBase * (urgency > 1 ? (1 + (urgency - 1) * 0.2) : 1));
                                 
                                 const element = (
                                   <div 
@@ -9809,7 +9960,7 @@ export default function App() {
                                     <div 
                                       className={`absolute top-0 left-0 h-full smooth-progress ${
                                         isActive ? 'real-time-active' : ''
-                                      }`}
+                                      } ${settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled && urgency > 1 ? 'ring-2 ring-red-300' : ''}`}
                                       style={{ 
                                         width: `${progress}%`,
                                         backgroundColor: activity.color
@@ -9864,14 +10015,18 @@ export default function App() {
                     {!settings.dailyTimelineAnimation && (() => {
                       const now = new Date();
                       const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
-                      const totalPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
-                      const plannedPercentageOfDay = (totalPlannedMinutes / totalRemainingMinutes) * 100;
+                      const timelineActivities = settings.dailyHideCompleted
+                        ? dailyActivities.filter(a => a.status !== 'completed')
+                        : dailyActivities;
+                      const visiblePlannedMinutes = Math.max(1, timelineActivities.reduce((sum, a) => sum + a.duration, 0));
+                      const plannedPercentageOfDay = (visiblePlannedMinutes / totalRemainingMinutes) * 100;
                       let currentPosition = 0;
                       
-                      return dailyActivities.map((activity) => {
-                        const activityWidth = (activity.duration / totalPlannedMinutes) * plannedPercentageOfDay;
+                      return timelineActivities.map((activity) => {
+                        const activityWidth = (activity.duration / visiblePlannedMinutes) * plannedPercentageOfDay;
                         const realTimeSpent = getRealTimeSpent(activity);
-                        const progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                        let progress = activity.duration > 0 ? Math.min(100, (realTimeSpent / activity.duration) * 100) : 0;
+                        if (activity.status === 'completed' && activity.earlyCompleted) progress = 100;
                         const progressWidth = (progress / 100) * activityWidth;
                         
                         const element = (
@@ -9992,7 +10147,11 @@ export default function App() {
                   </div>
                   {/* Dynamic Activity Cards */}
                   <div className="space-y-2">
-                    {(tagFilter.length ? dailyActivities.filter(a => (a.tags || []).some(t => tagFilter.includes(String(t).toLowerCase()))) : dailyActivities).map((activity) => {
+                    {(() => {
+                      const base = tagFilter.length ? dailyActivities.filter(a => (a.tags || []).some(t => tagFilter.includes(String(t).toLowerCase()))) : dailyActivities;
+                      const visible = settings.dailyHideCompleted ? base.filter(a => a.status !== 'completed') : base;
+                      return visible;
+                    })().map((activity) => {
                       // Calculate activity progress for daily mode with real-time updates
                       const realTimeSpent = getRealTimeSpent(activity);
                       
@@ -10009,6 +10168,9 @@ export default function App() {
                           actualProgress = (realTimeSpent / activity.duration) * 100;
                         }
                         actualProgress = Math.min(100, Math.max(0, actualProgress));
+                        if (activity.status === 'completed' && activity.earlyCompleted) {
+                          actualProgress = 100;
+                        }
                       }
                       
                       // Fix: For drain mode, show remaining progress (100 - filled percentage)
@@ -10086,8 +10248,10 @@ export default function App() {
                                 {(() => {
                                   const currentSessionSeconds = Math.floor((currentTime.getTime() - activity.startedAt) / 1000);
                                   const totalSecondsSpent = currentSessionSeconds + (activity.timeSpent * 60);
-                                  const progress = Math.min(100, (totalSecondsSpent / (activity.duration * 60)) * 100);
-                                  return `${Math.round(progress)}%`;
+                                  const base = Math.min(100, (totalSecondsSpent / (activity.duration * 60)) * 100);
+                                  const urgency = getSoftDeadlineUrgencyFactor(activity);
+                                  const visual = Math.min(100, base * (urgency > 1 ? (1 + (urgency - 1) * 0.2) : 1));
+                                  return `${Math.round(visual)}%`;
                                 })()}
                               </span>
                             </div>
@@ -10105,6 +10269,16 @@ export default function App() {
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">
                                   <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-pulse"></div>
                                   Shared
+                                </span>
+                              )}
+                              {activity.status === 'completed' && activity.earlyCompleted && (
+                                <span className="inline-flex items-center gap-1 px-1 py-0.5 bg-green-50 text-green-700 text-[10px] rounded border border-green-200">
+                                  ✓ Early
+                                </span>
+                              )}
+                              {settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled && activity.softDeadlineTime && (
+                                <span className="inline-flex items-center gap-1 px-1 py-0.5 bg-red-50 text-red-700 text-[10px] rounded border border-red-200">
+                                  ⏰ {activity.softDeadlineTime}
                                 </span>
                               )}
                             </div>
@@ -10225,7 +10399,9 @@ export default function App() {
                             <div className="mt-1 text-xs">
                               {(() => {
                                 const totalSpentSeconds = getRealTimeSpentInSeconds(activity);
-                                const remainingSeconds = (activity.duration * 60) - totalSpentSeconds;
+                                const remainingSeconds = settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled
+                                  ? getVisualRemainingSeconds(activity)
+                                  : ((activity.duration * 60) - totalSpentSeconds);
                                 
                                 if (remainingSeconds > 0) {
                                   return (
