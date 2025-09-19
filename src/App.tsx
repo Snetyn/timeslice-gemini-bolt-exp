@@ -1778,6 +1778,8 @@ const Badge = ({ variant = 'default', className = '', children }) => {
 };
 
 const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex, showDrainOverlay = false }) => {
+  // Persist last-shown fill per activity so non-selected segments don't stall to 0 during overtime
+  const lastFillShownRef = useRef<Record<string, number>>({});
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
   const totalTime = activities.reduce((sum, act) => {
@@ -1899,7 +1901,10 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       // Subtract this equally from all other non-zero segments without going negative
       let indices = redistributedWidths
         .map((_, i) => i)
-        .filter(i => i !== overtimeIndex && redistributedWidths[i] > 0 && !activities[i].isCompleted);
+        .filter(i => i !== overtimeIndex 
+          && redistributedWidths[i] > 0 
+          && !activities[i].isCompleted 
+          && !activities[i].isLocked);
 
       // If there is no other segment to take from, skip redistribution entirely to avoid visual disappearance
       if (indices.length === 0) {
@@ -1964,15 +1969,33 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
           const isOvertimeSegment = idx === overtimeIndex;
           if (activity.isCompleted) {
             fillWidth = 100;
-          } else if (inOvertime && !isOvertimeSegment) {
-            fillWidth = 0;
+            lastFillShownRef.current[activity.id] = 1;
           } else if (activityTime > 0) {
             const tr = activity.timeRemaining;
             let elapsed = 0;
             if (typeof tr === 'number') {
               elapsed = tr >= 0 ? (activityTime - tr) : (activityTime + Math.abs(tr));
             }
-            fillWidth = Math.min(100, Math.max(0, (elapsed / activityTime) * 100));
+            const progressWithin = Math.min(1, Math.max(0, elapsed / activityTime));
+            let shown = progressWithin;
+            if (inOvertime) {
+              if (isOvertimeSegment) {
+                // Update selected/overtime segment; others hold last value
+                lastFillShownRef.current[activity.id] = progressWithin;
+              } else {
+                const held = lastFillShownRef.current[activity.id];
+                if (typeof held !== 'number') {
+                  lastFillShownRef.current[activity.id] = progressWithin;
+                  shown = progressWithin;
+                } else {
+                  shown = held;
+                }
+              }
+            } else {
+              // Keep last shown synced when not in overtime
+              lastFillShownRef.current[activity.id] = progressWithin;
+            }
+            fillWidth = Math.min(100, Math.max(0, shown * 100));
           }
           return (
             <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full relative last:border-r-0">
@@ -2380,14 +2403,19 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     });
     const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0);
     if (totalPlanned <= 0) return null;
-    // Convert to angles
+    // Start empty, fill based on overall progress across planned segments in order
+    const totalFillAngle = Math.max(0, Math.min(360, (totalProgress / 100) * 360));
+    let remainingAngle = totalFillAngle;
     let cumulativeRotation = -90; // start at top
     return plannedSeconds.map((sec, idx) => {
       if (sec <= 0) return null;
-      const angle = (sec / totalPlanned) * 360;
-      const arcLength = (angle / 360) * allocationCircumference;
+      const segmentAngle = (sec / totalPlanned) * 360;
+      const drawAngle = Math.min(segmentAngle, Math.max(0, remainingAngle));
+      const arcLength = (drawAngle / 360) * allocationCircumference;
       const rotation = cumulativeRotation;
-      cumulativeRotation += angle;
+      cumulativeRotation += segmentAngle;
+      remainingAngle -= drawAngle;
+      if (drawAngle <= 0) return null; // not yet reached in overall fill
       return (
         <circle
           key={`allocation-${activities[idx].id}`}
@@ -2400,7 +2428,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           cy={center}
           transform={`rotate(${rotation} ${center} ${center})`}
           strokeLinecap="butt"
-          opacity={0.45}
+          opacity={0.7}
         />
       );
     });
@@ -7381,7 +7409,7 @@ export default function App() {
           if (current.timeRemaining <= 0) {
             if (settings.overtimeType === 'drain') {
               const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
-                .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
+                .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && !act.countUp && typeof act.timeRemaining === 'number' && act.timeRemaining > 0);
 
               if (donors.length > 0) {
                 const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
@@ -7456,7 +7484,8 @@ export default function App() {
 
   // Main timer loop - runs for session mode OR when daily activities are active OR during flowmodoro break
   useEffect(() => {
-    const hasActiveDailyActivity = currentMode === 'daily' && dailyActivities.some(activity => activity.isActive);
+    // Consider both boolean isActive and status flags for daily activity activeness
+    const hasActiveDailyActivity = currentMode === 'daily' && dailyActivities.some(activity => activity.isActive || activity.status === 'active' || activity.status === 'overtime');
     const hasActiveFlowmodoroBreak = flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
     const shouldRunTimer = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
     
@@ -7482,7 +7511,8 @@ export default function App() {
   // Handle returning to the tab
   useEffect(() => {
     const handleVisibilityChange = () => {
-      const hasActiveDailyActivity = currentMode === 'daily' && dailyActivities.some(activity => activity.isActive);
+      // Consider both boolean isActive and status flags for daily activity activeness
+      const hasActiveDailyActivity = currentMode === 'daily' && dailyActivities.some(activity => activity.isActive || activity.status === 'active' || activity.status === 'overtime');
       const hasActiveFlowmodoroBreak = flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
       const shouldHandleTick = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
       
@@ -7496,67 +7526,70 @@ export default function App() {
           // Temporarily apply catch-up by advancing anchor and running the same logic deltaSec times in batch
           lastTickTimestampRef.current = now;
           tickRemainderMsRef.current = deltaMs - (deltaSec * 1000);
-          // Process catch-up by simulating a single batched tick
+          // Process catch-up by simulating a batched tick that can advance across activities
+          let postCursorIndex = currentActivityIndex;
           setActivities(prev => {
             let newActivities = [...prev];
             let secondsToProcess = deltaSec;
+            let cursorIndex = currentActivityIndex;
             while (secondsToProcess > 0) {
-              const current = newActivities[currentActivityIndex];
+              const current = newActivities[cursorIndex];
               if (!current) break;
               if (current.countUp) {
-                current.timeRemaining += secondsToProcess;
+                current.timeRemaining = (current.timeRemaining || 0) + secondsToProcess;
                 secondsToProcess = 0;
               } else {
-                if (current.timeRemaining > 0) {
+                if ((current.timeRemaining || 0) > 0) {
                   const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
                   current.timeRemaining -= timeToTake;
                   secondsToProcess -= timeToTake;
                 }
-                if (current.timeRemaining <= 0) {
+                if ((current.timeRemaining || 0) <= 0) {
                   if (settings.overtimeType === 'drain') {
                     const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
-                      .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && act.timeRemaining > 0);
+                      .filter(act => act.originalIndex !== cursorIndex && !act.isLocked && !act.isCompleted && !act.countUp && typeof act.timeRemaining === 'number' && act.timeRemaining > 0);
                     if (donors.length > 0) {
                       const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
                       const donorToDrain = donors[donorIndex];
-                      newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
+                      newActivities[donorToDrain.originalIndex].timeRemaining = (newActivities[donorToDrain.originalIndex].timeRemaining || 0) - 1;
                     }
-                    current.timeRemaining -= 1;
+                    current.timeRemaining = (current.timeRemaining || 0) - 1;
                     secondsToProcess -= 1;
                   } else if (settings.overtimeType === 'postpone') {
-                    current.timeRemaining -= secondsToProcess;
+                    current.timeRemaining = (current.timeRemaining || 0) - secondsToProcess;
                     secondsToProcess = 0;
-                  } else {
+                  } else { // 'none' -> complete and advance
                     if (!current.isCompleted) {
                       const plannedSec = (!current.countUp) ? Math.max(0, Math.round((Number(current.duration || 0)) * 60)) : 0;
                       let elapsedSec = 0;
-                      if (current.countUp) {
-                        elapsedSec = Math.max(0, current.timeRemaining || 0);
+                      const tr2 = typeof current.timeRemaining === 'number' ? current.timeRemaining : plannedSec;
+                      if (tr2 >= 0) {
+                        elapsedSec = Math.max(0, plannedSec - tr2);
                       } else {
-                        const tr2 = typeof current.timeRemaining === 'number' ? current.timeRemaining : plannedSec;
-                        if (tr2 >= 0) {
-                          elapsedSec = Math.max(0, plannedSec - tr2);
-                        } else {
-                          elapsedSec = plannedSec + Math.abs(tr2);
-                        }
+                        elapsedSec = plannedSec + Math.abs(tr2);
                       }
                       current.completedElapsedSeconds = Math.round(elapsedSec);
                       current.isCompleted = true;
-                      const nextIndex = newActivities.findIndex(act => !act.isCompleted);
-                      if (nextIndex !== -1) {
-                        setCurrentActivityIndex(nextIndex);
-                      } else {
-                        setIsTimerActive(false);
-                        try { localStorage.removeItem('timeSliceSessionState'); } catch {}
-                      }
                     }
-                    secondsToProcess = 0;
+                    const nextIndex = newActivities.findIndex(act => !act.isCompleted);
+                    if (nextIndex !== -1) {
+                      cursorIndex = nextIndex;
+                      postCursorIndex = nextIndex;
+                    } else {
+                      setIsTimerActive(false);
+                      try { localStorage.removeItem('timeSliceSessionState'); } catch {}
+                      secondsToProcess = 0;
+                    }
                   }
                 }
               }
             }
             return newActivities;
           });
+          // Reflect the potentially advanced cursor after batch catch-up
+          if (typeof postCursorIndex === 'number' && postCursorIndex !== currentActivityIndex) {
+            setCurrentActivityIndex(postCursorIndex);
+          }
           // Also advance flowmodoro if applicable
           if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
             setFlowmodoroState(prevFlow => {
@@ -10574,7 +10607,7 @@ export default function App() {
                   className="h-full flex items-center justify-center text-white font-medium text-sm transition-all duration-200 pointer-events-none"
                   style={{ width: `${activity.percentage}%`, backgroundColor: activity.color }}
                 >
-                  {settings.showAllocationPercentage && activity.percentage > 10 && `${Math.round(activity.percentage)}%`}
+                  {settings.showAllocationPercentage && activity.percentage > 10 && (() => { const p = activity.percentage || 0; if (p === 0) return '0%'; const display = Math.max(1, Math.ceil(p)); return `${display}%`; })()}
                 </div>
               ))}
               {activities.filter(activity => !activity.countUp).slice(0, -1).map((_, index) => {
