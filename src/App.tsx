@@ -3021,6 +3021,8 @@ interface AddActivityModalProps {
     tags?: string[]
   ) => void;
   templates: ActivityTemplate[];
+  // Existing colors from session and daily to avoid collisions
+  existingColors?: string[];
   // Save template with category/tags as well
   onSaveTemplate: (name: string, color: string, category?: string, tags?: string[]) => void;
   // Existing options and adders
@@ -3033,7 +3035,7 @@ interface AddActivityModalProps {
   onAddCustomTag?: (name: string) => void;
 }
 
-const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTemplate, customCategories = [], customTags = [], onAddCategory, rpgTags = [], onAddRPGTag, onAddCustomTag }: AddActivityModalProps) => {
+const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], existingColors = [], onSaveTemplate, customCategories = [], customTags = [], onAddCategory, rpgTags = [], onAddRPGTag, onAddCustomTag }: AddActivityModalProps) => {
   // Utility: generate a color far from existing hues (avoid collisions)
   const pickUniqueColor = (existing: string[]) => {
     // Extract hues; if HSL strings, parse hue; else random
@@ -3090,18 +3092,18 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
   const handleAdd = () => {
     let name = activityName.trim();
     // Prefer a distinct color different from existing activities (daily + session)
-    const existingColors: string[] = [
-      ...dailyActivities.map(a => a.color as string),
-      ...activities.map(a => a.color as string),
-    ].filter(Boolean);
-    let color = pickUniqueColor(existingColors);
+    const existingColorsList: string[] = (existingColors || []).filter(Boolean);
+    let color = pickUniqueColor(existingColorsList);
     let timeInSeconds = 0;
+    // Prepare effective category/tags to pass to onAdd without relying on async setState
+    let effectiveCategory: string | undefined = selectedCategory;
+    let effectiveTags: string[] = selectedTagIds;
     
     if (selectedTemplate) {
       name = selectedTemplate.name;
       color = selectedTemplate.color; // ✅ Use template's saved color (like UI test 5)
-      if (selectedTemplate.category) setSelectedCategory(selectedTemplate.category);
-      if (selectedTemplate.tags) setSelectedTagIds(selectedTemplate.tags);
+      if (selectedTemplate.category) effectiveCategory = selectedTemplate.category;
+      if (selectedTemplate.tags) effectiveTags = selectedTemplate.tags;
     } else if (!name) {
       name = "New Activity";
     }
@@ -3110,7 +3112,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
       timeInSeconds = (presetMinutes * 60) + presetSeconds;
     }
     
-  onAdd(name, color, timeInSeconds, useCountUp, selectedCategory, selectedTagIds);
+  onAdd(name, color, timeInSeconds, useCountUp, effectiveCategory, effectiveTags);
     setActivityName("");
     setSelectedTemplate(null);
     setShowTemplates(false);
@@ -11230,6 +11232,10 @@ export default function App() {
           isOpen={addActivityModalState.isOpen}
           onClose={() => setAddActivityModalState({ isOpen: false })}
           onAdd={handleAddActivityWithName}
+          existingColors={[
+            ...activities.map(a => String(a.color)).filter(Boolean),
+            ...dailyActivities.map(a => String(a.color)).filter(Boolean),
+          ]}
           templates={activityTemplates}
           onSaveTemplate={saveActivityTemplate}
           customCategories={customCategories}
