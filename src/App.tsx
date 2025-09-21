@@ -2004,7 +2004,8 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
           }
           return (
             <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full relative last:border-r-0">
-              <div className="h-full" style={{ opacity: inOvertime && !isOvertimeSegment ? 0.25 : 0.35, backgroundColor: activity.color }} />
+              {/* During overtime, make the overtime segment background fully colorful while others stay dimmed */}
+              <div className="h-full" style={{ opacity: inOvertime ? (isOvertimeSegment ? 0.95 : 0.25) : 0.35, backgroundColor: activity.color }} />
               <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full absolute top-0 left-0" />
             </div>
           );
@@ -2094,13 +2095,18 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   const strokeWidth = 12;
   const center = size / 2;
   const radius = center - strokeWidth;
-  const activityRadius = radius - strokeWidth - 4;
+  // Add a little more space between outer and inner rings
+  const activityRadius = radius - strokeWidth - 8;
   const circumference = 2 * Math.PI * radius;
   const activityCircumference = 2 * Math.PI * activityRadius;
   const lastShownRef = useRef<Record<string, number>>({});
   const allocationStrokeWidth = 4; // thinner ring for planned allocation overview
   const allocationRadius = radius + (strokeWidth / 2) + 2; // stays within SVG bounds (size/2)
   const allocationCircumference = 2 * Math.PI * allocationRadius;
+  // Thick black outer overall progress ring
+  const outerBlackStrokeWidth = 16; // thicker than colored segments
+  const outerBlackRadius = radius; // share the same radius; colored segments will sit on top
+  const outerBlackCircumference = 2 * Math.PI * outerBlackRadius;
   
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
@@ -2460,6 +2466,21 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           r={activityRadius}
           cx={center}
           cy={center}
+        />
+
+        {/* Thick black overall progress ring (drawn behind colored segments) */}
+        <circle
+          stroke="#0f172a"
+          fill="transparent"
+          strokeWidth={outerBlackStrokeWidth}
+          strokeDasharray={outerBlackCircumference}
+          strokeDashoffset={outerBlackCircumference - (totalProgress / 100) * outerBlackCircumference}
+          strokeLinecap="round"
+          r={outerBlackRadius}
+          cx={center}
+          cy={center}
+          transform={`rotate(-90 ${center} ${center})`}
+          opacity={0.95}
         />
 
         {/* Segment divider lines for segmented style */}
@@ -3013,6 +3034,35 @@ interface AddActivityModalProps {
 }
 
 const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTemplate, customCategories = [], customTags = [], onAddCategory, rpgTags = [], onAddRPGTag, onAddCustomTag }: AddActivityModalProps) => {
+  // Utility: generate a color far from existing hues (avoid collisions)
+  const pickUniqueColor = (existing: string[]) => {
+    // Extract hues; if HSL strings, parse hue; else random
+    const hues = existing
+      .map(c => {
+        const m = /hsl\((\d+),\s*\d+%\s*,\s*\d+%\)/.exec(String(c));
+        return m ? Number(m[1]) : null;
+      })
+      .filter((h): h is number => h !== null)
+      .sort((a, b) => a - b);
+    if (hues.length === 0) {
+      const h = Math.floor(Math.random() * 360);
+      return `hsl(${h}, 65%, 50%)`;
+    }
+    // Find the largest gap on the circle
+    let bestGap = -1;
+    let bestStart = 0;
+    for (let i = 0; i < hues.length; i++) {
+      const a = hues[i];
+      const b = i === hues.length - 1 ? hues[0] + 360 : hues[i + 1];
+      const gap = b - a;
+      if (gap > bestGap) {
+        bestGap = gap;
+        bestStart = a;
+      }
+    }
+    const h = Math.round((bestStart + bestGap / 2) % 360);
+    return `hsl(${h}, 65%, 50%)`;
+  };
   const [activityName, setActivityName] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState<ActivityTemplate | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
@@ -3039,7 +3089,12 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], onSaveTempla
 
   const handleAdd = () => {
     let name = activityName.trim();
-    let color = `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`;
+    // Prefer a distinct color different from existing activities (daily + session)
+    const existingColors: string[] = [
+      ...dailyActivities.map(a => a.color as string),
+      ...activities.map(a => a.color as string),
+    ].filter(Boolean);
+    let color = pickUniqueColor(existingColors);
     let timeInSeconds = 0;
     
     if (selectedTemplate) {
@@ -5963,6 +6018,8 @@ export default function App() {
       showMainProgress: true,
       showOverallTime: true,
       showEndTime: true,
+      showDualEndTime: false, // Show Active/Session predicted end side-by-side
+      showSessionEndReport: true, // Show end-of-session report modal
       showActivityTimer: true,
       showActivityProgress: false,
       activityProgressType: 'drain',
@@ -6766,6 +6823,9 @@ export default function App() {
             color: template.color,
             duration: duration,
             percentage: Math.round(percentage * 10) / 10,
+            isAllDay: !!template.isAllDay,
+            startTime: template.startTime,
+            endTime: template.endTime,
             status: 'scheduled',
             isActive: false,
             timeSpent: 0,
@@ -7782,9 +7842,20 @@ export default function App() {
 
   const getPredictedEndTime = () => {
     if (!isTimerActive) return "";
+    // Session end based on remaining planned time
     const totalRemainingSeconds = getTotalRemainingTime();
-    const endTime = new Date(Date.now() + totalRemainingSeconds * 1000);
-    return endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+    const sessionEnd = new Date(Date.now() + totalRemainingSeconds * 1000);
+    const sessionStr = sessionEnd.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+
+    if (!settings.showDualEndTime) return sessionStr;
+    // Active activity predicted end (if current activity is countdown-based)
+    const act = activities[currentActivityIndex];
+    let activeStr = "--:--";
+    if (act && !act.countUp && !act.isCompleted && typeof act.timeRemaining === 'number' && act.timeRemaining > 0) {
+      const activeEnd = new Date(Date.now() + act.timeRemaining * 1000);
+      activeStr = activeEnd.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+    return `${activeStr} / ${sessionStr}`;
   };
 
   // Template-related activity creation functions
@@ -7905,8 +7976,26 @@ export default function App() {
       }
     }
 
-    // Use provided color or generate random one (like UI test 5)
-    const activityColor = customColor || `hsl(${Math.floor(Math.random() * 360)}, 60%, 50%)`;
+    // Use provided color or generate a unique one far from existing session colors
+    const sessionExistingColors: string[] = activities.map(a => String(a.color)).filter(Boolean);
+    const activityColor = customColor || (() => {
+      // Reuse pickUniqueColor defined in AddActivityModal scope if available, else inline fallback
+      const parseHue = (c: string) => {
+        const m = /hsl\((\d+),\s*\d+%\s*,\s*\d+%\)/.exec(c);
+        return m ? Number(m[1]) : null;
+      };
+      const hues = sessionExistingColors.map(parseHue).filter((h): h is number => h !== null).sort((a, b) => a - b);
+      if (hues.length === 0) return `hsl(${Math.floor(Math.random()*360)}, 65%, 50%)`;
+      let bestGap = -1, bestStart = 0;
+      for (let i = 0; i < hues.length; i++) {
+        const a = hues[i];
+        const b = i === hues.length - 1 ? hues[0] + 360 : hues[i + 1];
+        const gap = b - a;
+        if (gap > bestGap) { bestGap = gap; bestStart = a; }
+      }
+      const h = Math.round((bestStart + bestGap/2) % 360);
+      return `hsl(${h}, 65%, 50%)`;
+    })();
 
     const newActivity = {
       id: Date.now().toString(),
@@ -7958,7 +8047,23 @@ export default function App() {
         'hsl(320, 60%, 50%)', // pink
         'hsl(250, 70%, 50%)'  // indigo
       ];
-      const activityColor = color || colorPalette[Math.floor(Math.random() * colorPalette.length)];
+      const activityColor = color || (() => {
+        const existing = dailyActivities.map(a => String(a.color)).filter(Boolean);
+        const parse = (c: string) => {
+          const m = /hsl\((\d+),\s*\d+%\s*,\s*\d+%\)/.exec(c);
+          return m ? Number(m[1]) : null;
+        };
+        const hues = existing.map(parse).filter((h): h is number => h !== null).sort((a,b)=>a-b);
+        if (hues.length === 0) return colorPalette[Math.floor(Math.random()*colorPalette.length)];
+        let bestGap=-1, bestStart=0;
+        for (let i=0;i<hues.length;i++){
+          const a=hues[i];
+          const b=i===hues.length-1? hues[0]+360 : hues[i+1];
+          const gap=b-a; if(gap>bestGap){bestGap=gap; bestStart=a;}
+        }
+        const h=Math.round((bestStart+bestGap/2)%360);
+        return `hsl(${h}, 65%, 50%)`;
+      })();
       
       // Smart duration based on preset time or default
       let smartDuration = presetTime > 0 ? Math.round(presetTime / 60) : 60; // Convert seconds to minutes or default 1 hour
@@ -7981,7 +8086,7 @@ export default function App() {
         tags: tags && tags.length ? tags : [],
       };
       
-      setDailyActivities(prev => [...prev, newActivity]);
+  setDailyActivities(prev => [...prev, newActivity]);
       console.log('Added daily activity via modal:', newActivity);
     } else {
       // Session mode - use existing addActivity function
@@ -8018,7 +8123,23 @@ export default function App() {
       'hsl(320, 60%, 50%)', // pink
       'hsl(250, 70%, 50%)'  // indigo
     ];
-    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    const randomColor = (() => {
+      const existing = dailyActivities.map(a => String(a.color)).filter(Boolean);
+      const parse = (c: string) => {
+        const m = /hsl\((\d+),\s*\d+%\s*,\s*\d+%\)/.exec(c);
+        return m ? Number(m[1]) : null;
+      };
+      const hues = existing.map(parse).filter((h): h is number => h !== null).sort((a,b)=>a-b);
+      if (hues.length === 0) return colors[Math.floor(Math.random()*colors.length)];
+      let bestGap=-1, bestStart=0;
+      for (let i=0;i<hues.length;i++){
+        const a=hues[i];
+        const b=i===hues.length-1? hues[0]+360 : hues[i+1];
+        const gap=b-a; if(gap>bestGap){bestGap=gap; bestStart=a;}
+      }
+      const h=Math.round((bestStart+bestGap/2)%360);
+      return `hsl(${h}, 65%, 50%)`;
+    })();
     
     const percentage = (smartDuration / (24 * 60)) * 100;
     
@@ -9066,6 +9187,48 @@ export default function App() {
     return Math.min(100, (totalSpentMinutes / totalPlannedMinutes) * 100);
   };
 
+  // Session End Report
+  const [sessionReportOpen, setSessionReportOpen] = useState(false);
+  const [lastSessionReport, setLastSessionReport] = useState<any>(null);
+
+  const computeSessionReport = useCallback(() => {
+    const rows = activities.map(a => {
+      const planned = getAllocatedSeconds(a);
+      let actual = 0;
+      if (a.isCompleted && Number.isFinite(a.completedElapsedSeconds)) {
+        actual = Math.max(0, a.completedElapsedSeconds || 0);
+      } else if (a.countUp) {
+        actual = Math.max(0, a.timeRemaining || 0);
+      } else if (typeof a.timeRemaining === 'number') {
+        const tr = a.timeRemaining;
+        actual = tr >= 0 ? Math.max(0, planned - tr) : planned + Math.abs(tr);
+      }
+      const delta = actual - planned;
+      const pct = planned > 0 ? (actual / planned) * 100 : 0;
+      return { id: a.id, name: a.name, planned, actual, delta, pct };
+    });
+    const totals = rows.reduce((acc, r) => {
+      acc.planned += r.planned; acc.actual += r.actual; return acc;
+    }, { planned: 0, actual: 0 });
+    const totalsDelta = totals.actual - totals.planned;
+    const totalsPct = totals.planned > 0 ? (totals.actual / totals.planned) * 100 : 0;
+    return { rows, totals: { ...totals, delta: totalsDelta, pct: totalsPct } };
+  }, [activities]);
+
+  useEffect(() => {
+    // When timer transitions from active to not active and it's because session finished, show report
+    if (!isTimerActive && settings.showSessionEndReport) {
+      // Heuristic: all non-countUp activities completed or no remaining time
+      const remaining = activities.reduce((s, a) => s + (a.countUp ? 0 : Math.max(0, a.timeRemaining || 0)), 0);
+      const allDone = activities.every(a => a.countUp || a.isCompleted || (typeof a.timeRemaining === 'number' && a.timeRemaining <= 0));
+      if (allDone || remaining === 0) {
+        const report = computeSessionReport();
+        setLastSessionReport(report);
+        setSessionReportOpen(true);
+      }
+    }
+  }, [isTimerActive, settings.showSessionEndReport, activities, computeSessionReport]);
+
   // Helper function to calculate remaining time for incomplete activities
   const getRemainingPlannedMinutes = () => {
     return dailyActivities.reduce((sum, activity) => {
@@ -9354,6 +9517,44 @@ export default function App() {
     </div>
   ) : (
     <div className="max-w-4xl mx-auto px-4 sm:px-6">
+      {sessionReportOpen && lastSessionReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-semibold">Session Report</h3>
+              <button className="text-slate-600 hover:text-slate-900" onClick={() => setSessionReportOpen(false)}>✕</button>
+            </div>
+            <div className="text-sm text-slate-600 mb-3">Planned vs Actual with deltas</div>
+            <div className="max-h-64 overflow-auto border rounded">
+              <div className="grid grid-cols-4 gap-2 p-2 text-xs font-semibold bg-slate-50">
+                <div>Activity</div>
+                <div className="text-right">Planned</div>
+                <div className="text-right">Actual</div>
+                <div className="text-right">Δ (min)</div>
+              </div>
+              {lastSessionReport.rows.map(r => (
+                <div key={r.id} className="grid grid-cols-4 gap-2 p-2 text-xs border-t">
+                  <div className="truncate" title={r.name}>{r.name}</div>
+                  <div className="text-right">{Math.round(r.planned/60)}</div>
+                  <div className="text-right">{Math.round(r.actual/60)}</div>
+                  <div className={`text-right ${r.delta>=0?'text-emerald-600':'text-red-600'}`}>{Math.round(r.delta/60)}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center justify-between text-sm">
+              <div className="font-medium">Totals</div>
+              <div className="text-right">
+                <div>Planned: {Math.round(lastSessionReport.totals.planned/60)} min</div>
+                <div>Actual: {Math.round(lastSessionReport.totals.actual/60)} min</div>
+                <div className={`${lastSessionReport.totals.delta>=0?'text-emerald-700':'text-red-700'}`}>Δ: {Math.round(lastSessionReport.totals.delta/60)} min ({Math.round(lastSessionReport.totals.pct)}%)</div>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setSessionReportOpen(false)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
       <Card className="overflow-hidden">
         <CardHeader>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
@@ -9434,6 +9635,14 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <Label htmlFor="show-end">Show predicted end time</Label>
                   <Switch id="show-end" checked={settings.showEndTime} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showEndTime: checked }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-dual-end">Show Active/Session end</Label>
+                  <Switch id="show-dual-end" checked={settings.showDualEndTime} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showDualEndTime: checked }))} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-session-report">Show end-of-session report</Label>
+                  <Switch id="show-session-report" checked={settings.showSessionEndReport} onCheckedChange={(checked) => setSettings((prev) => ({ ...prev, showSessionEndReport: checked }))} />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label htmlFor="show-activity-timer">Show activity timer display</Label>
@@ -9982,6 +10191,40 @@ export default function App() {
                                 return element;
                               });
                             })()}
+
+                            {/* Overlay hard time windows (if any) as thin bars across full timeline */}
+                            {(() => {
+                              // Use activityTemplates to find time windows
+                              const windows = activityTemplates
+                                .filter(t => t.startTime && t.endTime)
+                                .map(t => {
+                                  const [sh, sm] = t.startTime!.split(':').map(Number);
+                                  const [eh, em] = t.endTime!.split(':').map(Number);
+                                  const startMin = sh * 60 + sm;
+                                  const endMin = eh * 60 + em;
+                                  const dayStart = 30; // 00:30
+                                  const dayEnd = 24 * 60 + 30; // next day 00:30
+                                  // Normalize to [dayStart, dayEnd]
+                                  const normalize = (m:number)=>{
+                                    let x = m - dayStart; if (x < 0) x += 24*60; return x;
+                                  };
+                                  let start = normalize(startMin);
+                                  let end = normalize(endMin);
+                                  let spansMidnight = false;
+                                  if (t.startTime! > t.endTime!) spansMidnight = true;
+                                  return { name: t.name, color: t.color, start, end, spansMidnight };
+                                });
+                              return windows.map((w, i) => {
+                                const total = 24 * 60; // minutes from 00:30 to next 00:30
+                                const leftPct = (w.start / total) * 100;
+                                const widthPct = w.spansMidnight ? ((total - w.start) / total) * 100 : ((w.end - w.start) / total) * 100;
+                                return (
+                                  <div key={`win-${i}`} className="absolute top-0 h-full z-10 pointer-events-none" style={{ left: `${leftPct}%`, width: `${widthPct}%` }}>
+                                    <div className="h-full opacity-10" style={{ backgroundColor: w.color }} title={`${w.name} window`} />
+                                  </div>
+                                );
+                              });
+                            })()}
                             
                             {/* Unscheduled Free Time Section */}
                             <div 
@@ -9990,12 +10233,12 @@ export default function App() {
                                 left: `${plannedPercentageOfDay}%`, 
                                 width: `${unscheduledPercentage}%` 
                               }}
-                              title={`Free time: ${Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h until 0:30`}
+                              title={`Free time: ${Math.round((totalRemainingMinutes - allPlannedMinutes) / 60 * 10) / 10}h until 0:30`}
                             >
                               <div className="text-center">
                                 <div className="font-medium">Free Time</div>
                                 <div className="text-xs opacity-75">
-                                  {Math.round((totalRemainingMinutes - totalPlannedMinutes) / 60 * 10) / 10}h unscheduled
+                                  {Math.round((totalRemainingMinutes - allPlannedMinutes) / 60 * 10) / 10}h unscheduled
                                 </div>
                               </div>
                             </div>
