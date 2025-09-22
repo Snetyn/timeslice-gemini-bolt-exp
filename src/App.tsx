@@ -39,6 +39,8 @@ interface Activity {
   softDeadlineTime?: string; // HH:MM 24h local time
   // Early complete: marked done before reaching planned duration (daily-only)
   earlyCompleted?: boolean;
+  // Mark as priority/important
+  priority?: boolean;
 }
 
 interface ActivityTemplate {
@@ -6011,6 +6013,19 @@ export default function App() {
     }
     return 0;
   });
+  // Freeze the session plan (allocations/timeRemaining) once a session starts, so exiting doesn't reset progress
+  const [sessionPlanFrozen, setSessionPlanFrozen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('timeSliceSessionState');
+      if (saved) {
+        const sessionState = JSON.parse(saved);
+        return Boolean(sessionState.sessionPlanFrozen);
+      }
+    } catch (e) {
+      // ignore
+    }
+    return false;
+  });
   const [showSettings, setShowSettings] = useState(false);
   // Removed colorPickerState - using simple random colors instead
   // Removed favoriteColors state - using simple random colors instead
@@ -7124,13 +7139,14 @@ export default function App() {
         isTimerActive,
         isPaused,
         currentActivityIndex,
-        lastActiveTimestamp: isTimerActive && !isPaused ? Date.now() : null
+        lastActiveTimestamp: isTimerActive && !isPaused ? Date.now() : null,
+        sessionPlanFrozen
       };
       localStorage.setItem('timeSliceSessionState', JSON.stringify(sessionState));
     } catch (e) {
       console.error('Failed to save session state to localStorage:', e);
     }
-  }, [isTimerActive, isPaused, currentActivityIndex]);
+  }, [isTimerActive, isPaused, currentActivityIndex, sessionPlanFrozen]);
 
   // Save flowmodoro state to localStorage
   useEffect(() => {
@@ -7421,7 +7437,8 @@ export default function App() {
   const activityPercentages = activities.map(a => a.percentage).join(',');
   useEffect(() => {
     console.log('Duration sync effect triggered:', { isTimerActive, totalSessionMinutes, activityPercentages });
-    if (isTimerActive) return;
+    // Don't overwrite durations while a session is in-progress or when plan is frozen from an exited session
+    if (isTimerActive || sessionPlanFrozen) return;
     const totalMins = calculateTotalSessionMinutes();
     const totalSeconds = totalMins * 60;
 
@@ -7463,7 +7480,7 @@ export default function App() {
       });
       return next;
     });
-  }, [activityPercentages, totalSessionMinutes, isTimerActive, calculateTotalSessionMinutes]);
+  }, [activityPercentages, totalSessionMinutes, isTimerActive, sessionPlanFrozen, calculateTotalSessionMinutes]);
 
   const handleTimerTick = useCallback(() => {
     // Check for daily flowmodoro reset
@@ -7481,38 +7498,6 @@ export default function App() {
       }));
     }
 
-    // Handle flowmodoro break countdown first
-    if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
-      const now = Date.now();
-      const last = lastTickTimestampRef.current || now;
-      let diffMs = now - last;
-      // Add remainder from previous cycles to avoid losing sub-second time
-      diffMs += tickRemainderMsRef.current || 0;
-      const elapsedSeconds = Math.floor(diffMs / 1000);
-      tickRemainderMsRef.current = diffMs - (elapsedSeconds * 1000);
-      // Advance anchor by the processed chunk
-      lastTickTimestampRef.current = now;
-
-      if (elapsedSeconds > 0) {
-        setFlowmodoroState(prev => {
-          const newBreakTimeRemaining = Math.max(0, prev.breakTimeRemaining - elapsedSeconds);
-          if (newBreakTimeRemaining <= 0) {
-            return {
-              ...prev,
-              isOnBreak: false,
-              breakTimeRemaining: 0,
-              initialBreakDuration: 0
-            };
-          }
-          return {
-            ...prev,
-            breakTimeRemaining: newBreakTimeRemaining
-          };
-        });
-      }
-      return; // Don't process regular timer during break
-    }
-
     // Calculate elapsed time with smoothing to avoid 2-second jumps from minor drift
   const nowMs = Date.now();
   const last = lastTickTimestampRef.current || nowMs;
@@ -7525,6 +7510,17 @@ export default function App() {
   lastTickTimestampRef.current = nowMs;
 
     if (elapsedSeconds <= 0) return;
+
+    // Flowmodoro countdown runs concurrently with session/daily
+    if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
+      setFlowmodoroState(prev => {
+        const newBreakTimeRemaining = Math.max(0, prev.breakTimeRemaining - elapsedSeconds);
+        if (newBreakTimeRemaining <= 0) {
+          return { ...prev, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0 };
+        }
+        return { ...prev, breakTimeRemaining: newBreakTimeRemaining };
+      });
+    }
 
     // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
     // This works for both session and daily modes
@@ -8921,13 +8917,32 @@ export default function App() {
       console.log('Starting session with activities:', activities);
       setIsTimerActive(true);
       setIsPaused(false);
-      // Capture baseline allocated seconds at session start for stable progress calculations
-      try {
-        const baseline = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
-        initialTotalAllocatedRef.current = baseline;
-        console.log('Session baseline (allocated seconds):', baseline);
-      } catch (e) {
-        initialTotalAllocatedRef.current = 0;
+      // If fresh start, freeze plan and reset snapshots; if resuming, initialize snapshot to current elapsed
+      if (!sessionPlanFrozen) {
+        setSessionPlanFrozen(true);
+        try { sharedElapsedSnapshotRef.current = {}; } catch {}
+        try {
+          const baseline = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
+          initialTotalAllocatedRef.current = baseline;
+          console.log('Session baseline (allocated seconds):', baseline);
+        } catch (e) {
+          initialTotalAllocatedRef.current = 0;
+        }
+      } else {
+        // Resuming: compute totals per sharedId so daily sync continues monotonic
+        const byShared: Record<string, number> = {};
+        activities.forEach(sa => {
+          if (!sa.sharedId) return;
+          const durationSec = Math.max(0, (sa.duration || 0) * 60);
+          let elapsed = 0;
+          if (sa.countUp) elapsed = Math.max(0, sa.timeRemaining || 0);
+          else if (typeof sa.timeRemaining === 'number') {
+            const tr = sa.timeRemaining;
+            elapsed = tr >= 0 ? Math.max(0, durationSec - tr) : (durationSec + Math.abs(tr));
+          }
+          byShared[sa.sharedId] = (byShared[sa.sharedId] || 0) + Math.max(0, Math.floor(elapsed));
+        });
+        sharedElapsedSnapshotRef.current = byShared;
       }
       const firstIncompleteIndex = activities.findIndex(a => !a.isCompleted);
       const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
@@ -8946,6 +8961,7 @@ export default function App() {
     setIsTimerActive(false);
     setIsPaused(false);
     setVaultTime(0);
+    setSessionPlanFrozen(false);
   initialTotalAllocatedRef.current = 0; // clear baseline on reset
     const totalMins = calculateTotalSessionMinutes();
     setActivities((prev) =>
@@ -9007,11 +9023,9 @@ export default function App() {
         // Preserve this elapsed for rendering after completion
         const preserved = Math.round(elapsedSec);
 
-        // Vault only meaningful positive remaining for countdown; for count-up, don't siphon elapsed time to vault
-        if (!act.countUp) {
-          // Only vault positive remaining
-          timeToVault = Math.max(0, act.timeRemaining || 0);
-        }
+        // Do NOT auto-vault early remaining when marking complete.
+        // The remaining time stays unused; vault is only changed via explicit Borrow/Transfer.
+        timeToVault = 0;
 
         // For completed activities:
         // - freeze timeRemaining to 0 for countdown (already consumed)
@@ -9039,6 +9053,7 @@ export default function App() {
     const allCompleted = updatedActivities.every(a => a.isCompleted);
     if (allCompleted) {
       setIsTimerActive(false);
+      setSessionPlanFrozen(false);
       // Clear session state when all activities are completed
       try {
         localStorage.removeItem('timeSliceSessionState');
@@ -9054,6 +9069,7 @@ export default function App() {
         setCurrentActivityIndex(nextIndex);
       } else {
         setIsTimerActive(false);
+        setSessionPlanFrozen(false);
         // Clear session state when no more activities
         try {
           localStorage.removeItem('timeSliceSessionState');
@@ -9062,6 +9078,13 @@ export default function App() {
         }
       }
     }
+  };
+
+  // Exit session without resetting progress; preserves remaining times for resume
+  const exitSession = () => {
+    setSessionPlanFrozen(true);
+    setIsPaused(false);
+    setIsTimerActive(false);
   };
 
   const handleBorrowTime = (amountInSeconds) => {
@@ -9344,6 +9367,10 @@ export default function App() {
                 <Icon name="rotateCcw" className="h-3 w-3 mr-1" />
                 Reset
               </Button>
+              <Button variant="outline" size="sm" onClick={exitSession} className="h-7 w-14 sm:h-8 sm:w-16 text-xs" title="Exit (preserve progress)">
+                <Icon name="square" className="h-3 w-3 mr-1" />
+                Exit
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -9457,7 +9484,7 @@ export default function App() {
                   <div
                     key={activity.id}
                     className={`relative overflow-hidden flex items-center justify-between p-2 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
-                      } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'}`}
+                      } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'} ${activity.priority ? 'ring-1 ring-amber-300' : ''}`}
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
         {settings.showActivityProgress && (
@@ -9475,9 +9502,22 @@ export default function App() {
                     <div className="flex items-center space-x-2 z-10">
                       <input type="checkbox" className="h-4 w-4 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
                       <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activity.color }} />
-                      <span className="font-semibold text-sm">{activity.name}</span>
+                      <span className={`font-semibold text-sm ${activity.priority ? 'text-amber-700' : ''}`}>{activity.name}</span>
                     </div>
                     <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setActivities(prev => prev.map(a => a.id === activity.id ? { ...a, priority: !a.priority } : a));
+                        }}
+                        title={activity.priority ? 'Unmark priority' : 'Mark as priority'}
+                        className={`z-20 relative h-6 px-1 ${activity.priority ? 'text-amber-600' : 'text-slate-500'}`}
+                      >
+                        <span className="text-xs">★</span>
+                      </Button>
                       {settings.showActivityTime && (
                         <span className="text-xs font-mono z-10">
                           {activity.isCompleted
@@ -9534,9 +9574,18 @@ export default function App() {
                 <div className="text-right">Actual</div>
                 <div className="text-right">Δ (min)</div>
               </div>
-              {lastSessionReport.rows.map(r => (
-                <div key={r.id} className="grid grid-cols-4 gap-2 p-2 text-xs border-t">
-                  <div className="truncate" title={r.name}>{r.name}</div>
+              {lastSessionReport.rows
+                .slice()
+                .sort((a, b) => {
+                  const A = activities.find(x => x.id === a.id)?.priority ? 1 : 0;
+                  const B = activities.find(x => x.id === b.id)?.priority ? 1 : 0;
+                  return B - A; // priority first
+                })
+                .map(r => (
+                <div key={r.id} className={`grid grid-cols-4 gap-2 p-2 text-xs border-t ${activities.find(x => x.id === r.id)?.priority ? 'bg-amber-50' : ''}`}>
+                  <div className="truncate font-medium" title={r.name}>
+                    {activities.find(x => x.id === r.id)?.priority ? '★ ' : ''}{r.name}
+                  </div>
                   <div className="text-right">{Math.round(r.planned/60)}</div>
                   <div className="text-right">{Math.round(r.actual/60)}</div>
                   <div className={`text-right ${r.delta>=0?'text-emerald-600':'text-red-600'}`}>{Math.round(r.delta/60)}</div>
