@@ -3459,6 +3459,8 @@ const ActivityManagementPage = ({
   setCustomCategories,
   customTags,
   setCustomTags,
+  settings,
+  rpgTags,
 }) => {
   try {
     const [editingTemplate, setEditingTemplate] = useState<ActivityTemplate | null>(null);
@@ -9353,6 +9355,8 @@ export default function App() {
   setCustomCategories={setCustomCategories}
   customTags={customTags}
   setCustomTags={setCustomTags}
+  settings={settings}
+  rpgTags={rpgTags}
     />
   ) : currentPage === 'spider' ? (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
