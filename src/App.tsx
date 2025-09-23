@@ -3891,7 +3891,31 @@ const ActivityManagementPage = ({
                             className="w-3 h-3 sm:w-4 sm:h-4 rounded-full flex-shrink-0" 
                             style={{ backgroundColor: activity.color }}
                           />
-                          <span className="font-medium text-sm sm:text-base truncate">{activity.name}</span>
+                          <div className="min-w-0">
+                            <div className="font-medium text-sm sm:text-base truncate">{activity.name}</div>
+                            {settings.showTagChips && activity.tags && activity.tags.length > 0 && (
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                                {activity.tags.map((t, idx) => {
+                                  const tagObj = rpgTags?.find(rt => rt.id === t);
+                                  if (tagObj) {
+                                    return (
+                                      <span
+                                        key={idx}
+                                        className={`rounded-full border ${settings.compactTagChips ? 'px-1 py-0 text-[10px] leading-none' : 'px-1.5 py-0.5 text-[11px] leading-tight'}`}
+                                        style={{ backgroundColor: tagObj.color, color: '#fff', borderColor: 'rgba(0,0,0,0.1)' }}
+                                        title={tagObj.description ? `${tagObj.name} — ${tagObj.description}` : tagObj.name}
+                                      >
+                                        {tagObj.name}
+                                      </span>
+                                    );
+                                  }
+                                  return (
+                                    <span key={idx} className={`rounded-full bg-slate-100 text-slate-700 border border-slate-200 ${settings.compactTagChips ? 'px-1 py-0 text-[10px] leading-none' : 'px-1.5 py-0.5 text-[11px] leading-tight'}`}>#{String(t).toLowerCase()}</span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center space-x-1 sm:space-x-2 flex-shrink-0">
                           <Badge variant="secondary" className="text-xs px-1.5 py-0.5 sm:px-2.5 sm:py-0.5">
@@ -4677,6 +4701,8 @@ const ActivityManagementPage = ({
 // FlowmodoroActivity component that behaves like other activities
 const FlowmodoroActivity = ({ flowState, settings, onTakeBreak, onSkipBreak, onReset, isTimerActive, formatTime }) => {
   if (!settings.flowmodoroEnabled) return null;
+  // In 'drain' mode, hide the card when there's no earned time and not currently on a break
+  if (settings.flowmodoroMode === 'drain' && !flowState.isOnBreak && (flowState.availableRestTime || 0) <= 0) return null;
   
   const availableMinutes = Math.floor(flowState.availableRestTime / 60);
   const availableSeconds = flowState.availableRestTime % 60;
@@ -6049,8 +6075,10 @@ export default function App() {
       // Mobile optimization settings
       mobileZoomLevel: 'normal', // 'compact', 'normal', 'large'
       mobileCompactMode: false, // Show minimal UI for small screens
-      // Simplified Flowmodoro settings
-      flowmodoroEnabled: true,
+  // Simplified Flowmodoro settings
+  flowmodoroEnabled: true,
+  // Flowmodoro mode: 'postpone' pauses session/daily draining during a break; 'drain' keeps draining concurrently
+  flowmodoroMode: 'drain',
       flowmodoroRatio: 5, // 5:1 ratio (5 minutes work = 1 minute rest)
       flowmodoroMaxProgressMinutes: 30, // Time in minutes for progress to reach maximum (default 30 minutes)
       flowmodoroShowProgress: true, // Toggle for flowmodoro progress bar
@@ -6070,9 +6098,11 @@ export default function App() {
   // UI toggles
   showTimeAllocationPanel: true,
   showTagChips: true,
+  compactTagChips: false,
   showRolloverIndicators: true,
   showCircularAllocation: false,
   showDrainOverlay: false,
+  dailyShowElapsedDayOverlay: true,
     };
     try {
       const saved = localStorage.getItem('timeSliceSettings');
@@ -7553,8 +7583,12 @@ export default function App() {
       }
     }
 
+    // If we're on a Flowmodoro break in 'postpone' mode, pause activity draining entirely
+    const pauseForFlowBreak = settings.flowmodoroEnabled && settings.flowmodoroMode === 'postpone' && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+
     setActivities(prev => {
       if (elapsedSeconds <= 0) return prev;
+      if (pauseForFlowBreak) return prev;
 
       let newActivities = [...prev];
       let secondsToProcess = elapsedSeconds;
@@ -7700,6 +7734,10 @@ export default function App() {
             let newActivities = [...prev];
             let secondsToProcess = deltaSec;
             let cursorIndex = currentActivityIndex;
+            // Skip draining during postpone-mode flow break
+            const pauseForFlowBreak = settings.flowmodoroEnabled && settings.flowmodoroMode === 'postpone' && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+            if (pauseForFlowBreak) return newActivities;
+
             while (secondsToProcess > 0) {
               const current = newActivities[cursorIndex];
               if (!current) break;
@@ -8989,15 +9027,18 @@ export default function App() {
   };
 
   const selectRandomActivity = useCallback(() => {
-    const availableIndices = activities.reduce((acc, activity, index) => {
+    // Prefer priority/starred activities first; fall back to others
+    const prioritized: number[] = [];
+    const regular: number[] = [];
+    activities.forEach((activity, index) => {
       if (!activity.isCompleted && index !== currentActivityIndex) {
-        acc.push(index);
+        (activity.priority ? prioritized : regular).push(index);
       }
-      return acc;
-    }, []);
+    });
 
-    if (availableIndices.length > 0) {
-      const randomIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
+    const pool = prioritized.length > 0 ? prioritized : regular;
+    if (pool.length > 0) {
+      const randomIndex = pool[Math.floor(Math.random() * pool.length)];
       setCurrentActivityIndex(randomIndex);
     }
   }, [activities, currentActivityIndex]);
@@ -9023,9 +9064,14 @@ export default function App() {
         // Preserve this elapsed for rendering after completion
         const preserved = Math.round(elapsedSec);
 
-        // Do NOT auto-vault early remaining when marking complete.
-        // The remaining time stays unused; vault is only changed via explicit Borrow/Transfer.
-        timeToVault = 0;
+        // While session is running, auto-collect any leftover planned time into the vault (countdown only)
+        // Do not collect for count-up activities
+        if (isTimerActive && !act.countUp) {
+          const remaining = typeof act.timeRemaining === 'number' ? Math.max(0, act.timeRemaining) : 0;
+          if (remaining > 0) {
+            timeToVault += remaining;
+          }
+        }
 
         // For completed activities:
         // - freeze timeRemaining to 0 for countdown (already consumed)
@@ -9085,6 +9131,8 @@ export default function App() {
     setSessionPlanFrozen(true);
     setIsPaused(false);
     setIsTimerActive(false);
+    // Reset vault on exit so it doesn't carry to next session
+    setVaultTime(0);
   };
 
   const handleBorrowTime = (amountInSeconds) => {
@@ -9561,18 +9609,21 @@ export default function App() {
     <div className="max-w-4xl mx-auto px-4 sm:px-6">
       {sessionReportOpen && lastSessionReport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-xl p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-4 sm:p-5">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-semibold">Session Report</h3>
+              <div>
+                <h3 className="text-lg font-bold">Session Report</h3>
+                <div className="text-xs text-slate-500">Planned vs Actual (minutes) • Priority first</div>
+              </div>
               <button className="text-slate-600 hover:text-slate-900" onClick={() => setSessionReportOpen(false)}>✕</button>
             </div>
-            <div className="text-sm text-slate-600 mb-3">Planned vs Actual with deltas</div>
-            <div className="max-h-64 overflow-auto border rounded">
-              <div className="grid grid-cols-4 gap-2 p-2 text-xs font-semibold bg-slate-50">
-                <div>Activity</div>
-                <div className="text-right">Planned</div>
-                <div className="text-right">Actual</div>
-                <div className="text-right">Δ (min)</div>
+
+            <div className="max-h-72 overflow-auto border rounded">
+              <div className="grid grid-cols-12 gap-2 p-2 text-[11px] font-semibold bg-slate-50">
+                <div className="col-span-5">Activity</div>
+                <div className="col-span-2 text-right">Planned</div>
+                <div className="col-span-2 text-right">Actual</div>
+                <div className="col-span-3 text-right">Δ</div>
               </div>
               {lastSessionReport.rows
                 .slice()
@@ -9581,25 +9632,73 @@ export default function App() {
                   const B = activities.find(x => x.id === b.id)?.priority ? 1 : 0;
                   return B - A; // priority first
                 })
-                .map(r => (
-                <div key={r.id} className={`grid grid-cols-4 gap-2 p-2 text-xs border-t ${activities.find(x => x.id === r.id)?.priority ? 'bg-amber-50' : ''}`}>
-                  <div className="truncate font-medium" title={r.name}>
-                    {activities.find(x => x.id === r.id)?.priority ? '★ ' : ''}{r.name}
-                  </div>
-                  <div className="text-right">{Math.round(r.planned/60)}</div>
-                  <div className="text-right">{Math.round(r.actual/60)}</div>
-                  <div className={`text-right ${r.delta>=0?'text-emerald-600':'text-red-600'}`}>{Math.round(r.delta/60)}</div>
-                </div>
-              ))}
+                .map(r => {
+                  const plannedMin = Math.round(r.planned / 60);
+                  const actualMin = Math.round(r.actual / 60);
+                  const deltaMin = Math.round((r.actual - r.planned) / 60);
+                  const safePlanned = Math.max(0, plannedMin);
+                  const safeActual = Math.max(0, actualMin);
+                  const cap = Math.max(safePlanned, safeActual, 1);
+                  const barPct = Math.min(100, Math.round((Math.abs(deltaMin) / cap) * 100));
+                  const isPositive = deltaMin >= 0;
+                  return (
+                    <div key={r.id} className={`grid grid-cols-12 gap-2 items-center p-2 text-[11px] border-t ${activities.find(x => x.id === r.id)?.priority ? 'bg-amber-50' : ''}`}>
+                      <div className="col-span-5 min-w-0">
+                        <div className="truncate font-medium" title={r.name}>
+                          {activities.find(x => x.id === r.id)?.priority ? '★ ' : ''}{r.name}
+                        </div>
+                        {settings.showTagChips && (() => {
+                          const act = activities.find(x => x.id === r.id);
+                          const tags = act?.tags || [];
+                          if (!tags.length) return null;
+                          return (
+                            <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                              {tags.map((t, idx) => {
+                                const tagObj = rpgTags?.find(rt => rt.id === t);
+                                if (tagObj) {
+                                  return (
+                                    <span
+                                      key={idx}
+                                      className={`rounded-full border ${settings.compactTagChips ? 'px-1 py-0 text-[10px] leading-none' : 'px-1.5 py-0.5 text-[11px] leading-tight'}`}
+                                      style={{ backgroundColor: tagObj.color, color: '#fff', borderColor: 'rgba(0,0,0,0.1)' }}
+                                      title={tagObj.description ? `${tagObj.name} — ${tagObj.description}` : tagObj.name}
+                                    >
+                                      {tagObj.name}
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span key={idx} className={`rounded-full bg-slate-100 text-slate-700 border border-slate-200 ${settings.compactTagChips ? 'px-1 py-0 text-[10px] leading-none' : 'px-1.5 py-0.5 text-[11px] leading-tight'}`}>#{String(t).toLowerCase()}</span>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      <div className="col-span-2 text-right tabular-nums">{safePlanned}</div>
+                      <div className="col-span-2 text-right tabular-nums">{safeActual}</div>
+                      <div className="col-span-3">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className={`text-right tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>{deltaMin}</div>
+                          <div className="relative h-2 w-20 bg-slate-100 rounded overflow-hidden">
+                            <div className={`h-full ${isPositive ? 'bg-emerald-400' : 'bg-red-400'}`} style={{ width: `${barPct}%` }} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
-            <div className="mt-3 flex items-center justify-between text-sm">
-              <div className="font-medium">Totals</div>
-              <div className="text-right">
-                <div>Planned: {Math.round(lastSessionReport.totals.planned/60)} min</div>
-                <div>Actual: {Math.round(lastSessionReport.totals.actual/60)} min</div>
-                <div className={`${lastSessionReport.totals.delta>=0?'text-emerald-700':'text-red-700'}`}>Δ: {Math.round(lastSessionReport.totals.delta/60)} min ({Math.round(lastSessionReport.totals.pct)}%)</div>
+
+            <div className="mt-3 grid grid-cols-12 items-center text-sm">
+              <div className="col-span-6 font-semibold">Totals</div>
+              <div className="col-span-6 flex flex-col items-end text-right">
+                <div className="tabular-nums">Planned: {Math.round(lastSessionReport.totals.planned/60)} min</div>
+                <div className="tabular-nums">Actual: {Math.round(lastSessionReport.totals.actual/60)} min</div>
+                <div className={`tabular-nums ${lastSessionReport.totals.delta>=0?'text-emerald-700':'text-red-700'}`}>Δ: {Math.round(lastSessionReport.totals.delta/60)} min ({Math.round(lastSessionReport.totals.pct)}%)</div>
               </div>
             </div>
+
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="outline" onClick={() => setSessionReportOpen(false)}>Close</Button>
             </div>
@@ -9723,6 +9822,25 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                {/* Tag Chips Settings */}
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="show-tag-chips">Show tag chips</Label>
+                  <Switch
+                    id="show-tag-chips"
+                    checked={settings.showTagChips}
+                    onCheckedChange={(checked) => setSettings(prev => ({ ...prev, showTagChips: checked }))}
+                  />
+                </div>
+                {settings.showTagChips && (
+                  <div className="flex items-center justify-between pl-4">
+                    <Label htmlFor="compact-tag-chips">Compact tag chips</Label>
+                    <Switch
+                      id="compact-tag-chips"
+                      checked={settings.compactTagChips}
+                      onCheckedChange={(checked) => setSettings(prev => ({ ...prev, compactTagChips: checked }))}
+                    />
+                  </div>
+                )}
                 <Separator />
                 <div className="space-y-2">
                   <Label>Mobile Zoom Level</Label>
@@ -9834,6 +9952,27 @@ export default function App() {
                           </div>
                         )}
                         
+                        <div className="space-y-2">
+                          <Label>Flowmodoro Mode</Label>
+                          <div className="flex items-center gap-2">
+                            <Button 
+                              size="sm" 
+                              variant={settings.flowmodoroMode === 'drain' ? 'default' : 'outline'} 
+                              onClick={() => setSettings(prev => ({ ...prev, flowmodoroMode: 'drain' }))}
+                            >
+                              In-session drain
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant={settings.flowmodoroMode === 'postpone' ? 'default' : 'outline'} 
+                              onClick={() => setSettings(prev => ({ ...prev, flowmodoroMode: 'postpone' }))}
+                            >
+                              Postpone during break
+                            </Button>
+                          </div>
+                          <p className="text-xs text-gray-500">Drain: activities keep counting down during breaks. Postpone: pause draining while on a break.</p>
+                        </div>
+
                         <Separator />
                         
                         <div className="space-y-2">
@@ -9941,6 +10080,19 @@ export default function App() {
                         onCheckedChange={(checked) => setSettings(prev => ({ ...prev, dailyTimelineAnimation: checked }))}
                       />
                     </div>
+
+                    {/* Elapsed Day Overlay Setting */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div>
+                        <Label className="text-sm font-medium">Elapsed Day Shading</Label>
+                        <p className="text-xs text-gray-500 mt-1">Subtle darker segment shows the elapsed portion of the day (full-day view)</p>
+                      </div>
+                      <Switch 
+                        id="daily-elapsed-overlay"
+                        checked={settings.dailyShowElapsedDayOverlay} 
+                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, dailyShowElapsedDayOverlay: checked }))}
+                      />
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -10025,7 +10177,7 @@ export default function App() {
                 {/* Dynamic Timeline Bar */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-md font-semibold">Daily Timeline</h3>
+                    <h3 className="text-md font-semibold" title="Red line = now • Darker segment = elapsed portion of the day">Daily Timeline</h3>
                     <div className="flex items-center gap-3">
                       <label className="flex items-center gap-1 text-xs text-gray-600 select-none cursor-pointer">
                         <input
@@ -10061,6 +10213,22 @@ export default function App() {
                       }}
                       title={`Daily Progress: ${Math.round(getDailyOverallProgress())}% complete`}
                     />
+
+                    {/* Elapsed Day Overlay (full-day view): subtle darker segment from 00:30 to now */}
+                    {timelineViewMode === 'full' && settings.dailyShowElapsedDayOverlay && (() => {
+                      const now = currentTime;
+                      const minutesNow = now.getHours() * 60 + now.getMinutes();
+                      let minutesSinceStart = minutesNow - 30; // day starts at 00:30
+                      if (minutesSinceStart < 0) minutesSinceStart += 24 * 60; // wrap
+                      const elapsedPct = Math.min(100, Math.max(0, (minutesSinceStart / (24 * 60)) * 100));
+                      return (
+                        <div
+                          className="absolute top-0 left-0 h-full bg-slate-400/20 z-0 pointer-events-none"
+                          style={{ width: `${elapsedPct}%` }}
+                          title="Elapsed today"
+                        />
+                      );
+                    })()}
 
                     {/* NOW Indicator (dynamic) */}
                     {(() => {
@@ -10112,7 +10280,7 @@ export default function App() {
                       const visiblePlannedMinutes = Math.max(1, timelineActivities.reduce((sum, a) => sum + a.duration, 0));
                       
                       if (timelineViewMode === 'scheduled') {
-                        // Show only scheduled activities, filling the entire bar
+                        // Show only scheduled activities, filling the entire bar (darker = past, thin red line = now)
                         // Always show consistent view regardless of active state
                         let currentPosition = 0;
                         return timelineActivities.map((activity) => {
@@ -10169,7 +10337,7 @@ export default function App() {
                           return element;
                         });
                       } else {
-                        // Show full day view with unscheduled time
+                        // Show full day view with unscheduled time (darker = past, thin red line = now)
                         const plannedPercentageOfDay = Math.min(((allPlannedMinutes || 0) / totalRemainingMinutes) * 100, 95);
                         const unscheduledPercentage = Math.max(100 - plannedPercentageOfDay, 5);
                         
@@ -10182,7 +10350,7 @@ export default function App() {
                               title={`Planned activities: ${Math.floor(allPlannedMinutes / 60)}h ${allPlannedMinutes % 60}m`}
                             >
                               <div className="absolute top-1 left-1 text-xs font-medium text-blue-700">
-                                Scheduled (${Math.floor(allPlannedMinutes / 60)}h ${allPlannedMinutes % 60}m)
+                                Scheduled ({formatMinutesHM(allPlannedMinutes)})
                               </div>
                             </div>
                             
@@ -10284,12 +10452,12 @@ export default function App() {
                                 left: `${plannedPercentageOfDay}%`, 
                                 width: `${unscheduledPercentage}%` 
                               }}
-                              title={`Free time: ${Math.round((totalRemainingMinutes - allPlannedMinutes) / 60 * 10) / 10}h until 0:30`}
+                              title={`Free time: ${Math.round((Math.max(0, (totalRemainingMinutes - allPlannedMinutes)) / 60) * 10) / 10}h until 00:30`}
                             >
                               <div className="text-center">
                                 <div className="font-medium">Free Time</div>
                                 <div className="text-xs opacity-75">
-                                  {Math.round((totalRemainingMinutes - allPlannedMinutes) / 60 * 10) / 10}h unscheduled
+                                  {Math.round((Math.max(0, (totalRemainingMinutes - allPlannedMinutes)) / 60) * 10) / 10}h unscheduled
                                 </div>
                               </div>
                             </div>
@@ -10623,10 +10791,25 @@ export default function App() {
                             <div className="flex items-center gap-3">
                               {/* Tags (chips) */}
                               {settings.showTagChips && activity.tags && activity.tags.length > 0 && (
-                                <div className="hidden sm:flex flex-wrap items-center gap-1">
-                                  {activity.tags.map((t, idx) => (
-                                    <span key={idx} className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">#{String(t).toLowerCase()}</span>
-                                  ))}
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {activity.tags.map((t, idx) => {
+                                    const tagObj = rpgTags?.find(rt => rt.id === t);
+                                    if (tagObj) {
+                                      return (
+                                        <span
+                                          key={idx}
+                                          className={`rounded-full border ${settings.compactTagChips ? 'px-1 py-0 text-[10px] leading-none' : 'px-1.5 py-0.5 text-[11px] leading-tight'}`}
+                                          style={{ backgroundColor: tagObj.color, color: '#fff', borderColor: 'rgba(0,0,0,0.1)' }}
+                                          title={tagObj.description ? `${tagObj.name} — ${tagObj.description}` : tagObj.name}
+                                        >
+                                          {tagObj.name}
+                                        </span>
+                                      );
+                                    }
+                                    return (
+                                      <span key={idx} className={`rounded-full bg-slate-100 text-slate-700 border border-slate-200 ${settings.compactTagChips ? 'px-1 py-0 text-[10px] leading-none' : 'px-1.5 py-0.5 text-[11px] leading-tight'}`}>#{String(t).toLowerCase()}</span>
+                                    );
+                                  })}
                                 </div>
                               )}
                               {/* Duration */}
