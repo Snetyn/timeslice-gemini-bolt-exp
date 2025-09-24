@@ -41,6 +41,9 @@ interface Activity {
   earlyCompleted?: boolean;
   // Mark as priority/important
   priority?: boolean;
+  // Optional per-activity time window overrides (HH:MM 24h). If set, they take precedence over template window.
+  startTime?: string;
+  endTime?: string;
 }
 
 interface ActivityTemplate {
@@ -1326,7 +1329,7 @@ const RPGStatsPage = ({
                 <div className="grid grid-cols-2 gap-4">
                   <div className="text-center p-3 bg-blue-50 rounded-lg">
                     <div className="text-2xl font-bold text-blue-600">
-                      {dailyActivities.filter(a => a.status === 'scheduled' || a.status === 'active').length}
+                      {dailyActivities.length}
                     </div>
                     <div className="text-sm text-blue-700">Planned Today</div>
                   </div>
@@ -1784,7 +1787,7 @@ const Badge = ({ variant = 'default', className = '', children }) => {
   return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
-const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex, showDrainOverlay = false }) => {
+const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex, showDrainOverlay = false, flowmodoroOverlaySeconds = 0, flowmodoroOverlayColor = '#8b5cf6' }) => {
   // Persist last-shown fill per activity so non-selected segments don't stall to 0 during overtime
   const lastFillShownRef = useRef<Record<string, number>>({});
   // Calculate total time considering both allocated and added activities
@@ -1882,7 +1885,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       );
     }
 
-    const totalPlanned = totalPlannedRaw || 1; // avoid div by 0
+  const totalPlanned = totalPlannedRaw || 1; // avoid div by 0
     const baseWidths = plannedSeconds.map(sec => (sec / totalPlanned) * 100);
 
     // Find the activity that is actually in overtime (most negative timeRemaining)
@@ -1899,7 +1902,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       return idx;
     })();
 
-    let redistributedWidths = [...baseWidths];
+  let redistributedWidths = [...baseWidths];
     if (overtimeIndex !== -1) {
       const overtimeSec = Math.abs(activities[overtimeIndex].timeRemaining || 0);
       // Extra width as percentage of total planned time
@@ -1964,6 +1967,39 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       redistributedWidths = redistributedWidths.map(w => (w / totalAfter) * 100);
     }
 
+    // Flowmodoro overlay segment: take width from all non-starred activities equally and create a purple segment at the end
+    let flowOverlayWidthPct = 0;
+    if (flowmodoroOverlaySeconds > 0 && totalPlanned > 0) {
+      // Compute desired width contribution based on available flow seconds relative to total planned seconds
+      let desiredPct = Math.max(0, (flowmodoroOverlaySeconds / totalPlanned) * 100);
+      // Subtract from non-starred, non-completed donors without pushing them below a minimum
+      // Identify donors: not priority (star), not completed, width > 0
+      let donorIdxs = redistributedWidths
+        .map((_, i) => i)
+        .filter(i => !activities[i]?.priority && !activities[i]?.isCompleted && redistributedWidths[i] > 0);
+      let remaining = desiredPct;
+      let taken = 0;
+      while (remaining > 1e-6 && donorIdxs.length > 0) {
+        const per = remaining / donorIdxs.length;
+        let round = 0;
+        const next: number[] = [];
+        for (const i of donorIdxs) {
+          const maxRemovable = Math.max(0, redistributedWidths[i] - MIN_SEGMENT_WIDTH_POST);
+          const remove = Math.min(per, maxRemovable);
+          if (remove > 0) {
+            redistributedWidths[i] -= remove;
+            round += remove;
+          }
+          if (redistributedWidths[i] - MIN_SEGMENT_WIDTH_POST > 1e-6) next.push(i);
+        }
+        taken += round;
+        remaining -= round;
+        donorIdxs = next;
+        if (round <= 1e-6) break;
+      }
+      flowOverlayWidthPct = Math.max(0, taken);
+    }
+
     // Build base segmented bar with planned allocation + fill
     const baseBar = (
       <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
@@ -2012,6 +2048,11 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
             </div>
           );
         })}
+        {flowOverlayWidthPct > 0 && (
+          <div key="flowmodoro-overlay" style={{ width: `${flowOverlayWidthPct}%`, backgroundColor: flowmodoroOverlayColor }} className="h-full relative" title="Flowmodoro" >
+            <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/90">🌟</div>
+          </div>
+        )}
       </div>
     );
 
@@ -2092,7 +2133,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   );
 };
 
-const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex, showAllocationRing = false }) => {
+const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex, showAllocationRing = false, flowmodoroOverlaySeconds = 0, flowmodoroOverlayColor = '#8b5cf6' }) => {
   const size = 200;
   const strokeWidth = 12;
   const center = size / 2;
@@ -2106,7 +2147,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   const allocationRadius = radius + (strokeWidth / 2) + 2; // stays within SVG bounds (size/2)
   const allocationCircumference = 2 * Math.PI * allocationRadius;
   // Thick black outer overall progress ring
-  const outerBlackStrokeWidth = 16; // thicker than colored segments
+  const outerBlackStrokeWidth = 14; // slightly thinner and lighter per request
   const outerBlackRadius = radius; // share the same radius; colored segments will sit on top
   const outerBlackCircumference = 2 * Math.PI * outerBlackRadius;
   
@@ -2470,9 +2511,9 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           cy={center}
         />
 
-        {/* Thick black overall progress ring (drawn behind colored segments) */}
+        {/* Thick dark overall progress ring (drawn behind colored segments), less black, more grey and a bit transparent */}
         <circle
-          stroke="#0f172a"
+          stroke="#1f2937"
           fill="transparent"
           strokeWidth={outerBlackStrokeWidth}
           strokeDasharray={outerBlackCircumference}
@@ -2482,7 +2523,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           cx={center}
           cy={center}
           transform={`rotate(-90 ${center} ${center})`}
-          opacity={0.95}
+          opacity={0.75}
         />
 
         {/* Segment divider lines for segmented style */}
@@ -2504,6 +2545,41 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           cy={center}
           transform={`rotate(-90 ${center} ${center})`}
         />
+        {/* Flowmodoro overlay segment at outer edge with star icon */}
+        {(() => {
+          // Compute planned seconds to translate overlay seconds to angle width
+          const totalSessionSecondsAlloc = totalSessionMinutes * 60;
+          const plannedSeconds = activities.map(a => {
+            if (a.percentage && a.percentage > 0) return (a.percentage / 100) * totalSessionSecondsAlloc;
+            if (a.duration && a.duration > 0) return a.duration * 60;
+            return 0;
+          });
+          const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0);
+          if (!flowmodoroOverlaySeconds || flowmodoroOverlaySeconds <= 0 || totalPlanned <= 0) return null;
+          const overlayAngle = Math.max(0, Math.min(360, (flowmodoroOverlaySeconds / totalPlanned) * 360));
+          if (overlayAngle <= 0.2) return null;
+          const arcLength = (overlayAngle / 360) * circumference;
+          // Place overlay after the existing colored arcs (at the end of the circle)
+          const rotation = -90 + 360 - overlayAngle;
+          return (
+            <g>
+              <circle
+                stroke={flowmodoroOverlayColor}
+                fill="transparent"
+                strokeWidth={strokeWidth}
+                strokeDasharray={`${arcLength} ${circumference}`}
+                r={radius}
+                cx={center}
+                cy={center}
+                transform={`rotate(${rotation} ${center} ${center})`}
+                opacity={0.9}
+              />
+              <text x="50%" y="50%" textAnchor="middle" dy="-1.2em" className="text-xs font-bold fill-current" style={{ fill: flowmodoroOverlayColor }}>
+                🌟
+              </text>
+            </g>
+          );
+        })()}
         <text x="50%" y="50%" textAnchor="middle" dy=".3em" className="text-3xl font-bold fill-current text-slate-700">
           {Math.round(totalProgress)}%
         </text>
@@ -4796,7 +4872,9 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
     status: 'scheduled',
     subtasks: [] as Subtask[],
     softDeadlineEnabled: false,
-    softDeadlineTime: ''
+    softDeadlineTime: '',
+    startTime: '',
+    endTime: ''
   });
 
   const [newSubtaskName, setNewSubtaskName] = useState('');
@@ -4811,7 +4889,9 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
         status: activity.status || 'scheduled',
         subtasks: activity.subtasks || [],
         softDeadlineEnabled: !!activity.softDeadlineEnabled,
-        softDeadlineTime: activity.softDeadlineTime || ''
+        softDeadlineTime: activity.softDeadlineTime || '',
+        startTime: activity.startTime || '',
+        endTime: activity.endTime || ''
       });
     }
   }, [activity]);
@@ -5062,6 +5142,34 @@ const DailyActivityEditModal = ({ isOpen, onClose, activity, onSave, onDelete, i
               />
               <span className="text-xs text-gray-500">Visual urgency and time-left adapt near this time</span>
             </div>
+          </div>
+
+          {/* Optional Time Window Overrides */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Time Window Overrides (optional)
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Start Time</label>
+                <input
+                  type="time"
+                  value={formData.startTime}
+                  onChange={(e) => setFormData(prev => ({ ...prev, startTime: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">End Time</label>
+                <input
+                  type="time"
+                  value={formData.endTime}
+                  onChange={(e) => setFormData(prev => ({ ...prev, endTime: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">If provided, these override the template window for this activity.</p>
           </div>
 
           {/* Status (for existing activities) */}
@@ -6083,6 +6191,7 @@ export default function App() {
   flowmodoroMode: 'drain',
       flowmodoroRatio: 5, // 5:1 ratio (5 minutes work = 1 minute rest)
       flowmodoroMaxProgressMinutes: 30, // Time in minutes for progress to reach maximum (default 30 minutes)
+  flowmodoroMaxPerSessionMinutes: 0, // 0 = no cap; otherwise cap available rest time within a session
       flowmodoroShowProgress: true, // Toggle for flowmodoro progress bar
       flowmodoroProgressType: 'fill', // 'fill' or 'drain' like other activities
       flowmodoroResetStartTime: '06:00', // Daily reset at 6 AM
@@ -6105,6 +6214,8 @@ export default function App() {
   showCircularAllocation: false,
   showDrainOverlay: false,
   dailyShowElapsedDayOverlay: true,
+      // Time window filtering control
+      enableTimeWindowFiltering: true,
     };
     try {
       const saved = localStorage.getItem('timeSliceSettings');
@@ -7453,6 +7564,28 @@ export default function App() {
   const totalSessionMinutes = calculateTotalSessionMinutes();
   const totalPercentage = activities.filter(activity => !activity.countUp).reduce((sum, activity) => sum + activity.percentage, 0);
 
+  // Time window helpers
+  const isWithinWindow = useCallback((startTime?: string, endTime?: string, now: Date = new Date()) => {
+    if (!startTime || !endTime) return true; // no constraints
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    if (!Number.isFinite(sh) || !Number.isFinite(sm) || !Number.isFinite(eh) || !Number.isFinite(em)) return true;
+    const current = now.getHours() * 60 + now.getMinutes();
+    const start = sh * 60 + sm;
+    const end = eh * 60 + em;
+    if (start === end) return true; // treat equal as all-day
+    if (start < end) {
+      return current >= start && current < end;
+    }
+    // spans midnight
+    return current >= start || current < end;
+  }, []);
+
+  const getTemplateById = useCallback((templateId?: string) => {
+    if (!templateId) return undefined;
+    return activityTemplates.find(t => t.id === templateId);
+  }, [activityTemplates]);
+
   // Helper: allocated seconds for an activity based on session and its config
   const getAllocatedSeconds = useCallback((activity: Activity) => {
     const totalSeconds = calculateTotalSessionMinutes() * 60;
@@ -7570,13 +7703,19 @@ export default function App() {
       const remainingFractional = newAccumulated % workSecondsPerRestSecond;
       
       if (restSecondsToAdd > 0) {
-        setFlowmodoroState(prevFlow => ({
-          ...prevFlow,
-          availableRestTime: prevFlow.availableRestTime + restSecondsToAdd,
-          totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
-          availableRestMinutes: Math.floor((prevFlow.availableRestTime + restSecondsToAdd) / 60),
-          accumulatedFractionalTime: remainingFractional
-        }));
+        setFlowmodoroState(prevFlow => {
+          let nextAvailable = prevFlow.availableRestTime + restSecondsToAdd;
+          // Enforce per-session cap if configured (>0)
+          const capSec = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+          if (capSec > 0) nextAvailable = Math.min(nextAvailable, capSec);
+          return ({
+            ...prevFlow,
+            availableRestTime: nextAvailable,
+            totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
+            availableRestMinutes: Math.floor(nextAvailable / 60),
+            accumulatedFractionalTime: remainingFractional
+          });
+        });
       } else {
         setFlowmodoroState(prevFlow => ({
           ...prevFlow,
@@ -7612,9 +7751,21 @@ export default function App() {
 
           if (current.timeRemaining <= 0) {
             if (settings.overtimeType === 'drain') {
-              const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
-                .filter(act => act.originalIndex !== currentActivityIndex && !act.isLocked && !act.isCompleted && !act.countUp && typeof act.timeRemaining === 'number' && act.timeRemaining > 0);
-
+              // Donor ordering: not locked & not priority -> locked & not priority -> priority (not locked) -> priority & locked
+              const donorPools: ((typeof newActivities)[number] & { originalIndex: number })[][] = [[], [], [], []];
+              newActivities.forEach((act, index) => {
+                if (index === currentActivityIndex) return;
+                if (act.isCompleted || act.countUp) return;
+                if (typeof act.timeRemaining !== 'number' || act.timeRemaining <= 0) return;
+                const priority = !!act.priority;
+                const locked = !!act.isLocked;
+                const clone = { ...act, originalIndex: index } as any;
+                if (!locked && !priority) donorPools[0].push(clone);
+                else if (locked && !priority) donorPools[1].push(clone);
+                else if (!locked && priority) donorPools[2].push(clone);
+                else donorPools[3].push(clone);
+              });
+              const donors = donorPools.find(pool => pool.length > 0) || [];
               if (donors.length > 0) {
                 const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
                 const donorToDrain = donors[donorIndex];
@@ -7660,6 +7811,18 @@ export default function App() {
               }
               secondsToProcess = 0; // Stop processing after completion
             }
+          }
+        }
+
+        // Flowmodoro break drain across all non-starred in drain mode
+        if (settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
+          // For each second processed, reduce 1s from all eligible non-starred donors equally (one second per donor per tick second)
+          const donorsIdx = newActivities.map((a, i) => ({ a, i }))
+            .filter(x => !x.a.isCompleted && !x.a.countUp && !x.a.priority && (typeof x.a.timeRemaining === 'number') && x.a.timeRemaining > 0);
+          if (donorsIdx.length > 0) {
+            donorsIdx.forEach(d => {
+              newActivities[d.i].timeRemaining = Math.max(0, (newActivities[d.i].timeRemaining || 0) - 1);
+            });
           }
         }
       }
@@ -7754,8 +7917,21 @@ export default function App() {
                 }
                 if ((current.timeRemaining || 0) <= 0) {
                   if (settings.overtimeType === 'drain') {
-                    const donors = newActivities.map((act, index) => ({ ...act, originalIndex: index }))
-                      .filter(act => act.originalIndex !== cursorIndex && !act.isLocked && !act.isCompleted && !act.countUp && typeof act.timeRemaining === 'number' && act.timeRemaining > 0);
+                    // Donor ordering: not locked & not priority -> locked & not priority -> priority (not locked) -> priority & locked
+                    const donorPools: ((typeof newActivities)[number] & { originalIndex: number })[][] = [[], [], [], []];
+                    newActivities.forEach((act, index) => {
+                      if (index === cursorIndex) return;
+                      if (act.isCompleted || act.countUp) return;
+                      if (typeof act.timeRemaining !== 'number' || act.timeRemaining <= 0) return;
+                      const priority = !!act.priority;
+                      const locked = !!act.isLocked;
+                      const clone = { ...act, originalIndex: index } as any;
+                      if (!locked && !priority) donorPools[0].push(clone);
+                      else if (locked && !priority) donorPools[1].push(clone);
+                      else if (!locked && priority) donorPools[2].push(clone);
+                      else donorPools[3].push(clone);
+                    });
+                    const donors = donorPools.find(pool => pool.length > 0) || [];
                     if (donors.length > 0) {
                       const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
                       const donorToDrain = donors[donorIndex];
@@ -7789,6 +7965,17 @@ export default function App() {
                       secondsToProcess = 0;
                     }
                   }
+                }
+              }
+
+              // Flowmodoro break drain across all non-starred in drain mode (catch-up path)
+              if (settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
+                const donorsIdx = newActivities.map((a, i) => ({ a, i }))
+                  .filter(x => !x.a.isCompleted && !x.a.countUp && !x.a.priority && (typeof x.a.timeRemaining === 'number') && x.a.timeRemaining > 0);
+                if (donorsIdx.length > 0) {
+                  donorsIdx.forEach(d => {
+                    newActivities[d.i].timeRemaining = (newActivities[d.i].timeRemaining || 0) - 1;
+                  });
                 }
               }
             }
@@ -8968,6 +9155,20 @@ export default function App() {
         } catch (e) {
           initialTotalAllocatedRef.current = 0;
         }
+        // Snapshot per-activity planned seconds at start for stable reporting
+        try {
+          const totalSeconds = calculateTotalSessionMinutes() * 60;
+          const snapshot: Record<string, number> = {};
+          activities.forEach(a => {
+            if (a.countUp) {
+              snapshot[a.id] = 0;
+            } else {
+              const pct = Math.max(0, Number(a.percentage || 0));
+              snapshot[a.id] = Math.round((pct / 100) * totalSeconds);
+            }
+          });
+          (window as any).__plannedAtStart = snapshot;
+        } catch {}
       } else {
         // Resuming: compute totals per sharedId so daily sync continues monotonic
         const byShared: Record<string, number> = {};
@@ -9268,7 +9469,9 @@ export default function App() {
 
   const computeSessionReport = useCallback(() => {
     const rows = activities.map(a => {
-      const planned = getAllocatedSeconds(a);
+      // Prefer planned snapshot captured at session start for stable planned values
+      const plannedSnapshot = (typeof window !== 'undefined' && (window as any).__plannedAtStart) ? (window as any).__plannedAtStart : null;
+      const planned = plannedSnapshot && plannedSnapshot[a.id] != null ? plannedSnapshot[a.id] : getAllocatedSeconds(a);
       let actual = 0;
       if (a.isCompleted && Number.isFinite(a.completedElapsedSeconds)) {
         actual = Math.max(0, a.completedElapsedSeconds || 0);
@@ -9448,6 +9651,8 @@ export default function App() {
                 totalSessionMinutes={totalSessionMinutes}
                 currentActivityIndex={currentActivityIndex}
                 showAllocationRing={settings.showCircularAllocation}
+                flowmodoroOverlaySeconds={(settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.availableRestTime > 0) ? flowmodoroState.availableRestTime : 0}
+                flowmodoroOverlayColor={'#8b5cf6'}
               />
             ) : (
               <div className="space-y-1">
@@ -9464,6 +9669,8 @@ export default function App() {
                   totalSessionMinutes={totalSessionMinutes}
                   currentActivityIndex={currentActivityIndex}
                   showDrainOverlay={settings.showDrainOverlay}
+                  flowmodoroOverlaySeconds={(settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.availableRestTime > 0) ? flowmodoroState.availableRestTime : 0}
+                  flowmodoroOverlayColor={'#8b5cf6'}
                 />
               </div>
             )
@@ -9517,7 +9724,16 @@ export default function App() {
           
           <div className="space-y-1">
             <h3 className="font-semibold text-sm">Activities</h3>
-            <div className="space-y-1">{activities.map((activity, index) => {
+            <div className="space-y-1">{activities
+              .map((activity, index) => ({ activity, index }))
+              .filter(({ activity }) => {
+                if (!settings.enableTimeWindowFiltering) return true;
+                const tpl = getTemplateById(activity.templateId);
+                const s = activity.startTime ?? tpl?.startTime;
+                const e = activity.endTime ?? tpl?.endTime;
+                return isWithinWindow(s, e);
+              })
+              .map(({ activity, index }) => {
                 const activityProgress = activity.duration > 0 ? ((activity.duration * 60 - Math.max(0, activity.timeRemaining)) / (activity.duration * 60)) * 100 : 0;
                 const displayProgress = settings.activityProgressType === 'fill' ? activityProgress : 100 - activityProgress;
                 const anyOvertime = activities.some(a => (a.timeRemaining ?? 0) < 0);
@@ -10097,6 +10313,19 @@ export default function App() {
                         onCheckedChange={(checked) => setSettings(prev => ({ ...prev, dailyShowElapsedDayOverlay: checked }))}
                       />
                     </div>
+
+                    {/* Time Window Filtering Toggle */}
+                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div>
+                        <Label className="text-sm font-medium">Filter by Time Windows</Label>
+                        <p className="text-xs text-gray-500 mt-1">When on, only activities within their time windows appear in scheduled views</p>
+                      </div>
+                      <Switch 
+                        id="enable-time-window-filtering"
+                        checked={settings.enableTimeWindowFiltering} 
+                        onCheckedChange={(checked) => setSettings(prev => ({ ...prev, enableTimeWindowFiltering: checked }))}
+                      />
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -10278,9 +10507,16 @@ export default function App() {
                       const now = new Date();
                       const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
                       const allPlannedMinutes = dailyActivities.reduce((sum, a) => sum + a.duration, 0);
-                      const timelineActivities = settings.dailyHideCompleted
-                        ? dailyActivities.filter(a => a.status !== 'completed')
-                        : dailyActivities;
+                      const timelineActivitiesBase = settings.dailyHideCompleted ? dailyActivities.filter(a => a.status !== 'completed') : dailyActivities;
+                      const timelineActivities = timelineViewMode === 'scheduled'
+                        ? timelineActivitiesBase.filter(a => {
+                            if (!settings.enableTimeWindowFiltering) return true;
+                            const tpl = getTemplateById(a.templateId);
+                            const s = a.startTime ?? tpl?.startTime;
+                            const e = a.endTime ?? tpl?.endTime;
+                            return isWithinWindow(s, e);
+                          })
+                        : timelineActivitiesBase;
                       const visiblePlannedMinutes = Math.max(1, timelineActivities.reduce((sum, a) => sum + a.duration, 0));
                       
                       if (timelineViewMode === 'scheduled') {
@@ -10444,6 +10680,9 @@ export default function App() {
                                 return (
                                   <div key={`win-${i}`} className="absolute top-0 h-full z-10 pointer-events-none" style={{ left: `${leftPct}%`, width: `${widthPct}%` }}>
                                     <div className="h-full opacity-10" style={{ backgroundColor: w.color }} title={`${w.name} window`} />
+                                    <div className="absolute -top-5 left-0 text-[10px] text-slate-700 bg-white/80 px-1 rounded border border-slate-200 shadow-sm" title={`${w.name} time window`}>
+                                      {w.name}
+                                    </div>
                                   </div>
                                 );
                               });
@@ -10481,9 +10720,16 @@ export default function App() {
                     {!settings.dailyTimelineAnimation && (() => {
                       const now = new Date();
                       const totalRemainingMinutes = 24 * 60 - (now.getHours() * 60 + now.getMinutes()) + 30;
-                      const timelineActivities = settings.dailyHideCompleted
-                        ? dailyActivities.filter(a => a.status !== 'completed')
-                        : dailyActivities;
+                              const timelineActivitiesBase = settings.dailyHideCompleted ? dailyActivities.filter(a => a.status !== 'completed') : dailyActivities;
+                              const timelineActivities = timelineViewMode === 'scheduled'
+                                ? timelineActivitiesBase.filter(a => {
+                                    if (!settings.enableTimeWindowFiltering) return true;
+                                    const tpl = getTemplateById(a.templateId);
+                                    const s = a.startTime ?? tpl?.startTime;
+                                    const e = a.endTime ?? tpl?.endTime;
+                                    return isWithinWindow(s, e);
+                                  })
+                                : timelineActivitiesBase;
                       const visiblePlannedMinutes = Math.max(1, timelineActivities.reduce((sum, a) => sum + a.duration, 0));
                       const plannedPercentageOfDay = (visiblePlannedMinutes / totalRemainingMinutes) * 100;
                       let currentPosition = 0;
@@ -11537,7 +11783,9 @@ const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
   const [formData, setFormData] = useState({
     name: activity.name || '',
     color: activity.color || 'hsl(220, 70%, 50%)', // Use HSL like the activities
-    duration: activity.duration || 60
+    duration: activity.duration || 60,
+    startTime: activity.startTime || '',
+    endTime: activity.endTime || ''
   });
 
   // Use HSL colors that match the system
@@ -11624,6 +11872,34 @@ const ActivitySettingsForm = ({ activity, onSave, onDelete, onCancel }) => {
           {Math.floor(formData.duration / 60)}h {formData.duration % 60}m 
           ({Math.round((formData.duration / (24 * 60)) * 100 * 10) / 10}% of day)
         </div>
+      </div>
+
+      {/* Optional Time Window Overrides */}
+      <div>
+        <Label className="text-sm font-medium">Time Window Overrides (optional)</Label>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <div>
+            <Label htmlFor="activity-start-time" className="text-xs">Start Time</Label>
+            <Input
+              id="activity-start-time"
+              type="time"
+              value={formData.startTime}
+              onChange={(e) => setFormData(prev => ({ ...prev, startTime: e.target.value }))}
+              className="mt-1"
+            />
+          </div>
+          <div>
+            <Label htmlFor="activity-end-time" className="text-xs">End Time</Label>
+            <Input
+              id="activity-end-time"
+              type="time"
+              value={formData.endTime}
+              onChange={(e) => setFormData(prev => ({ ...prev, endTime: e.target.value }))}
+              className="mt-1"
+            />
+          </div>
+        </div>
+        <div className="text-xs text-gray-500 mt-1">Overrides template window for this activity when filtering is enabled.</div>
       </div>
 
       {/* Activity Status Info */}
