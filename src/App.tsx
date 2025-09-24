@@ -6196,6 +6196,7 @@ export default function App() {
       flowmodoroProgressType: 'fill', // 'fill' or 'drain' like other activities
       flowmodoroResetStartTime: '06:00', // Daily reset at 6 AM
       flowmodoroResetEndTime: '23:59', // Daily reset at 11:59 PM
+    flowmodoroSegmentIcon: '🌟',
       // Daily Mode specific settings
       dailyShowActivityProgress: true, // Show progress bars in daily activity cards
       dailyActivityProgressType: 'fill', // 'fill' or 'drain'
@@ -7063,6 +7064,7 @@ export default function App() {
         initialBreakDuration: 0, // Track original break duration for progress calculation
         lastResetDate: new Date().toDateString(), // Track when last reset occurred
         accumulatedFractionalTime: 0, // Track fractional seconds for accurate ratio calculation
+        breakLastUpdatedAt: null,
       };
       
       if (saved) {
@@ -7078,8 +7080,27 @@ export default function App() {
             lastResetDate: now.toDateString()
           };
         }
+
+          // If a break was running, adjust remaining time based on elapsed wall-clock seconds
+          if (parsed.isOnBreak && parsed.breakTimeRemaining > 0 && parsed.breakLastUpdatedAt) {
+            const elapsedSinceLastUpdate = Math.floor((Date.now() - parsed.breakLastUpdatedAt) / 1000);
+            if (elapsedSinceLastUpdate > 0) {
+              const remaining = Math.max(0, parsed.breakTimeRemaining - elapsedSinceLastUpdate);
+              parsed.breakTimeRemaining = remaining;
+              if (remaining <= 0) {
+                parsed.isOnBreak = false;
+                parsed.initialBreakDuration = 0;
+                parsed.breakLastUpdatedAt = null;
+              } else {
+                parsed.breakLastUpdatedAt = Date.now();
+              }
+            }
+          }
+
+          // Ensure derived minutes stay in sync after load
+          parsed.availableRestMinutes = Math.floor((parsed.availableRestTime || 0) / 60);
         
-        return { ...defaultState, ...parsed };
+          return { ...defaultState, ...parsed };
       }
       
       return defaultState;
@@ -7093,6 +7114,7 @@ export default function App() {
         initialBreakDuration: 0,
         lastResetDate: new Date().toDateString(),
         accumulatedFractionalTime: 0,
+        breakLastUpdatedAt: null,
       };
     }
   });
@@ -7157,7 +7179,9 @@ export default function App() {
       isOnBreak: true,
       breakTimeRemaining: breakDuration,
       initialBreakDuration: breakDuration, // Store initial duration for progress calculation
-      availableRestTime: prev.availableRestTime - breakDuration
+      availableRestTime: Math.max(0, prev.availableRestTime - breakDuration),
+      availableRestMinutes: Math.floor(Math.max(0, prev.availableRestTime - breakDuration) / 60),
+      breakLastUpdatedAt: Date.now()
     }));
     
     // Don't stop the main timer - flowmodoro break runs alongside the session
@@ -7165,24 +7189,37 @@ export default function App() {
   };
 
   const skipFlowmodoroBreak = () => {
-    setFlowmodoroState(prev => ({
-      ...prev,
-      isOnBreak: false,
-      availableRestTime: prev.availableRestTime + prev.breakTimeRemaining, // Return unused time
-      breakTimeRemaining: 0,
-      initialBreakDuration: 0
-    }));
+    setFlowmodoroState(prev => {
+      const capSec = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+      const returned = Math.max(0, prev.breakTimeRemaining || 0);
+      const current = Math.max(0, prev.availableRestTime || 0);
+      let nextAvailable = current + returned;
+      if (capSec > 0) {
+        nextAvailable = Math.min(capSec, nextAvailable);
+      }
+      return {
+        ...prev,
+        isOnBreak: false,
+        availableRestTime: nextAvailable,
+        availableRestMinutes: Math.floor(nextAvailable / 60),
+        breakTimeRemaining: 0,
+        initialBreakDuration: 0,
+        breakLastUpdatedAt: null
+      };
+    });
   };
 
   const resetFlowmodoroState = () => {
     setFlowmodoroState(prev => ({
       ...prev,
       availableRestTime: 0,
+      availableRestMinutes: 0,
       cycleCount: 0,
       isOnBreak: false,
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
-      accumulatedFractionalTime: 0
+      accumulatedFractionalTime: 0,
+      breakLastUpdatedAt: null
     }));
   };
 
@@ -7543,6 +7580,7 @@ export default function App() {
   // Track total elapsed seconds per sharedId to sync only additive deltas to daily
   const sharedElapsedSnapshotRef = useRef<Record<string, number>>({});
   const lastDrainedIndex = useRef(-1);
+  const flowBreakDrainCursorRef = useRef(0);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // Stable baseline for overall progress (sum of allocated seconds at session start)
   const initialTotalAllocatedRef = useRef<number>(0);
@@ -7585,6 +7623,51 @@ export default function App() {
     if (!templateId) return undefined;
     return activityTemplates.find(t => t.id === templateId);
   }, [activityTemplates]);
+
+  const collectFlowBreakDonors = (list: Activity[]) => {
+    const pools: Array<Array<{ index: number }>> = [[], [], [], []];
+    list.forEach((act, index) => {
+      if (act.isCompleted || act.countUp) return;
+      if (typeof act.timeRemaining !== 'number' || act.timeRemaining <= 0) return;
+      const locked = !!act.isLocked;
+      const priority = !!act.priority;
+      const entry = { index };
+      if (!locked && !priority) pools[0].push(entry);
+      else if (locked && !priority) pools[1].push(entry);
+      else if (!locked && priority) pools[2].push(entry);
+      else pools[3].push(entry);
+    });
+    return pools.find(pool => pool.length > 0) || [];
+  };
+
+  const applyFlowBreakDrain = (list: Activity[], seconds: number) => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    for (let s = 0; s < seconds; s++) {
+      const donors = collectFlowBreakDonors(list);
+      if (donors.length === 0) break;
+
+      if (flowBreakDrainCursorRef.current >= donors.length) {
+        flowBreakDrainCursorRef.current = 0;
+      }
+
+      let cursor = flowBreakDrainCursorRef.current;
+      let attempts = 0;
+      while (attempts < donors.length) {
+        const donor = donors[cursor];
+        const remaining = list[donor.index]?.timeRemaining ?? 0;
+        if (typeof remaining === 'number' && remaining > 0) {
+          list[donor.index].timeRemaining = Math.max(0, remaining - 1);
+          flowBreakDrainCursorRef.current = (cursor + 1) % donors.length;
+          break;
+        }
+        attempts += 1;
+        cursor = (cursor + 1) % donors.length;
+      }
+
+      // No donors could contribute this second
+      if (attempts >= donors.length) break;
+    }
+  };
 
   // Helper: allocated seconds for an activity based on session and its config
   const getAllocatedSeconds = useCallback((activity: Activity) => {
@@ -7677,13 +7760,17 @@ export default function App() {
     if (elapsedSeconds <= 0) return;
 
     // Flowmodoro countdown runs concurrently with session/daily
-    if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
+    let flowBreakDrainSeconds = 0;
+    if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
+      flowBreakDrainSeconds = Math.min(elapsedSeconds, flowmodoroState.breakTimeRemaining || 0);
       setFlowmodoroState(prev => {
-        const newBreakTimeRemaining = Math.max(0, prev.breakTimeRemaining - elapsedSeconds);
+        const existing = prev.breakTimeRemaining || 0;
+        const consume = Math.min(elapsedSeconds, existing);
+        const newBreakTimeRemaining = Math.max(0, existing - consume);
         if (newBreakTimeRemaining <= 0) {
-          return { ...prev, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0 };
+          return { ...prev, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0, breakLastUpdatedAt: null };
         }
-        return { ...prev, breakTimeRemaining: newBreakTimeRemaining };
+        return { ...prev, breakTimeRemaining: newBreakTimeRemaining, breakLastUpdatedAt: Date.now() };
       });
     }
 
@@ -7704,16 +7791,25 @@ export default function App() {
       
       if (restSecondsToAdd > 0) {
         setFlowmodoroState(prevFlow => {
-          let nextAvailable = prevFlow.availableRestTime + restSecondsToAdd;
+          const previousAvailable = prevFlow.availableRestTime || 0;
+          let allowedAdd = restSecondsToAdd;
           // Enforce per-session cap if configured (>0)
           const capSec = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-          if (capSec > 0) nextAvailable = Math.min(nextAvailable, capSec);
+          if (capSec > 0 && previousAvailable >= capSec) {
+            allowedAdd = 0;
+          } else if (capSec > 0 && previousAvailable + restSecondsToAdd > capSec) {
+            allowedAdd = Math.max(0, capSec - previousAvailable);
+          }
+          let nextAvailable = previousAvailable + allowedAdd;
+          if (capSec > 0) {
+            nextAvailable = Math.min(capSec, nextAvailable);
+          }
           return ({
             ...prevFlow,
             availableRestTime: nextAvailable,
-            totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
+            totalEarnedToday: prevFlow.totalEarnedToday + allowedAdd,
             availableRestMinutes: Math.floor(nextAvailable / 60),
-            accumulatedFractionalTime: remainingFractional
+            accumulatedFractionalTime: allowedAdd === restSecondsToAdd ? remainingFractional : 0
           });
         });
       } else {
@@ -7725,7 +7821,7 @@ export default function App() {
     }
 
     // If we're on a Flowmodoro break in 'postpone' mode, pause activity draining entirely
-    const pauseForFlowBreak = settings.flowmodoroEnabled && settings.flowmodoroMode === 'postpone' && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+  const pauseForFlowBreak = settings.flowmodoroEnabled && settings.flowmodoroMode === 'postpone' && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
 
     setActivities(prev => {
       if (elapsedSeconds <= 0) return prev;
