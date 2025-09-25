@@ -1787,7 +1787,14 @@ const Badge = ({ variant = 'default', className = '', children }) => {
   return <div className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${variantClasses[variant]} ${className}`}>{children}</div>;
 };
 
-const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex, showDrainOverlay = false, flowmodoroOverlaySeconds = 0, flowmodoroOverlayColor = '#8b5cf6' }) => {
+const VisualProgress = ({ activities, style, className, overallProgress, currentActivityColor, totalSessionMinutes = 0, currentActivityIndex, showDrainOverlay = false, flowmodoroOverlaySeconds = 0, flowmodoroOverlayColor = '#8b5cf6',
+  // New Flowmodoro pseudo-activity support
+  showFlowmodoroActivity = false,
+  flowmodoroActivityCapSeconds = 0,
+  flowmodoroActivityAvailableSeconds = 0,
+  flowmodoroActivityColor = '#8b5cf6',
+  flowmodoroActivityIcon = '🌟'
+}) => {
   // Persist last-shown fill per activity so non-selected segments don't stall to 0 during overtime
   const lastFillShownRef = useRef<Record<string, number>>({});
   // Calculate total time considering both allocated and added activities
@@ -1845,10 +1852,33 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
   }
 
+  // Optionally append a synthetic Flowmodoro pseudo-activity that reserves planned width
+  // This should not alter upstream scheduling so we keep it local to progress visualization
+  let augmentedActivities = activities;
+  if (showFlowmodoroActivity && flowmodoroActivityCapSeconds > 0) {
+    const capMinutes = flowmodoroActivityCapSeconds / 60;
+    const pseudo: any = {
+      id: 'flowmodoro-pseudo',
+      name: 'Flow',
+      color: flowmodoroActivityColor,
+      percentage: 0,
+      duration: capMinutes, // treat as fixed-duration allocation
+      timeRemaining: Math.max(0, flowmodoroActivityCapSeconds - flowmodoroActivityAvailableSeconds),
+      isCompleted: false,
+      countUp: false,
+      priority: false,
+      isLocked: true,
+      showOnBar: true,
+      isFlowmodoroPseudo: true,
+      completedElapsedSeconds: 0
+    };
+    augmentedActivities = [...activities, pseudo];
+  }
+
   if (style === 'segmented') {
     // Build planned seconds per activity based on percentage or fixed duration
     // Planned seconds per activity (completed count-up keeps its preserved elapsed for width)
-    const plannedSeconds = activities.map(act => {
+    const plannedSeconds = augmentedActivities.map(act => {
       if (act.isCompleted) {
         return Math.max(0, act.completedElapsedSeconds || 0);
       }
@@ -1870,7 +1900,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       }
       return (
         <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-200 ${className}`}>
-          {activities.map((activity, idx) => {
+          {augmentedActivities.map((activity, idx) => {
             const widthPercentage = (perActivityElapsed[idx] / totalElapsed) * 100;
             if (!widthPercentage || widthPercentage <= 0) return null;
             return (
@@ -1892,7 +1922,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     const overtimeIndex = (() => {
       let idx = -1;
       let mostNeg = 0;
-      activities.forEach((a, i) => {
+      augmentedActivities.forEach((a, i) => {
         const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : 0;
         if (tr < mostNeg) {
           mostNeg = tr;
@@ -1976,7 +2006,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
       // Identify donors: not priority (star), not completed, width > 0
       let donorIdxs = redistributedWidths
         .map((_, i) => i)
-        .filter(i => !activities[i]?.priority && !activities[i]?.isCompleted && redistributedWidths[i] > 0);
+        .filter(i => !augmentedActivities[i]?.priority && !augmentedActivities[i]?.isCompleted && !augmentedActivities[i]?.isFlowmodoroPseudo && redistributedWidths[i] > 0);
       let remaining = desiredPct;
       let taken = 0;
       while (remaining > 1e-6 && donorIdxs.length > 0) {
@@ -2003,7 +2033,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     // Build base segmented bar with planned allocation + fill
     const baseBar = (
       <div className={`relative h-4 w-full overflow-hidden rounded-full flex bg-slate-100 ${className}`}>
-        {activities.map((activity, idx) => {
+        {augmentedActivities.map((activity, idx) => {
           const segmentWidth = redistributedWidths[idx];
           if (!segmentWidth || segmentWidth <= 0) return null;
           let activityTime = plannedSeconds[idx];
@@ -2040,11 +2070,24 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
             }
             fillWidth = Math.min(100, Math.max(0, shown * 100));
           }
+          const isFlowPseudo = activity.id === 'flowmodoro-pseudo';
+          if (isFlowPseudo) {
+            // Fill is based on (cap - timeRemaining)
+            const cap = activityTime || 1;
+            let earned = cap - (typeof activity.timeRemaining === 'number' ? activity.timeRemaining : 0);
+            earned = Math.min(cap, Math.max(0, earned));
+            fillWidth = (earned / cap) * 100;
+          }
           return (
             <div key={activity.id} style={{ width: `${segmentWidth}%` }} className="h-full relative last:border-r-0">
               {/* During overtime, make the overtime segment background fully colorful while others stay dimmed */}
               <div className="h-full" style={{ opacity: inOvertime ? (isOvertimeSegment ? 0.95 : 0.25) : 0.35, backgroundColor: activity.color }} />
               <div style={{ width: `${Math.max(0, fillWidth)}%`, backgroundColor: activity.color }} className="h-full absolute top-0 left-0" />
+              {isFlowPseudo && (
+                <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/90 pointer-events-none select-none">
+                  {flowmodoroActivityIcon}
+                </div>
+              )}
             </div>
           );
         })}
@@ -2063,7 +2106,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     const totalElapsedAll = perActivityElapsed.reduce((s, v) => s + v, 0);
     const overlay = (
       <div className="relative w-full mt-1 rounded-full overflow-hidden bg-slate-200" style={{ height: overlayHeight }}>
-        {activities.map((activity, idx) => {
+        {augmentedActivities.map((activity, idx) => {
           const elapsed = perActivityElapsed[idx];
           if (!elapsed || elapsed <= 0 || totalElapsedAll <= 0) return null;
             const w = (elapsed / totalElapsedAll) * 100;
@@ -6196,7 +6239,9 @@ export default function App() {
       flowmodoroProgressType: 'fill', // 'fill' or 'drain' like other activities
       flowmodoroResetStartTime: '06:00', // Daily reset at 6 AM
       flowmodoroResetEndTime: '23:59', // Daily reset at 11:59 PM
-    flowmodoroSegmentIcon: '🌟',
+    flowmodoroShowAsActivity: true, // visualize Flowmodoro as its own pseudo-activity segment
+    flowmodoroSessionActivityMinutes: 10, // planned Flow capacity for pseudo segment
+    flowmodoroIcon: '🌟',
       // Daily Mode specific settings
       dailyShowActivityProgress: true, // Show progress bars in daily activity cards
       dailyActivityProgressType: 'fill', // 'fill' or 'drain'
@@ -7064,7 +7109,6 @@ export default function App() {
         initialBreakDuration: 0, // Track original break duration for progress calculation
         lastResetDate: new Date().toDateString(), // Track when last reset occurred
         accumulatedFractionalTime: 0, // Track fractional seconds for accurate ratio calculation
-        breakLastUpdatedAt: null,
       };
       
       if (saved) {
@@ -7080,27 +7124,8 @@ export default function App() {
             lastResetDate: now.toDateString()
           };
         }
-
-          // If a break was running, adjust remaining time based on elapsed wall-clock seconds
-          if (parsed.isOnBreak && parsed.breakTimeRemaining > 0 && parsed.breakLastUpdatedAt) {
-            const elapsedSinceLastUpdate = Math.floor((Date.now() - parsed.breakLastUpdatedAt) / 1000);
-            if (elapsedSinceLastUpdate > 0) {
-              const remaining = Math.max(0, parsed.breakTimeRemaining - elapsedSinceLastUpdate);
-              parsed.breakTimeRemaining = remaining;
-              if (remaining <= 0) {
-                parsed.isOnBreak = false;
-                parsed.initialBreakDuration = 0;
-                parsed.breakLastUpdatedAt = null;
-              } else {
-                parsed.breakLastUpdatedAt = Date.now();
-              }
-            }
-          }
-
-          // Ensure derived minutes stay in sync after load
-          parsed.availableRestMinutes = Math.floor((parsed.availableRestTime || 0) / 60);
         
-          return { ...defaultState, ...parsed };
+        return { ...defaultState, ...parsed };
       }
       
       return defaultState;
@@ -7114,7 +7139,6 @@ export default function App() {
         initialBreakDuration: 0,
         lastResetDate: new Date().toDateString(),
         accumulatedFractionalTime: 0,
-        breakLastUpdatedAt: null,
       };
     }
   });
@@ -7179,9 +7203,7 @@ export default function App() {
       isOnBreak: true,
       breakTimeRemaining: breakDuration,
       initialBreakDuration: breakDuration, // Store initial duration for progress calculation
-      availableRestTime: Math.max(0, prev.availableRestTime - breakDuration),
-      availableRestMinutes: Math.floor(Math.max(0, prev.availableRestTime - breakDuration) / 60),
-      breakLastUpdatedAt: Date.now()
+      availableRestTime: prev.availableRestTime - breakDuration
     }));
     
     // Don't stop the main timer - flowmodoro break runs alongside the session
@@ -7189,37 +7211,24 @@ export default function App() {
   };
 
   const skipFlowmodoroBreak = () => {
-    setFlowmodoroState(prev => {
-      const capSec = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-      const returned = Math.max(0, prev.breakTimeRemaining || 0);
-      const current = Math.max(0, prev.availableRestTime || 0);
-      let nextAvailable = current + returned;
-      if (capSec > 0) {
-        nextAvailable = Math.min(capSec, nextAvailable);
-      }
-      return {
-        ...prev,
-        isOnBreak: false,
-        availableRestTime: nextAvailable,
-        availableRestMinutes: Math.floor(nextAvailable / 60),
-        breakTimeRemaining: 0,
-        initialBreakDuration: 0,
-        breakLastUpdatedAt: null
-      };
-    });
+    setFlowmodoroState(prev => ({
+      ...prev,
+      isOnBreak: false,
+      availableRestTime: prev.availableRestTime + prev.breakTimeRemaining, // Return unused time
+      breakTimeRemaining: 0,
+      initialBreakDuration: 0
+    }));
   };
 
   const resetFlowmodoroState = () => {
     setFlowmodoroState(prev => ({
       ...prev,
       availableRestTime: 0,
-      availableRestMinutes: 0,
       cycleCount: 0,
       isOnBreak: false,
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
-      accumulatedFractionalTime: 0,
-      breakLastUpdatedAt: null
+      accumulatedFractionalTime: 0
     }));
   };
 
@@ -7580,7 +7589,6 @@ export default function App() {
   // Track total elapsed seconds per sharedId to sync only additive deltas to daily
   const sharedElapsedSnapshotRef = useRef<Record<string, number>>({});
   const lastDrainedIndex = useRef(-1);
-  const flowBreakDrainCursorRef = useRef(0);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // Stable baseline for overall progress (sum of allocated seconds at session start)
   const initialTotalAllocatedRef = useRef<number>(0);
@@ -7623,51 +7631,6 @@ export default function App() {
     if (!templateId) return undefined;
     return activityTemplates.find(t => t.id === templateId);
   }, [activityTemplates]);
-
-  const collectFlowBreakDonors = (list: Activity[]) => {
-    const pools: Array<Array<{ index: number }>> = [[], [], [], []];
-    list.forEach((act, index) => {
-      if (act.isCompleted || act.countUp) return;
-      if (typeof act.timeRemaining !== 'number' || act.timeRemaining <= 0) return;
-      const locked = !!act.isLocked;
-      const priority = !!act.priority;
-      const entry = { index };
-      if (!locked && !priority) pools[0].push(entry);
-      else if (locked && !priority) pools[1].push(entry);
-      else if (!locked && priority) pools[2].push(entry);
-      else pools[3].push(entry);
-    });
-    return pools.find(pool => pool.length > 0) || [];
-  };
-
-  const applyFlowBreakDrain = (list: Activity[], seconds: number) => {
-    if (!Number.isFinite(seconds) || seconds <= 0) return;
-    for (let s = 0; s < seconds; s++) {
-      const donors = collectFlowBreakDonors(list);
-      if (donors.length === 0) break;
-
-      if (flowBreakDrainCursorRef.current >= donors.length) {
-        flowBreakDrainCursorRef.current = 0;
-      }
-
-      let cursor = flowBreakDrainCursorRef.current;
-      let attempts = 0;
-      while (attempts < donors.length) {
-        const donor = donors[cursor];
-        const remaining = list[donor.index]?.timeRemaining ?? 0;
-        if (typeof remaining === 'number' && remaining > 0) {
-          list[donor.index].timeRemaining = Math.max(0, remaining - 1);
-          flowBreakDrainCursorRef.current = (cursor + 1) % donors.length;
-          break;
-        }
-        attempts += 1;
-        cursor = (cursor + 1) % donors.length;
-      }
-
-      // No donors could contribute this second
-      if (attempts >= donors.length) break;
-    }
-  };
 
   // Helper: allocated seconds for an activity based on session and its config
   const getAllocatedSeconds = useCallback((activity: Activity) => {
@@ -7760,17 +7723,13 @@ export default function App() {
     if (elapsedSeconds <= 0) return;
 
     // Flowmodoro countdown runs concurrently with session/daily
-    let flowBreakDrainSeconds = 0;
-    if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
-      flowBreakDrainSeconds = Math.min(elapsedSeconds, flowmodoroState.breakTimeRemaining || 0);
+    if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
       setFlowmodoroState(prev => {
-        const existing = prev.breakTimeRemaining || 0;
-        const consume = Math.min(elapsedSeconds, existing);
-        const newBreakTimeRemaining = Math.max(0, existing - consume);
+        const newBreakTimeRemaining = Math.max(0, prev.breakTimeRemaining - elapsedSeconds);
         if (newBreakTimeRemaining <= 0) {
-          return { ...prev, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0, breakLastUpdatedAt: null };
+          return { ...prev, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0 };
         }
-        return { ...prev, breakTimeRemaining: newBreakTimeRemaining, breakLastUpdatedAt: Date.now() };
+        return { ...prev, breakTimeRemaining: newBreakTimeRemaining };
       });
     }
 
@@ -7791,25 +7750,16 @@ export default function App() {
       
       if (restSecondsToAdd > 0) {
         setFlowmodoroState(prevFlow => {
-          const previousAvailable = prevFlow.availableRestTime || 0;
-          let allowedAdd = restSecondsToAdd;
+          let nextAvailable = prevFlow.availableRestTime + restSecondsToAdd;
           // Enforce per-session cap if configured (>0)
           const capSec = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-          if (capSec > 0 && previousAvailable >= capSec) {
-            allowedAdd = 0;
-          } else if (capSec > 0 && previousAvailable + restSecondsToAdd > capSec) {
-            allowedAdd = Math.max(0, capSec - previousAvailable);
-          }
-          let nextAvailable = previousAvailable + allowedAdd;
-          if (capSec > 0) {
-            nextAvailable = Math.min(capSec, nextAvailable);
-          }
+          if (capSec > 0) nextAvailable = Math.min(nextAvailable, capSec);
           return ({
             ...prevFlow,
             availableRestTime: nextAvailable,
-            totalEarnedToday: prevFlow.totalEarnedToday + allowedAdd,
+            totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
             availableRestMinutes: Math.floor(nextAvailable / 60),
-            accumulatedFractionalTime: allowedAdd === restSecondsToAdd ? remainingFractional : 0
+            accumulatedFractionalTime: remainingFractional
           });
         });
       } else {
@@ -7821,7 +7771,7 @@ export default function App() {
     }
 
     // If we're on a Flowmodoro break in 'postpone' mode, pause activity draining entirely
-  const pauseForFlowBreak = settings.flowmodoroEnabled && settings.flowmodoroMode === 'postpone' && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+    const pauseForFlowBreak = settings.flowmodoroEnabled && settings.flowmodoroMode === 'postpone' && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
 
     setActivities(prev => {
       if (elapsedSeconds <= 0) return prev;
@@ -9767,6 +9717,11 @@ export default function App() {
                   showDrainOverlay={settings.showDrainOverlay}
                   flowmodoroOverlaySeconds={(settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.availableRestTime > 0) ? flowmodoroState.availableRestTime : 0}
                   flowmodoroOverlayColor={'#8b5cf6'}
+                  showFlowmodoroActivity={settings.flowmodoroEnabled && settings.flowmodoroShowAsActivity && settings.flowmodoroMode === 'drain'}
+                  flowmodoroActivityCapSeconds={Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60)}
+                  flowmodoroActivityAvailableSeconds={flowmodoroState.availableRestTime || 0}
+                  flowmodoroActivityColor={'#8b5cf6'}
+                  flowmodoroActivityIcon={settings.flowmodoroIcon || '🌟'}
                 />
               </div>
             )
@@ -10287,6 +10242,75 @@ export default function App() {
                             </Button>
                           </div>
                           <p className="text-xs text-gray-500">Drain: activities keep counting down during breaks. Postpone: pause draining while on a break.</p>
+                        </div>
+
+                        <div className="space-y-3 pt-2">
+                          <Label className="font-medium">Pseudo Activity Segment</Label>
+                          <div className="flex items-center justify-between">
+                            <div className="pr-4">
+                              <p className="text-sm text-gray-700">Show Flowmodoro as its own segment</p>
+                              <p className="text-xs text-gray-500">Appears only in drain mode; reserves visual capacity.</p>
+                            </div>
+                            <Switch
+                              id="flowmodoro-show-as-activity"
+                              checked={settings.flowmodoroShowAsActivity}
+                              onCheckedChange={checked => setSettings(p => ({ ...p, flowmodoroShowAsActivity: checked }))}
+                            />
+                          </div>
+                          {settings.flowmodoroShowAsActivity && (
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="space-y-1">
+                                <Label className="text-sm">Planned Minutes</Label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    max={240}
+                                    value={settings.flowmodoroSessionActivityMinutes}
+                                    onChange={e => {
+                                      const raw = e.target.value;
+                                      if (raw === '') {
+                                        setSettings(p => ({ ...p, flowmodoroSessionActivityMinutes: 10 }));
+                                      } else {
+                                        const v = Math.max(1, Math.min(240, Number(raw) || 10));
+                                        setSettings(p => ({ ...p, flowmodoroSessionActivityMinutes: v }));
+                                      }
+                                    }}
+                                    onBlur={e => {
+                                      const v = Math.max(1, Math.min(240, Number(e.target.value) || 10));
+                                      setSettings(p => ({ ...p, flowmodoroSessionActivityMinutes: v }));
+                                    }}
+                                    className="w-24"
+                                  />
+                                  <span className="text-xs text-gray-500">capacity</span>
+                                </div>
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-sm">Segment Icon</Label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type="text"
+                                    maxLength={3}
+                                    value={settings.flowmodoroIcon}
+                                    onChange={e => setSettings(p => ({ ...p, flowmodoroIcon: e.target.value || '🌟' }))}
+                                    className="w-20 text-center"
+                                  />
+                                  <div className="flex flex-wrap gap-1">
+                                    {['🌟','🔆','💠','🌀','⚡','🧠','☕'].map(ic => (
+                                      <button
+                                        key={ic}
+                                        type="button"
+                                        onClick={() => setSettings(p => ({ ...p, flowmodoroIcon: ic }))}
+                                        className={`h-7 w-7 rounded-md flex items-center justify-center border text-base hover:bg-purple-50 ${settings.flowmodoroIcon === ic ? 'bg-purple-100 border-purple-400' : 'border-gray-200'}`}
+                                        title={ic}
+                                      >{ic}</button>
+                                    ))}
+                                  </div>
+                                </div>
+                                <p className="text-xs text-gray-500">Pick an emoji / symbol (1–2 chars).</p>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <Separator />
