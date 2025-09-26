@@ -1,6 +1,9 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
+// Module-level ref for detecting session end transitions without rerender churn
+let staticPrevTimerStateRef: { wasActive: boolean } | undefined;
+
 interface Subtask {
   id: string;
   name: string;
@@ -2180,19 +2183,22 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   const size = 200;
   const strokeWidth = 12;
   const center = size / 2;
-  const radius = center - strokeWidth;
-  // Add a little more space between outer and inner rings
-  const activityRadius = radius - strokeWidth - 8;
+  const radius = center - strokeWidth; // base radius for segment arcs
+  const activityRadius = radius - strokeWidth - 8; // inner active ring
   const circumference = 2 * Math.PI * radius;
   const activityCircumference = 2 * Math.PI * activityRadius;
   const lastShownRef = useRef<Record<string, number>>({});
-  const allocationStrokeWidth = 4; // thinner ring for planned allocation overview
-  const allocationRadius = radius + (strokeWidth / 2) + 2; // stays within SVG bounds (size/2)
+  // Allocation ring (disabled visually now)
+  const allocationStrokeWidth = 4;
+  const allocationRadius = radius + (strokeWidth / 2) + 2;
   const allocationCircumference = 2 * Math.PI * allocationRadius;
-  // Thick black outer overall progress ring
-  const outerBlackStrokeWidth = 14; // slightly thinner and lighter per request
-  const outerBlackRadius = radius; // share the same radius; colored segments will sit on top
-  const outerBlackCircumference = 2 * Math.PI * outerBlackRadius;
+  // Transparent overall progress indicator (outer), slightly wider than segments and moved outward
+  const overallStrokeWidth = strokeWidth + 6; // a little wider than segment stroke
+  // Place so its INNER edge lines up with inner edge of colored segment arcs (which sit at radius)
+  // Segment arcs use 'radius' as center to outer edge: outerEdge = radius + strokeWidth/2, innerEdge = radius - strokeWidth/2
+  // We want: overallInnerEdge = coloredInnerEdge => overallRadius - overallStrokeWidth/2 = radius - strokeWidth/2
+  const overallRadius = (radius - strokeWidth/2) + overallStrokeWidth/2;
+  const overallCircumference = 2 * Math.PI * overallRadius;
   
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
@@ -2554,26 +2560,26 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           cy={center}
         />
 
-        {/* Thick dark overall progress ring (drawn behind colored segments), less black, more grey and a bit transparent */}
+        {/* Overall transparent progress ring (outer) */}
         <circle
-          stroke="#1f2937"
+          stroke="#94a3b8" /* slate-400 */
           fill="transparent"
-          strokeWidth={outerBlackStrokeWidth}
-          strokeDasharray={outerBlackCircumference}
-          strokeDashoffset={outerBlackCircumference - (totalProgress / 100) * outerBlackCircumference}
+          strokeWidth={overallStrokeWidth}
+          strokeDasharray={overallCircumference}
+          strokeDashoffset={overallCircumference - (totalProgress / 100) * overallCircumference}
           strokeLinecap="round"
-          r={outerBlackRadius}
+          r={overallRadius}
           cx={center}
           cy={center}
           transform={`rotate(-90 ${center} ${center})`}
-          opacity={0.75}
+          opacity={0.35}
         />
 
-        {/* Segment divider lines for segmented style */}
-        {renderSegmentDividers()}
+    {/* Segment divider lines for segmented style */}
+    {renderSegmentDividers()}
 
-        {/* Outer Progress Ring(s) */}
-        {renderOuterRing()}
+    {/* Colored segments ring (restored) */}
+    {renderOuterRing()}
 
         {/* Inner Activity Ring */}
         <circle
@@ -2588,41 +2594,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           cy={center}
           transform={`rotate(-90 ${center} ${center})`}
         />
-        {/* Flowmodoro overlay segment at outer edge with star icon */}
-        {(() => {
-          // Compute planned seconds to translate overlay seconds to angle width
-          const totalSessionSecondsAlloc = totalSessionMinutes * 60;
-          const plannedSeconds = activities.map(a => {
-            if (a.percentage && a.percentage > 0) return (a.percentage / 100) * totalSessionSecondsAlloc;
-            if (a.duration && a.duration > 0) return a.duration * 60;
-            return 0;
-          });
-          const totalPlanned = plannedSeconds.reduce((s, v) => s + v, 0);
-          if (!flowmodoroOverlaySeconds || flowmodoroOverlaySeconds <= 0 || totalPlanned <= 0) return null;
-          const overlayAngle = Math.max(0, Math.min(360, (flowmodoroOverlaySeconds / totalPlanned) * 360));
-          if (overlayAngle <= 0.2) return null;
-          const arcLength = (overlayAngle / 360) * circumference;
-          // Place overlay after the existing colored arcs (at the end of the circle)
-          const rotation = -90 + 360 - overlayAngle;
-          return (
-            <g>
-              <circle
-                stroke={flowmodoroOverlayColor}
-                fill="transparent"
-                strokeWidth={strokeWidth}
-                strokeDasharray={`${arcLength} ${circumference}`}
-                r={radius}
-                cx={center}
-                cy={center}
-                transform={`rotate(${rotation} ${center} ${center})`}
-                opacity={0.9}
-              />
-              <text x="50%" y="50%" textAnchor="middle" dy="-1.2em" className="text-xs font-bold fill-current" style={{ fill: flowmodoroOverlayColor }}>
-                🌟
-              </text>
-            </g>
-          );
-        })()}
+        {/* Flowmodoro overlay removed (outer colored edge) */}
         <text x="50%" y="50%" textAnchor="middle" dy=".3em" className="text-3xl font-bold fill-current text-slate-700">
           {Math.round(totalProgress)}%
         </text>
@@ -9540,9 +9512,18 @@ export default function App() {
   }, [activities]);
 
   useEffect(() => {
-    // When timer transitions from active to not active and it's because session finished, show report
-    if (!isTimerActive && settings.showSessionEndReport) {
-      // Heuristic: all non-countUp activities completed or no remaining time
+    // Show session report ONLY when a session truly ends: timer was active, now stopped, and there was real session work.
+    // Prevent triggers on: switching to daily view, adding/removing first/second activities, or mid-session edits.
+    // We track previous timer state to detect a transition.
+    staticPrevTimerStateRef = staticPrevTimerStateRef || { wasActive: false };
+    const prev = staticPrevTimerStateRef.wasActive;
+    staticPrevTimerStateRef.wasActive = isTimerActive;
+    if (!settings.showSessionEndReport) return;
+    // Only fire when we just transitioned from active -> inactive
+    if (prev && !isTimerActive) {
+      // Must have had at least one non-countUp activity with some allocated or elapsed time
+      const hadWork = activities.some(a => !a.countUp && (a.isCompleted || (typeof a.timeRemaining === 'number' && (a.timeRemaining < a.duration * 60))));
+      if (!hadWork) return; // ignore trivial/empty sessions
       const remaining = activities.reduce((s, a) => s + (a.countUp ? 0 : Math.max(0, a.timeRemaining || 0)), 0);
       const allDone = activities.every(a => a.countUp || a.isCompleted || (typeof a.timeRemaining === 'number' && a.timeRemaining <= 0));
       if (allDone || remaining === 0) {
