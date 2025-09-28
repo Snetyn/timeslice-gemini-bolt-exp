@@ -6015,6 +6015,8 @@ export default function App() {
       flowmodoroResetEndTime: '23:59', // Daily reset at 11:59 PM
     flowmodoroShowAsActivity: true, // visualize Flowmodoro as its own pseudo-activity segment
     flowmodoroSessionActivityMinutes: 10, // planned Flow capacity for pseudo segment
+  redistributionUseVaultFirst: true, // new: take from vault before shrinking activities
+  redistributionProportional: false, // new: use proportional instead of per-second loop
     flowmodoroIcon: '🌟',
       // Daily Mode specific settings
       dailyShowActivityProgress: true, // Show progress bars in daily activity cards
@@ -8101,36 +8103,78 @@ export default function App() {
         desiredSeconds = Math.max(300, Math.round(avg || (totalSessionSecondsLocal/Math.max(1, existing.length+1))));
       }
 
-      // We will drain seconds one at a time from sources using hierarchy until we accumulate desiredSeconds.
-      // BUILD source pools (exclude locked+priority last, etc.) and respect vault first by borrowing its value indirectly via timeRemaining of activities.
-      // Here we only redistribute planned allocation, so adjust plannedSeconds array.
+      // Optionally consume Vault first (does not change planned allocation, just reduces need to shrink activities)
+      if (settings.redistributionUseVaultFirst && vaultTime > 0 && desiredSeconds > 0) {
+        const fromVault = Math.min(vaultTime, desiredSeconds);
+        // Reduce desiredSeconds by what vault can cover; vaultTime state update outside setActivities (defer via callback after set)
+        desiredSeconds -= fromVault;
+        setVaultTime(vt => Math.max(0, vt - fromVault));
+      }
+
+      // If nothing left to carve, just append with minimal percentage (based on granted seconds from vault)
+      if (desiredSeconds <= 0) {
+        const newPercentageVaultOnly = 0; // treat as 0 planned slice if purely funded by vault (could adjust rule if needed)
+        newActivity.percentage = newPercentageVaultOnly;
+        return [...existing, newActivity];
+      }
+
+      // We will drain seconds from sources using hierarchy until we accumulate desiredSeconds.
+      // If proportional mode enabled, compute shares in one pass instead of per-second.
       const orderIndices = [0,1,2,3].map(()=>[] as number[]);
       existing.forEach((a,i)=>{ orderIndices[classifyForDrain(a)].push(i); });
       const hierarchy = [...orderIndices[0], ...orderIndices[1], ...orderIndices[2], ...orderIndices[3]];
 
       // Compute max removable seconds per activity (cannot go below a minimum slice to avoid zero-width disappearance) choose 60s minimum if originally non-zero.
       const MIN_PLANNED_SEC = 60; // one minute visual floor.
-      let needed = desiredSeconds;
-      // Track how many seconds removed per activity.
-      const removed: Record<number, number> = {};
-      while (needed > 0) {
-        let removedInPass = false;
-        for (const idx of hierarchy) {
-          if (needed <= 0) break;
+      let grantedSeconds = 0;
+      if (settings.redistributionProportional) {
+        // Proportional removal: only from activities that have headroom above floor.
+        const candidates = hierarchy.filter(i => plannedSeconds[i] > MIN_PLANNED_SEC + 1);
+        let remaining = desiredSeconds;
+        // Loop because after first proportional subtraction some may hit floor.
+        while (remaining > 0 && candidates.length > 0) {
+          const totalRemovable = candidates.reduce((s,i)=> s + Math.max(0, plannedSeconds[i] - MIN_PLANNED_SEC), 0);
+          if (totalRemovable <= 0) break;
+          const ratio = Math.min(1, remaining / totalRemovable);
+          let removedThisRound = 0;
+          for (const i of [...candidates]) {
+            const headroom = Math.max(0, plannedSeconds[i] - MIN_PLANNED_SEC);
+            if (headroom <= 0) continue;
+            const take = Math.min(headroom, Math.max(1, Math.floor(headroom * ratio)));
+            plannedSeconds[i] -= take;
+            removedThisRound += take;
+          }
+          remaining -= removedThisRound;
+          // Remove any that hit floor
+          for (let cIndex = candidates.length -1; cIndex >=0; cIndex--) {
+            const i = candidates[cIndex];
+            if (plannedSeconds[i] <= MIN_PLANNED_SEC) candidates.splice(cIndex,1);
+          }
+          if (removedThisRound === 0) break;
+        }
+        grantedSeconds = desiredSeconds - Math.max(0, Math.ceil(remaining));
+      } else {
+        let needed = desiredSeconds;
+        const removed: Record<number, number> = {};
+        while (needed > 0) {
+          let removedInPass = false;
+          for (const idx of hierarchy) {
+            if (needed <= 0) break;
             const currentPlanned = plannedSeconds[idx];
             if (currentPlanned <= 0) continue;
             const floor = currentPlanned > 0 ? MIN_PLANNED_SEC : 0;
-            if (currentPlanned - (removed[idx]||0) <= floor) continue;
-            // Remove 1 second
+            const effectiveCurrent = currentPlanned - (removed[idx]||0);
+            if (effectiveCurrent <= floor) continue;
             plannedSeconds[idx] -= 1;
             removed[idx] = (removed[idx]||0)+1;
             needed -= 1;
             removedInPass = true;
             if (needed <= 0) break;
+          }
+          if (!removedInPass) break;
         }
-        if (!removedInPass) break; // cannot remove further without violating floors
+        grantedSeconds = desiredSeconds - Math.max(0, needed);
       }
-      const grantedSeconds = desiredSeconds - needed;
       // Assign grantedSeconds as percentage relative to session length.
       const newPercentage = totalSessionSecondsLocal > 0 ? (grantedSeconds / totalSessionSecondsLocal) * 100 : 0;
       newActivity.percentage = newPercentage;
@@ -9636,7 +9680,21 @@ export default function App() {
                   const earned = Math.min(capSec, flowmodoroState.availableRestTime || 0);
                   const pct = capSec > 0 ? (earned / capSec) * 100 : 0;
                   return (
-                    <div className="relative overflow-hidden flex items-center justify-between p-2 rounded-lg border bg-purple-50 border-purple-200">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (flowmodoroState.availableRestTime > 0 && !flowmodoroState.isOnBreak) {
+                          // Auto start a break using all earned time (existing handler)
+                          takeFlowmodoroBreak(flowmodoroState.availableRestTime);
+                        } else {
+                          // Open settings panel (scroll or toggle) – simplest: scroll to Flowmodoro section if present
+                          const el = document.querySelector('#flowmodoro-settings');
+                          if (el) el.scrollIntoView({ behavior: 'smooth' });
+                        }
+                      }}
+                      title={flowmodoroState.availableRestTime > 0 ? 'Click to start break with earned Flow time' : 'No Flow time yet – click to adjust settings'}
+                      className="relative overflow-hidden flex items-center justify-between w-full text-left p-2 rounded-lg border bg-purple-50 border-purple-200 hover:bg-purple-100 focus:outline-none focus:ring-2 focus:ring-purple-400 transition-colors"
+                    >
                       <div className="absolute inset-0 bg-purple-400/20" style={{ width: pct + '%'}} />
                       <div className="flex items-center space-x-2 z-10">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />
@@ -9646,7 +9704,7 @@ export default function App() {
                       <div className="flex items-center space-x-2 z-10">
                         <span className="text-[10px] text-purple-700">{Math.round(pct)}%</span>
                       </div>
-                    </div>
+                    </button>
                   );
                 })()
               )}
