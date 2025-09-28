@@ -4,6 +4,17 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 // Module-level ref for detecting session end transitions without rerender churn
 let staticPrevTimerStateRef: { wasActive: boolean } | undefined;
 
+// Helper classification for hierarchy ordering (lower number = drained first)
+function classifyForDrain(a: any) {
+  // Order: not locked & not priority (0), locked & not priority (1), priority & not locked (2), priority & locked (3)
+  const priority = !!a.priority;
+  const locked = !!a.isLocked;
+  if (!locked && !priority) return 0;
+  if (locked && !priority) return 1;
+  if (!locked && priority) return 2;
+  return 3;
+}
+
 interface Subtask {
   id: string;
   name: string;
@@ -435,16 +446,15 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
       });
     });
     
-    // Session activities: use ACTUAL elapsed (not preset duration) when we can date it (startedAt)
+    // Session activities: derive elapsed minutes similar to yesterday overlay logic
     (activities || []).forEach(a => {
       const tags = a.tags || [];
       const dateToUse = a.startedAt ? new Date(a.startedAt) : null;
       const include = (bounds.start === null && bounds.end === null) || inRange(dateToUse, bounds.start, bounds.end);
       if (!include) return;
-      // Compute elapsed minutes consistent with RPGStats
+      let minutes = 0;
       const durationSec = Math.max(0, (a.duration || 0) * 60);
       const tr = typeof a.timeRemaining === 'number' ? a.timeRemaining : undefined;
-      let minutes = 0;
       if (a.countUp) {
         minutes = Math.max(0, Math.floor((a.timeRemaining || 0) / 60));
       } else if (typeof tr === 'number') {
@@ -456,224 +466,16 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
         totals.set(tag, (totals.get(tag) || 0) + minutes);
       });
     });
-    
-    // Convert to levels mirroring RPGStat calculation
+
+    // Return updated stats for this range
     return stats.map(s => {
       const totalMinutes = totals.get(s.tagId) || 0;
       const level = Math.floor(totalMinutes / 60) + 1;
-      const experience = totalMinutes % 60;
-      return { ...s, totalMinutes, level, experience };
+      return { ...s, level };
     });
-  }, [activities, dailyActivities, getRangeBounds, stats]);
-  
-  // Calculate today's task data per tag
-  const calculateTodayTaskData = () => {
-    const today = new Date();
-    const todayStr = today.toDateString();
-    
-    const tagData = new Map();
-    stats.forEach(stat => {
-      tagData.set(stat.tagId, {
-        tagName: stat.tagName,
-        color: stat.color,
-        plannedToday: 0,
-        completedToday: 0,
-        progressToday: 0,
-        totalPlanned: 0
-      });
-    });
-    
-    // Process daily activities for today's data
-    dailyActivities.forEach(activity => {
-      if (activity.tags && activity.tags.length > 0) {
-        activity.tags.forEach(tagId => {
-          const data = tagData.get(tagId);
-          if (data) {
-            data.totalPlanned += activity.duration;
-            data.plannedToday += activity.duration;
-            
-            if (activity.status === 'completed') {
-              data.completedToday += activity.duration;
-            }
-            
-            data.progressToday += activity.timeSpent || 0;
-          }
-        });
-      }
-    });
-    
-    // Process session activities (use actual elapsed)
-    activities.forEach(activity => {
-      if (activity.tags && activity.tags.length > 0) {
-        let activityProgress = 0;
-        const durationSec = Math.max(0, (activity.duration || 0) * 60);
-        const tr = typeof activity.timeRemaining === 'number' ? activity.timeRemaining : undefined;
-        if (activity.countUp) {
-          activityProgress = Math.max(0, (activity.timeRemaining || 0) / 60);
-        } else if (typeof tr === 'number') {
-          const elapsedSec = tr >= 0 ? (durationSec - tr) : (durationSec + Math.abs(tr));
-          activityProgress = Math.max(0, elapsedSec / 60);
-        }
-        activity.tags.forEach(tagId => {
-          const data = tagData.get(tagId);
-          if (data) {
-            data.progressToday += Math.max(0, activityProgress);
-          }
-        });
-      }
-    });
-    
-    return Array.from(tagData.values());
-  };
-  
-  const todayTaskData = calculateTodayTaskData();
-  
-  // Calculate dynamic scaling based on current stats
-  const maxLevel = Math.max(...stats.map(s => s.level), 1);
-  const minLevel = Math.min(...stats.map(s => s.level));
-  
-  // Dynamic ring calculation for better representation
-  const calculateOptimalRings = () => {
-    if (maxLevel <= 5) return 5;
-    if (maxLevel <= 10) return Math.max(5, Math.ceil(maxLevel / 2));
-    if (maxLevel <= 20) return Math.max(8, Math.ceil(maxLevel / 3));
-    return Math.max(10, Math.ceil(maxLevel / 4));
-  };
-  
-  const rings = calculateOptimalRings();
-  
-  // Dynamic scaling factor for better visual representation
-  const calculateScalingFactor = () => {
-    if (maxLevel <= 3) return 2.5;
-    if (maxLevel <= 5) return 2.0;
-    if (maxLevel <= 10) return 1.5;
-    if (maxLevel <= 15) return 1.2;
-    return 1.0;
-  };
-  
-  const scalingFactor = calculateScalingFactor();
-  const effectiveMaxLevel = Math.max(maxLevel * scalingFactor, rings);
-  
-  // Calculate angle for each stat
-  const angleStep = (2 * Math.PI) / stats.length;
-  
-  // Generate dynamic ring paths with adaptive scaling
-  const ringPaths = Array.from({ length: rings }, (_, i) => {
-    const ringLevel = (effectiveMaxLevel / rings) * (i + 1);
-    const radius = (maxRadius / rings) * (i + 1);
-    const points = stats.map((_, index) => {
-      const angle = index * angleStep - Math.PI / 2;
-      const x = center + Math.cos(angle) * radius;
-      const y = center + Math.sin(angle) * radius;
-      return `${x},${y}`;
-    });
-    return { 
-      path: `M ${points.join(' L ')} Z`,
-      level: Math.round(ringLevel * 10) / 10,
-      radius
-    };
-  });
-  
-  // Generate paths based on display mode
-  const generateDisplayPaths = () => {
-    switch (displayMode) {
-      case 'today-tasks':
-        const maxPlanned = Math.max(...todayTaskData.map(d => d.plannedToday), 1);
-        return todayTaskData.map((data, index) => {
-          const angle = index * angleStep - Math.PI / 2;
-          const normalizedValue = Math.min(data.plannedToday / maxPlanned, 1);
-          const radius = maxRadius * normalizedValue;
-          const x = center + Math.cos(angle) * radius;
-          const y = center + Math.sin(angle) * radius;
-          return `${x},${y}`;
-        });
-        
-      case 'daily-view':
-        // Calculate daily activity completion rates for each tag
-        const dailyViewData = stats.map(stat => {
-          const dailyMinutes = dailyActivities
-            .filter(a => a.tags?.includes(stat.tagId))
-            .reduce((sum, a) => sum + (a.timeSpent || 0), 0);
-          const plannedDaily = dailyActivities
-            .filter(a => a.tags?.includes(stat.tagId))
-            .reduce((sum, a) => sum + a.duration, 0);
-          return {
-            ...stat,
-            dailyCompletionRate: plannedDaily > 0 ? dailyMinutes / plannedDaily : 0,
-            dailyMinutes,
-            plannedDaily
-          };
-        });
-        
-        const maxDailyCompletion = Math.max(...dailyViewData.map(d => d.dailyCompletionRate), 1);
-        return dailyViewData.map((data, index) => {
-          const angle = index * angleStep - Math.PI / 2;
-          const normalizedValue = Math.min(data.dailyCompletionRate / maxDailyCompletion, 1);
-          const radius = maxRadius * normalizedValue;
-          const x = center + Math.cos(angle) * radius;
-          const y = center + Math.sin(angle) * radius;
-          return `${x},${y}`;
-        });
-        
-      case 'progress':
-        const maxProgress = Math.max(...todayTaskData.map(d => d.progressToday), 1);
-        return todayTaskData.map((data, index) => {
-          const angle = index * angleStep - Math.PI / 2;
-          const normalizedValue = Math.min(data.progressToday / maxProgress, 1);
-          const radius = maxRadius * normalizedValue;
-          const x = center + Math.cos(angle) * radius;
-          const y = center + Math.sin(angle) * radius;
-          return `${x},${y}`;
-        });
-        
-      case 'balance':
-        return suggestedStats.map((stat, index) => {
-          const angle = index * angleStep - Math.PI / 2;
-          const scaledLevel = stat.level * scalingFactor;
-          const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
-          const radius = maxRadius * normalizedValue;
-          const x = center + Math.cos(angle) * radius;
-          const y = center + Math.sin(angle) * radius;
-          return `${x},${y}`;
-        });
-        
-      default: // overview
-        // Recompute view using selected time range
-        const rangeStats = buildOverviewRangeStats(timeRange);
-        return rangeStats.map((stat, index) => {
-          const angle = index * angleStep - Math.PI / 2;
-          const scaledLevel = stat.level * scalingFactor;
-          const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
-          const radius = maxRadius * normalizedValue;
-          const x = center + Math.cos(angle) * radius;
-          const y = center + Math.sin(angle) * radius;
-          return `${x},${y}`;
-        });
-    }
-  };
-  
-  const displayPath = generateDisplayPaths();
-  
-  // Generate suggested stats path
-  const suggestedPath = suggestedStats.map((stat, index) => {
-    const angle = index * angleStep - Math.PI / 2;
-    const scaledLevel = stat.level * scalingFactor;
-    const normalizedValue = Math.min(scaledLevel / effectiveMaxLevel, 1);
-    const radius = maxRadius * normalizedValue;
-    const x = center + Math.cos(angle) * radius;
-    const y = center + Math.sin(angle) * radius;
-    return `${x},${y}`;
-  });
-  
-  const getDisplayColor = () => {
-    switch (displayMode) {
-      case 'today-tasks': return '#10b981'; // green
-      case 'daily-view': return '#0891b2'; // teal
-      case 'progress': return '#f59e0b'; // amber  
-      case 'balance': return '#8b5cf6'; // purple
-      default: return '#3b82f6'; // blue
-    }
-  };
+  }, [stats, dailyActivities, activities, getRangeBounds]);
+
+  // (renderOuterRing belongs to CircularProgress later; stray fragment removed)
   
   const getDisplayLabel = () => {
     switch (displayMode) {
@@ -1164,8 +966,8 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
       {getDisplayLabel()} {displayMode === 'overview' ? `• ${getTimeRangeLabel(timeRange)}` : ''}
         </text>
       </svg>
-      
-  {/* Legend removed per request */}
+
+    {/* Legend removed per request */}
 
       {/* Add CSS animations */}
       <style>{`
@@ -1182,7 +984,7 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
       `}</style>
     </div>
   );
-};
+}
 
 // RPG Stats Page Component
 const RPGStatsPage = ({ 
@@ -7832,15 +7634,28 @@ export default function App() {
           }
         }
 
-        // Flowmodoro break drain across all non-starred in drain mode
+        // Flowmodoro break drain: single-source hierarchy (vault -> groups by classifyForDrain)
         if (settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
-          // For each second processed, reduce 1s from all eligible non-starred donors equally (one second per donor per tick second)
-          const donorsIdx = newActivities.map((a, i) => ({ a, i }))
-            .filter(x => !x.a.isCompleted && !x.a.countUp && !x.a.priority && (typeof x.a.timeRemaining === 'number') && x.a.timeRemaining > 0);
-          if (donorsIdx.length > 0) {
-            donorsIdx.forEach(d => {
-              newActivities[d.i].timeRemaining = Math.max(0, (newActivities[d.i].timeRemaining || 0) - 1);
+          let drained = false;
+          // 1. Vault
+          if (!drained && vaultTime > 0) {
+            setVaultTime(v => Math.max(0, v - 1));
+            drained = true;
+          }
+          if (!drained) {
+            const pools: { i: number; a: any }[][] = [[], [], [], []];
+            newActivities.forEach((a, i) => {
+              if (a.isCompleted || a.countUp) return;
+              if (typeof a.timeRemaining !== 'number' || a.timeRemaining <= 0) return;
+              pools[classifyForDrain(a)].push({ i, a });
             });
+            const pool = pools.find(p => p.length > 0);
+            if (pool && pool.length) {
+              const pickIndex = Math.floor(Math.random() * pool.length); // simple rotation could be added
+              const target = pool[pickIndex];
+              newActivities[target.i].timeRemaining = Math.max(0, (newActivities[target.i].timeRemaining || 0) - 1);
+              drained = true;
+            }
           }
         }
       }
@@ -8255,22 +8070,79 @@ export default function App() {
     };
     
     setActivities(prev => {
-      const updatedActivities = [...prev, newActivity];
-      
-      // If timer is not active, redistribute percentages equally
+      const existing = [...prev];
+      const updatedActivities = [...existing, newActivity];
+
+      // If timer not active: keep original equal distribution logic
       if (!isTimerActive) {
-        const lockedTotal = updatedActivities.filter(a => a.isLocked).reduce((sum, a) => sum + a.percentage, 0);
+        const lockedTotal = updatedActivities.filter(a => a.isLocked).reduce((sum, a) => sum + (a.percentage || 0), 0);
         const unlockedActivities = updatedActivities.filter(a => !a.isLocked);
         const remainingPercentage = 100 - lockedTotal;
         const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
-
-        return updatedActivities.map(act => {
-          if (act.isLocked) return act;
-          return { ...act, percentage: equalPercentage };
-        });
+        return updatedActivities.map(act => act.isLocked ? act : { ...act, percentage: equalPercentage });
       }
-      
-      return updatedActivities;
+
+      // Session active: we need to carve planned seconds for the new activity using hierarchy.
+      // Convert current percentages/durations into planned seconds baseline.
+      const totalSessionSecondsLocal = totalSessionMinutes * 60;
+      const plannedSeconds = existing.map(a => {
+        if (a.percentage && a.percentage > 0) return (a.percentage / 100) * totalSessionSecondsLocal;
+        if (a.duration && a.duration > 0) return a.duration * 60;
+        return 0;
+      });
+      const totalPlannedExisting = plannedSeconds.reduce((s,v)=>s+v,0);
+
+      // Decide desired planned seconds for new activity:
+      // If presetTime provided use that, else assign proportional slice (average of unlocked existing) or minimal 5 minutes.
+      let desiredSeconds = presetTime > 0 ? presetTime : 0;
+      if (desiredSeconds <= 0) {
+        const unlockedIdxs = existing.map((a,i)=>({a,i})).filter(x=>!x.a.isLocked);
+        const avg = unlockedIdxs.length ? (unlockedIdxs.reduce((s,x)=>s+plannedSeconds[x.i],0)/unlockedIdxs.length) : 0;
+        desiredSeconds = Math.max(300, Math.round(avg || (totalSessionSecondsLocal/Math.max(1, existing.length+1))));
+      }
+
+      // We will drain seconds one at a time from sources using hierarchy until we accumulate desiredSeconds.
+      // BUILD source pools (exclude locked+priority last, etc.) and respect vault first by borrowing its value indirectly via timeRemaining of activities.
+      // Here we only redistribute planned allocation, so adjust plannedSeconds array.
+      const orderIndices = [0,1,2,3].map(()=>[] as number[]);
+      existing.forEach((a,i)=>{ orderIndices[classifyForDrain(a)].push(i); });
+      const hierarchy = [...orderIndices[0], ...orderIndices[1], ...orderIndices[2], ...orderIndices[3]];
+
+      // Compute max removable seconds per activity (cannot go below a minimum slice to avoid zero-width disappearance) choose 60s minimum if originally non-zero.
+      const MIN_PLANNED_SEC = 60; // one minute visual floor.
+      let needed = desiredSeconds;
+      // Track how many seconds removed per activity.
+      const removed: Record<number, number> = {};
+      while (needed > 0) {
+        let removedInPass = false;
+        for (const idx of hierarchy) {
+          if (needed <= 0) break;
+            const currentPlanned = plannedSeconds[idx];
+            if (currentPlanned <= 0) continue;
+            const floor = currentPlanned > 0 ? MIN_PLANNED_SEC : 0;
+            if (currentPlanned - (removed[idx]||0) <= floor) continue;
+            // Remove 1 second
+            plannedSeconds[idx] -= 1;
+            removed[idx] = (removed[idx]||0)+1;
+            needed -= 1;
+            removedInPass = true;
+            if (needed <= 0) break;
+        }
+        if (!removedInPass) break; // cannot remove further without violating floors
+      }
+      const grantedSeconds = desiredSeconds - needed;
+      // Assign grantedSeconds as percentage relative to session length.
+      const newPercentage = totalSessionSecondsLocal > 0 ? (grantedSeconds / totalSessionSecondsLocal) * 100 : 0;
+      newActivity.percentage = newPercentage;
+      newActivity.duration = 0; // use percentage-based for consistency during active session
+
+      // Recompute percentages for existing from adjusted plannedSeconds.
+      const recomputed = existing.map((a,i)=>{
+        const pSec = plannedSeconds[i];
+        const pct = totalSessionSecondsLocal>0? (pSec/totalSessionSecondsLocal)*100 : 0;
+        return { ...a, percentage: pct };
+      });
+      return [...recomputed, newActivity];
     });
   };
 
@@ -9756,7 +9628,29 @@ export default function App() {
           
           <div className="space-y-1">
             <h3 className="font-semibold text-sm">Activities</h3>
-            <div className="space-y-1">{activities
+            <div className="space-y-1">
+              {settings.flowmodoroEnabled && settings.flowmodoroShowAsActivity && settings.flowmodoroMode === 'drain' && (
+                (() => {
+                  const capSec = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
+                  if (capSec <= 0) return null;
+                  const earned = Math.min(capSec, flowmodoroState.availableRestTime || 0);
+                  const pct = capSec > 0 ? (earned / capSec) * 100 : 0;
+                  return (
+                    <div className="relative overflow-hidden flex items-center justify-between p-2 rounded-lg border bg-purple-50 border-purple-200">
+                      <div className="absolute inset-0 bg-purple-400/20" style={{ width: pct + '%'}} />
+                      <div className="flex items-center space-x-2 z-10">
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />
+                        <span className="font-semibold text-sm text-purple-800">Flow Reserve</span>
+                        <span className="text-xs font-medium text-purple-700">{Math.floor(earned/60)}m / {Math.floor(capSec/60)}m</span>
+                      </div>
+                      <div className="flex items-center space-x-2 z-10">
+                        <span className="text-[10px] text-purple-700">{Math.round(pct)}%</span>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+              {activities
               .map((activity, index) => ({ activity, index }))
               .filter(({ activity }) => {
                 if (!settings.enableTimeWindowFiltering) return true;
