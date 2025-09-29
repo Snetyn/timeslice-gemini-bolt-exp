@@ -7638,25 +7638,25 @@ export default function App() {
 
         // Flowmodoro break drain: single-source hierarchy (vault -> groups by classifyForDrain)
         if (settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
-          let drained = false;
-          // 1. Vault
-          if (!drained && vaultTime > 0) {
+          // Single-source hierarchy drain: vault -> lowest tier with available time (non priority & unlocked) -> ...
+          let need = 1;
+          if (vaultTime > 0 && need > 0) {
             setVaultTime(v => Math.max(0, v - 1));
-            drained = true;
+            need -= 1;
           }
-          if (!drained) {
-            const pools: { i: number; a: any }[][] = [[], [], [], []];
-            newActivities.forEach((a, i) => {
+          if (need > 0) {
+            const tierPools: { idx: number; act: any }[][] = [[],[],[],[]];
+            newActivities.forEach((a,i)=>{
               if (a.isCompleted || a.countUp) return;
               if (typeof a.timeRemaining !== 'number' || a.timeRemaining <= 0) return;
-              pools[classifyForDrain(a)].push({ i, a });
+              tierPools[classifyForDrain(a)].push({idx:i, act:a});
             });
-            const pool = pools.find(p => p.length > 0);
-            if (pool && pool.length) {
-              const pickIndex = Math.floor(Math.random() * pool.length); // simple rotation could be added
-              const target = pool[pickIndex];
-              newActivities[target.i].timeRemaining = Math.max(0, (newActivities[target.i].timeRemaining || 0) - 1);
-              drained = true;
+            const tier = tierPools.find(p=>p.length>0);
+            if (tier && tier.length) {
+              // rotate deterministically
+              const pick = tier[ lastDrainedIndex.current = (lastDrainedIndex.current + 1) % tier.length ];
+              newActivities[pick.idx].timeRemaining = Math.max(0, (newActivities[pick.idx].timeRemaining||0) - 1);
+              need = 0;
             }
           }
         }
@@ -7804,15 +7804,7 @@ export default function App() {
               }
 
               // Flowmodoro break drain across all non-starred in drain mode (catch-up path)
-              if (settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
-                const donorsIdx = newActivities.map((a, i) => ({ a, i }))
-                  .filter(x => !x.a.isCompleted && !x.a.countUp && !x.a.priority && (typeof x.a.timeRemaining === 'number') && x.a.timeRemaining > 0);
-                if (donorsIdx.length > 0) {
-                  donorsIdx.forEach(d => {
-                    newActivities[d.i].timeRemaining = (newActivities[d.i].timeRemaining || 0) - 1;
-                  });
-                }
-              }
+              // Single-source Flowmodoro drain is handled in main tick; catch-up intentionally avoids multi-drain.
             }
             return newActivities;
           });
@@ -8952,61 +8944,44 @@ export default function App() {
 
   const updateAndScalePercentages = (idOfChangedActivity, newPercentage) => {
     setActivities(prev => {
-      const lockedTotal = prev.filter(a => a.isLocked && !a.countUp).reduce((sum, a) => sum + a.percentage, 0);
-      const maxAllowed = 100 - lockedTotal;
-      const safeNewPercentage = Math.min(newPercentage, maxAllowed);
-
-      const otherUnlockedActivities = prev.filter(a => !a.isLocked && !a.countUp && a.id !== idOfChangedActivity);
-      const otherUnlockedTotal = otherUnlockedActivities.reduce((sum, a) => sum + a.percentage, 0);
-
-      const remainingForOthers = maxAllowed - safeNewPercentage;
-      
-      // Handle special case where we need to distribute remaining percentage
-      let scaleFactor = 0;
-      if (otherUnlockedActivities.length > 0) {
-        if (otherUnlockedTotal > 0) {
-          // Normal case: scale existing percentages proportionally
-          scaleFactor = remainingForOthers / otherUnlockedTotal;
-        } else if (remainingForOthers > 0) {
-          // Special case: other activities are at 0%, distribute equally
-          const equalShare = remainingForOthers / otherUnlockedActivities.length;
-          return prev.map(act => {
-            if (act.id === idOfChangedActivity) {
-              return { ...act, percentage: safeNewPercentage };
-            }
-            if (act.isLocked || act.countUp) {
-              return act;
-            }
-            return { ...act, percentage: equalShare };
-          });
-        }
+      const clone = prev.map(a => ({ ...a }));
+      const locked = clone.filter(a => a.isLocked && !a.countUp);
+      const unlocked = clone.filter(a => !a.isLocked && !a.countUp);
+      const lockedTotal = locked.reduce((s,a)=> s + (a.percentage||0),0);
+      const available = Math.max(0, 100 - lockedTotal);
+      const target = Math.min(Math.max(newPercentage,0), available);
+      const changed = clone.find(a => a.id === idOfChangedActivity);
+      if (!changed || changed.isLocked || changed.countUp) return prev;
+      changed.percentage = target;
+      const others = unlocked.filter(a => a.id !== idOfChangedActivity);
+      const othersTotal = others.reduce((s,a)=> s + (a.percentage||0),0);
+      const remainingForOthers = Math.max(0, available - target);
+      if (others.length === 0) {
+        // nothing else to scale
+      } else if (othersTotal <= 0) {
+        const equal = remainingForOthers / others.length;
+        others.forEach(o => o.percentage = equal);
+      } else {
+        const scale = remainingForOthers / othersTotal;
+        others.forEach(o => o.percentage = (o.percentage||0) * scale);
       }
-
-      const updatedActivities = prev.map(act => {
-        if (act.id === idOfChangedActivity) {
-          return { ...act, percentage: safeNewPercentage };
-        }
-        if (act.isLocked || act.countUp) {
-          return act;
-        }
-        // Scale other unlocked activities
-        return { ...act, percentage: act.percentage * scaleFactor };
-      });
-
-      // Correct for rounding errors to ensure total is exactly 100
-      const finalTotal = updatedActivities.filter(a => !a.countUp).reduce((sum, p) => sum + p.percentage, 0);
-      const diff = 100 - finalTotal;
-      if (Math.abs(diff) > 0.001) {
-        const firstUnlocked = updatedActivities.find(a => !a.isLocked && !a.countUp && a.id !== idOfChangedActivity);
-        if (firstUnlocked) {
-          firstUnlocked.percentage += diff;
-        } else {
-          const changedActivity = updatedActivities.find(a => a.id === idOfChangedActivity && !a.countUp);
-          if (changedActivity) changedActivity.percentage += diff;
-        }
+      // Normalize -> sum 100 using integer rounding
+      let total = clone.filter(a=>!a.countUp).reduce((s,a)=> s + (a.percentage||0),0);
+      if (total <= 0) {
+        // Edge: spread equally across unlocked including changed
+        const all = clone.filter(a=>!a.countUp);
+        if (all.length>0) all.forEach(a=> a.percentage = 100/all.length);
+        total = 100;
       }
-
-      return updatedActivities;
+      clone.forEach(a=> { if(!a.countUp) a.percentage = (a.percentage||0) * (100/ total); });
+      // Integer rounding preserving 100
+      const nonCount = clone.filter(a=>!a.countUp);
+      const floors = nonCount.map(a => Math.floor(a.percentage));
+      let remainder = 100 - floors.reduce((s,v)=>s+v,0);
+      const fracOrder = nonCount.map((a,i)=>({i, frac:a.percentage - floors[i]})).sort((a,b)=> b.frac - a.frac);
+      for (let j=0; j<fracOrder.length && remainder>0; j++){ floors[fracOrder[j].i]++; remainder--; }
+      nonCount.forEach((a,i)=> a.percentage = floors[i]);
+      return clone;
     });
   };
 
@@ -9824,10 +9799,12 @@ export default function App() {
 
             <div className="max-h-72 overflow-auto border rounded">
               <div className="grid grid-cols-12 gap-2 p-2 text-[11px] font-semibold bg-slate-50">
-                <div className="col-span-5">Activity</div>
+                <div className="col-span-4">Activity</div>
                 <div className="col-span-2 text-right">Planned</div>
+                <div className="col-span-1 text-right">(%)</div>
                 <div className="col-span-2 text-right">Actual</div>
-                <div className="col-span-3 text-right">Δ</div>
+                <div className="col-span-1 text-right">(%)</div>
+                <div className="col-span-2 text-right">Δ</div>
               </div>
               {lastSessionReport.rows
                 .slice()
@@ -9842,12 +9819,16 @@ export default function App() {
                   const deltaMin = Math.round((r.actual - r.planned) / 60);
                   const safePlanned = Math.max(0, plannedMin);
                   const safeActual = Math.max(0, actualMin);
+                  const totalPlannedMin = Math.max(1, Math.round(lastSessionReport.totals.planned/60));
+                  const totalActualMin = Math.max(1, Math.round(lastSessionReport.totals.actual/60));
+                  const plannedPct = Math.round((safePlanned / totalPlannedMin) * 100);
+                  const actualPct = Math.round((safeActual / totalActualMin) * 100);
                   const cap = Math.max(safePlanned, safeActual, 1);
                   const barPct = Math.min(100, Math.round((Math.abs(deltaMin) / cap) * 100));
                   const isPositive = deltaMin >= 0;
                   return (
                     <div key={r.id} className={`grid grid-cols-12 gap-2 items-center p-2 text-[11px] border-t ${activities.find(x => x.id === r.id)?.priority ? 'bg-amber-50' : ''}`}>
-                      <div className="col-span-5 min-w-0">
+                      <div className="col-span-4 min-w-0">
                         <div className="truncate font-medium" title={r.name}>
                           {activities.find(x => x.id === r.id)?.priority ? '★ ' : ''}{r.name}
                         </div>
@@ -9880,8 +9861,10 @@ export default function App() {
                         })()}
                       </div>
                       <div className="col-span-2 text-right tabular-nums">{safePlanned}</div>
+                      <div className="col-span-1 text-right tabular-nums text-slate-500">{plannedPct}%</div>
                       <div className="col-span-2 text-right tabular-nums">{safeActual}</div>
-                      <div className="col-span-3">
+                      <div className="col-span-1 text-right tabular-nums text-slate-500">{actualPct}%</div>
+                      <div className="col-span-2">
                         <div className="flex items-center justify-end gap-2">
                           <div className={`text-right tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>{deltaMin}</div>
                           <div className="relative h-2 w-20 bg-slate-100 rounded overflow-hidden">
