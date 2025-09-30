@@ -7515,7 +7515,7 @@ export default function App() {
   // - Session mode while timer running
   // - Daily mode when at least one daily activity is active (status 'active' or 'overtime')
   const hasActiveDailyWork = currentMode === 'daily' && dailyActivities.some(a => a.isActive || a.status === 'active' || a.status === 'overtime');
-  if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak && ((isTimerActive && !isPaused) || hasActiveDailyWork)) {
+    if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak && ((isTimerActive && !isPaused) || hasActiveDailyWork)) {
       // Add elapsed seconds to fractional accumulator and calculate how much rest time to award
       const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
       // For a 2:1 ratio, every 2 work seconds earns 1 rest second
@@ -7527,9 +7527,11 @@ export default function App() {
       if (restSecondsToAdd > 0) {
         setFlowmodoroState(prevFlow => {
           let nextAvailable = prevFlow.availableRestTime + restSecondsToAdd;
-          // Enforce per-session cap if configured (>0)
-          const capSec = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-          if (capSec > 0) nextAvailable = Math.min(nextAvailable, capSec);
+          // Enforce both legacy max-per-session cap and pseudo-activity cap (use the lower if both >0)
+          const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+          const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
+          const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
+          if (effectiveCap > 0) nextAvailable = Math.min(nextAvailable, effectiveCap);
           return ({
             ...prevFlow,
             availableRestTime: nextAvailable,
@@ -7820,7 +7822,12 @@ export default function App() {
               const restSecondsToAdd = Math.floor(newAccum / workSecondsPerRestSecond);
               const remainingFractional = newAccum % workSecondsPerRestSecond;
               if (restSecondsToAdd > 0) {
-                const updatedAvailable = (prevFlow.availableRestTime || 0) + restSecondsToAdd;
+                let updatedAvailable = (prevFlow.availableRestTime || 0) + restSecondsToAdd;
+                // Apply same effective cap logic during catch-up
+                const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+                const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
+                const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
+                if (effectiveCap > 0) updatedAvailable = Math.min(updatedAvailable, effectiveCap);
                 return {
                   ...prevFlow,
                   availableRestTime: updatedAvailable,
@@ -9634,16 +9641,18 @@ export default function App() {
           </div>
           <Separator />
           
-          {/* Flowmodoro Rest Timer - now behaves like other activities */}
-          <FlowmodoroActivity 
-            flowState={flowmodoroState}
-            settings={settings}
-            onTakeBreak={takeFlowmodoroBreak}
-            onSkipBreak={skipFlowmodoroBreak}
-            onReset={resetFlowmodoroState}
-            isTimerActive={isTimerActive}
-            formatTime={formatTime}
-          />
+          {/* Flowmodoro Rest Timer - hide when pseudo "Flow Reserve" row is active in drain mode and not currently on break */}
+          {!(settings.flowmodoroEnabled && settings.flowmodoroShowAsActivity && settings.flowmodoroMode === 'drain' && (settings.flowmodoroSessionActivityMinutes||0) > 0 && !flowmodoroState.isOnBreak) && (
+            <FlowmodoroActivity 
+              flowState={flowmodoroState}
+              settings={settings}
+              onTakeBreak={takeFlowmodoroBreak}
+              onSkipBreak={skipFlowmodoroBreak}
+              onReset={resetFlowmodoroState}
+              isTimerActive={isTimerActive}
+              formatTime={formatTime}
+            />
+          )}
           
           <div className="space-y-1">
             <h3 className="font-semibold text-sm">Activities</h3>
@@ -9652,8 +9661,12 @@ export default function App() {
                 (() => {
                   const capSec = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
                   if (capSec <= 0) return null;
-                  const earned = Math.min(capSec, flowmodoroState.availableRestTime || 0);
-                  const pct = capSec > 0 ? (earned / capSec) * 100 : 0;
+                  // When on break, show remaining break time vs cap; else show earned (available) vs cap
+                  const rawEarned = Math.min(capSec, flowmodoroState.availableRestTime || 0);
+                  const onBreak = flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0;
+                  const breakRemaining = onBreak ? flowmodoroState.breakTimeRemaining : 0;
+                  const displaySeconds = onBreak ? breakRemaining : rawEarned;
+                  const pct = capSec > 0 ? (displaySeconds / capSec) * 100 : 0;
                   return (
                     <button
                       type="button"
@@ -9667,14 +9680,14 @@ export default function App() {
                           if (el) el.scrollIntoView({ behavior: 'smooth' });
                         }
                       }}
-                      title={flowmodoroState.availableRestTime > 0 ? 'Click to start break with earned Flow time' : 'No Flow time yet – click to adjust settings'}
+                      title={flowmodoroState.isOnBreak ? 'Break in progress – click settings to adjust' : (flowmodoroState.availableRestTime > 0 ? 'Click to start break with earned Flow time' : 'No Flow time yet – click to adjust settings')}
                       className="relative overflow-hidden flex items-center justify-between w-full text-left p-2 rounded-lg border bg-purple-50 border-purple-200 hover:bg-purple-100 focus:outline-none focus:ring-2 focus:ring-purple-400 transition-colors"
                     >
                       <div className="absolute inset-0 bg-purple-400/20" style={{ width: pct + '%'}} />
                       <div className="flex items-center space-x-2 z-10">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#8b5cf6' }} />
-                        <span className="font-semibold text-sm text-purple-800">Flow Reserve</span>
-                        <span className="text-xs font-medium text-purple-700">{Math.floor(earned/60)}m / {Math.floor(capSec/60)}m</span>
+                        <span className="font-semibold text-sm text-purple-800">{onBreak ? 'Flow Break' : 'Flow Reserve'}</span>
+                        <span className="text-xs font-medium text-purple-700">{Math.floor(displaySeconds/60)}m / {Math.floor(capSec/60)}m</span>
                       </div>
                       <div className="flex items-center space-x-2 z-10">
                         <span className="text-[10px] text-purple-700">{Math.round(pct)}%</span>
@@ -9877,12 +9890,14 @@ export default function App() {
                 })}
             </div>
 
-            <div className="mt-3 grid grid-cols-12 items-center text-sm">
-              <div className="col-span-6 font-semibold">Totals</div>
-              <div className="col-span-6 flex flex-col items-end text-right">
-                <div className="tabular-nums">Planned: {Math.round(lastSessionReport.totals.planned/60)} min</div>
-                <div className="tabular-nums">Actual: {Math.round(lastSessionReport.totals.actual/60)} min</div>
-                <div className={`tabular-nums ${lastSessionReport.totals.delta>=0?'text-emerald-700':'text-red-700'}`}>Δ: {Math.round(lastSessionReport.totals.delta/60)} min ({Math.round(lastSessionReport.totals.pct)}%)</div>
+            <div className="mt-3 grid grid-cols-12 items-start text-sm border-t pt-2">
+              <div className="col-span-4 font-semibold">Totals</div>
+              <div className="col-span-2 text-right tabular-nums font-semibold">{Math.round(lastSessionReport.totals.planned/60)}</div>
+              <div className="col-span-1 text-right tabular-nums text-slate-500 font-semibold">100%</div>
+              <div className="col-span-2 text-right tabular-nums font-semibold">{Math.round(lastSessionReport.totals.actual/60)}</div>
+              <div className="col-span-1 text-right tabular-nums text-slate-500 font-semibold">100%</div>
+              <div className="col-span-2 flex flex-col items-end text-right">
+                <div className={`tabular-nums ${lastSessionReport.totals.delta>=0?'text-emerald-700':'text-red-700'}`}>Δ: {Math.round(lastSessionReport.totals.delta/60)}m ({Math.round(lastSessionReport.totals.pct)}%)</div>
               </div>
             </div>
 
