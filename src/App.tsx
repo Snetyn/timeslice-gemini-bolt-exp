@@ -3778,7 +3778,18 @@ const ActivityManagementPage = ({
               <h3 className="text-lg font-semibold mb-4">Current Session Activities</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                 {activities.map(activity => (
-                  <Card key={activity.id} className="border-blue-200">
+                  <Card 
+                    key={activity.id} 
+                    className="border-blue-200"
+                    draggable
+                    onDragStart={(e)=>{ setDraggingActivityId(activity.id); e.dataTransfer.effectAllowed='move'; }}
+                    onDragOver={(e)=>{ if(draggingActivityId && draggingActivityId!==activity.id){ e.preventDefault(); setDragOverActivityId(activity.id); e.dataTransfer.dropEffect='move'; }} }
+                    onDrop={(e)=>{ e.preventDefault(); if(draggingActivityId){ setActivities(prev=>{ const from = prev.findIndex(a=>a.id===draggingActivityId); const to = prev.findIndex(a=>a.id===activity.id); if(from===-1||to===-1) return prev; const clone=[...prev]; const [mv]=clone.splice(from,1); clone.splice(to,0,mv); return clone; }); } setDraggingActivityId(null); setDragOverActivityId(null);} }
+                    onDragEnd={()=> { setDraggingActivityId(null); setDragOverActivityId(null); }}
+                  >
+                    {settings.showDragPlaceholders && dragOverActivityId === activity.id && draggingActivityId && draggingActivityId !== activity.id && (
+                      <div className="h-1 -mt-1 mb-1 rounded bg-blue-400" />
+                    )}
                     <CardContent className="p-3 sm:p-4">
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center space-x-2 flex-1 min-w-0">
@@ -6013,6 +6024,7 @@ export default function App() {
     flowmodoroSessionActivityMinutes: 10, // planned Flow capacity for pseudo segment
     flowmodoroAutoCatchup: true, // NEW: enable off-screen rest accrual reconciliation
     flowmodoroSmoothCatchup: false, // NEW: smooth large catch-up awards over ticks
+    showDragPlaceholders: true, // NEW: allow disabling drag gap highlight
   redistributionUseVaultFirst: true, // new: take from vault before shrinking activities
   redistributionProportional: false, // new: use proportional instead of per-second loop
     flowmodoroIcon: '🌟',
@@ -7321,14 +7333,15 @@ export default function App() {
       
       if (lastSavedDate && lastSavedDate !== today) {
         // New day detected - reset all daily activities progress
-        setDailyActivities(prev => prev.map(activity => ({
-          ...activity,
+        setActivities(prev => prev.map(act => ({
+          ...act,
           status: 'scheduled',
           isActive: false,
           timeSpent: 0,
           startedAt: null
         })));
         setActiveDailyActivity(null);
+        recalibratePlannedVisuals();
         console.log('Daily activities reset for new day');
       }
       
@@ -7340,6 +7353,7 @@ export default function App() {
   }, []); // Run only on mount
 
   useEffect(() => {
+        recalibratePlannedVisuals();
     try {
       localStorage.setItem('timeSliceTotalHours', JSON.stringify(totalHours));
     } catch (e) {
@@ -7353,6 +7367,7 @@ export default function App() {
     } catch (e) {
       console.error("Failed to save total minutes", e);
     }
+        recalibratePlannedVisuals();
   }, [totalMinutes]);
   
   // --- End of State Saving Logic ---
@@ -9087,6 +9102,22 @@ export default function App() {
   // Drag & Drop Reordering
   const [draggingActivityId, setDraggingActivityId] = useState<string | null>(null);
   const [dragOverActivityId, setDragOverActivityId] = useState<string | null>(null); // NEW: track current drag target for placeholder
+
+  // Recalibrate visual planned proportions after structural time shifts (borrow/transfer)
+  const recalibratePlannedVisuals = useCallback(() => {
+    setActivities(prev => {
+      // Only adjust display percentages for non-countUp activities; preserve locked flags
+      const nonCount = prev.filter(a => !a.countUp);
+      const totalRemaining = nonCount.reduce((s,a)=> s + Math.max(0, typeof a.timeRemaining==='number'? a.timeRemaining : Math.round((a.duration||0)*60)), 0);
+      if (totalRemaining <= 0) return prev; // nothing to do
+      return prev.map(a => {
+        if (a.countUp) return a;
+        const base = Math.max(0, typeof a.timeRemaining==='number'? a.timeRemaining : Math.round((a.duration||0)*60));
+        const pct = (base/ totalRemaining) * 100;
+        return { ...a, percentage: pct };
+      });
+    });
+  }, []);
   const reorderActivities = useCallback((dragId: string, targetId: string) => {
     if (dragId === targetId) return;
     setActivities(prev => {
@@ -9349,6 +9380,8 @@ export default function App() {
       return act;
     }));
     setBorrowModalState({ isOpen: false, activityId: '' });
+    // Re-normalize planned visuals post manual augmentation
+    recalibratePlannedVisuals();
   };
 
   // Removed complex color picker system - using simple random colors like quick add works perfectly
@@ -9831,7 +9864,7 @@ export default function App() {
                       ${dragOverActivityId === activity.id && draggingActivityId ? 'ring-2 ring-blue-300' : ''}`}
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
-                    {dragOverActivityId === activity.id && draggingActivityId && draggingActivityId !== activity.id && (
+                    {settings.showDragPlaceholders && dragOverActivityId === activity.id && draggingActivityId && draggingActivityId !== activity.id && (
                       <div className="absolute -top-1 left-0 right-0 h-1 bg-blue-400 rounded-full" />
                     )}
         {settings.showActivityProgress && (
@@ -10150,6 +10183,28 @@ export default function App() {
                     />
                   </div>
                 )}
+                <Separator />
+                {/* Flowmodoro Enhancements */}
+                <div className="space-y-2">
+                  <Label className="font-semibold">Flowmodoro</Label>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Off-screen catch-up</span>
+                    <Switch checked={settings.flowmodoroAutoCatchup} onCheckedChange={checked => setSettings(p=>({...p, flowmodoroAutoCatchup: checked}))} />
+                  </div>
+                  <div className="flex items-center justify-between pl-4">
+                    <span className="text-sm">Smooth large catch-up awards</span>
+                    <Switch checked={settings.flowmodoroSmoothCatchup} disabled={!settings.flowmodoroAutoCatchup} onCheckedChange={checked => setSettings(p=>({...p, flowmodoroSmoothCatchup: checked}))} />
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button size="sm" variant="secondary" onClick={() => setFlowmodoroState(prev => ({ ...prev, availableRestTime: 0, availableRestMinutes: 0, accumulatedFractionalTime: 0, pendingCatchup: 0 }))}>Reset Reserve</Button>
+                    <Button size="sm" variant="outline" onClick={() => setFlowmodoroState(prev => ({ availableRestTime: 0, totalEarnedToday: 0, cycleCount: 0, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0, lastResetDate: new Date().toDateString(), accumulatedFractionalTime: 0 }))}>Full Flow Reset</Button>
+                  </div>
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="drag-placeholders">Show drag placeholders</Label>
+                  <Switch id="drag-placeholders" checked={settings.showDragPlaceholders} onCheckedChange={checked=> setSettings(p=>({...p, showDragPlaceholders: checked}))} />
+                </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Mobile Zoom Level</Label>
