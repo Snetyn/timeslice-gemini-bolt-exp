@@ -7720,6 +7720,36 @@ export default function App() {
       const shouldHandleTick = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
       
       if (document.visibilityState === 'visible' && shouldHandleTick) {
+        // Reconcile Flowmodoro off-screen accrual (work done while tab hidden)
+        if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+          try {
+            const storedTs = Number(localStorage.getItem('flowLastWorkTs')) || 0;
+            const nowTs = Date.now();
+            if (storedTs > 0 && nowTs > storedTs) {
+              const deltaHiddenSec = Math.min(7200, Math.floor((nowTs - storedTs)/1000)); // cap 2h
+              // Heuristic: only award if timer logically active (shouldHandleTick) and hidden gap > 2s
+              if (deltaHiddenSec > 2) {
+                setFlowmodoroState(prevFlow => {
+                  if (prevFlow.isOnBreak) return prevFlow;
+                  const workSecondsPerRestSecond = settings.flowmodoroRatio;
+                  const accum = (prevFlow.accumulatedFractionalTime || 0) + deltaHiddenSec;
+                  const restSecondsToAdd = Math.floor(accum / workSecondsPerRestSecond);
+                  const remainingFractional = accum % workSecondsPerRestSecond;
+                  if (restSecondsToAdd > 0) {
+                    let nextAvailable = (prevFlow.availableRestTime || 0) + restSecondsToAdd;
+                    const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+                    const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
+                    const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
+                    if (effectiveCap > 0) nextAvailable = Math.min(nextAvailable, effectiveCap);
+                    return { ...prevFlow, availableRestTime: nextAvailable, totalEarnedToday: (prevFlow.totalEarnedToday||0)+restSecondsToAdd, availableRestMinutes: Math.floor(nextAvailable/60), accumulatedFractionalTime: remainingFractional };
+                  }
+                  return { ...prevFlow, accumulatedFractionalTime: accum };
+                });
+              }
+            }
+            localStorage.setItem('flowLastWorkTs', String(nowTs));
+          } catch {}
+        }
         // On resume, compute wall-clock delta since last tick and process catch-up seconds
         const now = Date.now();
         const last = lastTickTimestampRef.current || now;
@@ -9044,6 +9074,15 @@ export default function App() {
     });
   }, []);
 
+  // --- Flowmodoro off-screen accrual support ---
+  const lastWorkTsRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (isTimerActive && !isPaused && settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+      lastWorkTsRef.current = Date.now();
+      try { localStorage.setItem('flowLastWorkTs', String(lastWorkTsRef.current)); } catch {}
+    }
+  }, [isTimerActive, isPaused, settings.flowmodoroEnabled, flowmodoroState.isOnBreak]);
+
   const updateActivityName = (id, name) => {
     // Allow empty string during editing, only default when saving/blur
     console.log('Updating activity name:', id, 'to:', name);
@@ -9761,7 +9800,9 @@ export default function App() {
                     onDrop={(e)=>{ e.preventDefault(); if(draggingActivityId){ reorderActivities(draggingActivityId, activity.id); setDraggingActivityId(null);} }}
                     onDragEnd={()=> setDraggingActivityId(null)}
                     className={`relative overflow-hidden flex items-center justify-between p-2 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"}
-                      ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'} ${activity.priority ? 'ring-1 ring-amber-300' : ''}`}
+                      ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'} ${activity.priority ? 'ring-1 ring-amber-300' : ''}
+                      ${draggingActivityId === activity.id ? 'opacity-40' : ''}
+                      ${draggingActivityId && draggingActivityId!==activity.id ? 'drag-target:ring-2 drag-target:ring-blue-300' : ''}`}
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
         {settings.showActivityProgress && (
