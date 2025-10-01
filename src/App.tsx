@@ -505,7 +505,7 @@ const RPGStatsChart = ({ stats, suggestedStats, size = 400, activities = [], dai
     return parentTags.map(parent => {
       const children = subCategories.filter(sub => sub.parentId === parent.id);
       return {
-        parent,
+        tag: parent,
         children,
         stat: stats.find(s => s.tagId === parent.id)
       };
@@ -5880,10 +5880,6 @@ export default function App() {
     } catch (e) {
       console.error("Failed to load activities from localStorage", e);
     }
-    return [
-      { id: "1", name: "Focus Work", percentage: 60, color: "hsl(220, 70%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false, tags: ['1'] },
-      { id: "2", name: "Break", percentage: 40, color: "hsl(120, 60%, 50%)", duration: 0, timeRemaining: 0, isCompleted: false, isLocked: false, countUp: false, tags: ['2'] },
-    ];
   });
 
   useEffect(() => {
@@ -7562,18 +7558,21 @@ export default function App() {
         const current = newActivities[currentActivityIndex];
         if (!current) break;
 
+        const flowBreakDrainActive = settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining||0)>0;
         if (current.countUp) {
           // For count-up activities, we add time instead of subtracting
           current.timeRemaining += secondsToProcess;
           secondsToProcess = 0; // Count-up activities don't "complete" in the traditional sense
         } else {
-          if (current.timeRemaining > 0) {
-            const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
-            current.timeRemaining -= timeToTake;
-            secondsToProcess -= timeToTake;
+          if (!flowBreakDrainActive) {
+            if (current.timeRemaining > 0) {
+              const timeToTake = Math.min(secondsToProcess, current.timeRemaining);
+              current.timeRemaining -= timeToTake;
+              secondsToProcess -= timeToTake;
+            }
           }
 
-          if (current.timeRemaining <= 0) {
+          if (!flowBreakDrainActive && current.timeRemaining <= 0) {
             if (settings.overtimeType === 'drain') {
               // Donor ordering: not locked & not priority -> locked & not priority -> priority (not locked) -> priority & locked
               const donorPools: ((typeof newActivities)[number] & { originalIndex: number })[][] = [[], [], [], []];
@@ -8083,7 +8082,14 @@ export default function App() {
         return updatedActivities.map(act => act.isLocked ? act : { ...act, percentage: equalPercentage });
       }
 
-      // Session active: we need to carve planned seconds for the new activity using hierarchy.
+      // Session active: if no preset time provided and no percentage (user wants a zero-width placeholder), just append with 0%.
+      if (presetTime <= 0) {
+        newActivity.percentage = 0;
+        newActivity.duration = 0;
+        return [...existing, newActivity];
+      }
+
+      // Session active with preset time: we need to carve planned seconds for the new activity using hierarchy.
       // Convert current percentages/durations into planned seconds baseline.
       const totalSessionSecondsLocal = totalSessionMinutes * 60;
       const plannedSeconds = existing.map(a => {
@@ -9023,6 +9029,21 @@ export default function App() {
     }));
   };
 
+  // Drag & Drop Reordering
+  const [draggingActivityId, setDraggingActivityId] = useState<string | null>(null);
+  const reorderActivities = useCallback((dragId: string, targetId: string) => {
+    if (dragId === targetId) return;
+    setActivities(prev => {
+      const idxA = prev.findIndex(a => a.id === dragId);
+      const idxB = prev.findIndex(a => a.id === targetId);
+      if (idxA === -1 || idxB === -1) return prev;
+      const clone = [...prev];
+      const [moved] = clone.splice(idxA, 1);
+      clone.splice(idxB, 0, moved);
+      return clone;
+    });
+  }, []);
+
   const updateActivityName = (id, name) => {
     // Allow empty string during editing, only default when saving/blur
     console.log('Updating activity name:', id, 'to:', name);
@@ -9691,6 +9712,17 @@ export default function App() {
                       </div>
                       <div className="flex items-center space-x-2 z-10">
                         <span className="text-[10px] text-purple-700">{Math.round(pct)}%</span>
+                        {(!onBreak && rawEarned > 0) && (
+                          <button
+                            type="button"
+                            className="text-[10px] px-2 py-0.5 rounded bg-purple-200 hover:bg-purple-300 text-purple-800 font-medium"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setFlowmodoroState(prev => ({ ...prev, availableRestTime: 0, availableRestMinutes: 0, accumulatedFractionalTime: 0 }));
+                            }}
+                            title="Reset Flow Reserve to 0"
+                          >Reset</button>
+                        )}
                       </div>
                     </button>
                   );
@@ -9723,8 +9755,13 @@ export default function App() {
                 return (
                   <div
                     key={activity.id}
-                    className={`relative overflow-hidden flex items-center justify-between p-2 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"
-                      } ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'} ${activity.priority ? 'ring-1 ring-amber-300' : ''}`}
+                    draggable
+                    onDragStart={(e)=>{ setDraggingActivityId(activity.id); e.dataTransfer.effectAllowed='move'; }}
+                    onDragOver={(e)=>{ if(draggingActivityId && draggingActivityId!==activity.id){ e.preventDefault(); e.dataTransfer.dropEffect='move'; }} }
+                    onDrop={(e)=>{ e.preventDefault(); if(draggingActivityId){ reorderActivities(draggingActivityId, activity.id); setDraggingActivityId(null);} }}
+                    onDragEnd={()=> setDraggingActivityId(null)}
+                    className={`relative overflow-hidden flex items-center justify-between p-2 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"}
+                      ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'} ${activity.priority ? 'ring-1 ring-amber-300' : ''}`}
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
         {settings.showActivityProgress && (
@@ -11671,15 +11708,31 @@ export default function App() {
                       <Input
                         type="number"
                         min="0" step="1"
-                        value={activity.duration}
+                        value={(activity as any).durationDraft !== undefined ? (activity as any).durationDraft : activity.duration}
                         onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '') {
+                            setActivities(prev => prev.map(a => a.id === activity.id ? { ...a, durationDraft: '' } : a));
+                            return;
+                          }
+                          const num = Number.parseInt(val);
+                          if (Number.isNaN(num) || num < 0) return;
+                          setActivities(prev => prev.map(a => a.id === activity.id ? { ...a, durationDraft: num } : a));
+                        }}
+                        onBlur={(e) => {
+                          const draft = (activity as any).durationDraft;
+                          if (draft === '' || draft === undefined) {
+                            // nothing to commit
+                            setActivities(prev => prev.map(a => { if(a.id===activity.id){ const { durationDraft, ...rest } = a as any; return rest; } return a; }));
+                            return;
+                          }
                           const totalMins = calculateTotalSessionMinutes();
+                          const newDur = Math.max(0, Math.min(draft, totalMins || draft));
                           if (totalMins > 0) {
-                            const newDur = Number.parseInt(e.target.value) || 0;
-                            const cappedDur = Math.min(newDur, totalMins);
-                            const newPerc = (cappedDur / totalMins) * 100;
+                            const newPerc = (newDur / totalMins) * 100;
                             updateAndScalePercentages(activity.id, newPerc);
                           }
+                          setActivities(prev => prev.map(a => a.id === activity.id ? (() => { const { durationDraft, ...rest } = a as any; return { ...rest, duration: newDur }; })() : a));
                         }}
                         className="w-20 h-9 text-sm text-center"
                         disabled={activity.isLocked || activity.countUp}
