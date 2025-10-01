@@ -6011,6 +6011,8 @@ export default function App() {
       flowmodoroResetEndTime: '23:59', // Daily reset at 11:59 PM
     flowmodoroShowAsActivity: true, // visualize Flowmodoro as its own pseudo-activity segment
     flowmodoroSessionActivityMinutes: 10, // planned Flow capacity for pseudo segment
+    flowmodoroAutoCatchup: true, // NEW: enable off-screen rest accrual reconciliation
+    flowmodoroSmoothCatchup: false, // NEW: smooth large catch-up awards over ticks
   redistributionUseVaultFirst: true, // new: take from vault before shrinking activities
   redistributionProportional: false, // new: use proportional instead of per-second loop
     flowmodoroIcon: '🌟',
@@ -7494,6 +7496,25 @@ export default function App() {
 
     if (elapsedSeconds <= 0) return;
 
+      // Smooth catch-up awards (if any queued from off-screen reconciliation) before normal accrual
+      if (settings.flowmodoroEnabled && settings.flowmodoroSmoothCatchup) {
+        setFlowmodoroState(prev => {
+          const pending = (prev as any).pendingCatchup || 0;
+          if (!pending) return prev;
+          // Award up to a small chunk per real tick (e.g., 3 * elapsedSeconds or at least 5 seconds)
+          const chunk = Math.min(pending, Math.max(5, elapsedSeconds * 3));
+          let nextAvailable = prev.availableRestTime + chunk;
+          const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+          const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
+          const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
+          if (effectiveCap > 0) nextAvailable = Math.min(nextAvailable, effectiveCap);
+          const remainingPending = pending - chunk;
+          const base = { ...prev, availableRestTime: nextAvailable, availableRestMinutes: Math.floor(nextAvailable/60), totalEarnedToday: (prev.totalEarnedToday||0) + chunk } as any;
+          if (remainingPending > 0) base.pendingCatchup = remainingPending; else delete base.pendingCatchup;
+          return base;
+        });
+      }
+
     // Flowmodoro countdown runs concurrently with session/daily
     if (settings.flowmodoroEnabled && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
       setFlowmodoroState(prev => {
@@ -7721,7 +7742,7 @@ export default function App() {
       
       if (document.visibilityState === 'visible' && shouldHandleTick) {
         // Reconcile Flowmodoro off-screen accrual (work done while tab hidden)
-        if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+        if (settings.flowmodoroEnabled && settings.flowmodoroAutoCatchup && !flowmodoroState.isOnBreak) {
           try {
             const storedTs = Number(localStorage.getItem('flowLastWorkTs')) || 0;
             const nowTs = Date.now();
@@ -7741,6 +7762,10 @@ export default function App() {
                     const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
                     const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
                     if (effectiveCap > 0) nextAvailable = Math.min(nextAvailable, effectiveCap);
+                    if (settings.flowmodoroSmoothCatchup && restSecondsToAdd > 5) {
+                      // Defer awarding into pendingCatchup queue; process gradually in main ticks
+                      return { ...prevFlow, pendingCatchup: ((prevFlow as any).pendingCatchup || 0) + restSecondsToAdd, accumulatedFractionalTime: remainingFractional } as any;
+                    }
                     return { ...prevFlow, availableRestTime: nextAvailable, totalEarnedToday: (prevFlow.totalEarnedToday||0)+restSecondsToAdd, availableRestMinutes: Math.floor(nextAvailable/60), accumulatedFractionalTime: remainingFractional };
                   }
                   return { ...prevFlow, accumulatedFractionalTime: accum };
@@ -9061,6 +9086,7 @@ export default function App() {
 
   // Drag & Drop Reordering
   const [draggingActivityId, setDraggingActivityId] = useState<string | null>(null);
+  const [dragOverActivityId, setDragOverActivityId] = useState<string | null>(null); // NEW: track current drag target for placeholder
   const reorderActivities = useCallback((dragId: string, targetId: string) => {
     if (dragId === targetId) return;
     setActivities(prev => {
@@ -9077,7 +9103,7 @@ export default function App() {
   // --- Flowmodoro off-screen accrual support ---
   const lastWorkTsRef = useRef<number | null>(null);
   useEffect(() => {
-    if (isTimerActive && !isPaused && settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
+    if (isTimerActive && !isPaused && settings.flowmodoroEnabled && settings.flowmodoroAutoCatchup && !flowmodoroState.isOnBreak) {
       lastWorkTsRef.current = Date.now();
       try { localStorage.setItem('flowLastWorkTs', String(lastWorkTsRef.current)); } catch {}
     }
@@ -9796,15 +9822,18 @@ export default function App() {
                     key={activity.id}
                     draggable
                     onDragStart={(e)=>{ setDraggingActivityId(activity.id); e.dataTransfer.effectAllowed='move'; }}
-                    onDragOver={(e)=>{ if(draggingActivityId && draggingActivityId!==activity.id){ e.preventDefault(); e.dataTransfer.dropEffect='move'; }} }
-                    onDrop={(e)=>{ e.preventDefault(); if(draggingActivityId){ reorderActivities(draggingActivityId, activity.id); setDraggingActivityId(null);} }}
-                    onDragEnd={()=> setDraggingActivityId(null)}
+                    onDragOver={(e)=>{ if(draggingActivityId && draggingActivityId!==activity.id){ e.preventDefault(); setDragOverActivityId(activity.id); e.dataTransfer.dropEffect='move'; }} }
+                    onDrop={(e)=>{ e.preventDefault(); if(draggingActivityId){ reorderActivities(draggingActivityId, activity.id); } setDraggingActivityId(null); setDragOverActivityId(null); }}
+                    onDragEnd={()=> { setDraggingActivityId(null); setDragOverActivityId(null); }}
                     className={`relative overflow-hidden flex items-center justify-between p-2 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"}
                       ${activity.isCompleted ? 'bg-green-50 text-gray-500 cursor-not-allowed' : 'cursor-pointer'} ${activity.priority ? 'ring-1 ring-amber-300' : ''}
                       ${draggingActivityId === activity.id ? 'opacity-40' : ''}
-                      ${draggingActivityId && draggingActivityId!==activity.id ? 'drag-target:ring-2 drag-target:ring-blue-300' : ''}`}
+                      ${dragOverActivityId === activity.id && draggingActivityId ? 'ring-2 ring-blue-300' : ''}`}
                     onClick={() => !activity.isCompleted && switchToActivity(index)}
                   >
+                    {dragOverActivityId === activity.id && draggingActivityId && draggingActivityId !== activity.id && (
+                      <div className="absolute -top-1 left-0 right-0 h-1 bg-blue-400 rounded-full" />
+                    )}
         {settings.showActivityProgress && (
                       <div
                         className="absolute top-0 left-0 h-full"
