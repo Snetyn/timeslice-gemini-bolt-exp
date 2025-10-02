@@ -1600,6 +1600,11 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   flowmodoroActivityColor = '#8b5cf6',
   flowmodoroActivityIcon = '🌟'
 }) => {
+  // Display helper: show one decimal place (0.1 granularity) without altering underlying logic
+  const formatOneDecimal = (n:number) => {
+    if (!Number.isFinite(n)) return '0.0';
+    return (Math.round(n * 10) / 10).toFixed(1); // keep single decimal
+  };
   // Persist last-shown fill per activity so non-selected segments don't stall to 0 during overtime
   const lastFillShownRef = useRef<Record<string, number>>({});
   // Calculate total time considering both allocated and added activities
@@ -1684,15 +1689,18 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     // Build planned seconds per activity based on percentage or fixed duration
     // Planned seconds per activity (completed count-up keeps its preserved elapsed for width)
     const plannedSeconds = augmentedActivities.map(act => {
+      // Use originalPlannedSeconds snapshot if present to stabilize proportional visualization
+      if (typeof act.originalPlannedSeconds === 'number' && act.originalPlannedSeconds > 0) {
+        return act.originalPlannedSeconds;
+      }
       if (act.isCompleted) {
         return Math.max(0, act.completedElapsedSeconds || 0);
       }
-      // If this activity was added mid-session with 0%, it shouldn't occupy planned width yet.
       if (act.percentage && act.percentage > 0) return (act.percentage / 100) * totalSessionSeconds;
       if (act.duration && act.duration > 0) return act.duration * 60;
       return 0;
     });
-    const totalPlannedRaw = plannedSeconds.reduce((s, v) => s + v, 0);
+  const totalPlannedRaw = plannedSeconds.reduce((s, v) => s + v, 0);
   // Fallback only when: no planned time OR at least one count-up has contributed elapsed time
   // Fallback only when there is no planned time at all OR a count-up has actually accrued elapsed time.
   // This prevents an immediate switch to elapsed distribution when a fresh count-up (0 elapsed) is present.
@@ -2001,6 +2009,10 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   // We want: overallInnerEdge = coloredInnerEdge => overallRadius - overallStrokeWidth/2 = radius - strokeWidth/2
   const overallRadius = (radius - strokeWidth/2) + overallStrokeWidth/2;
   const overallCircumference = 2 * Math.PI * overallRadius;
+  const formatOneDecimal = (n:number) => {
+    if (!Number.isFinite(n)) return '0.0';
+    return (Math.round(n*10)/10).toFixed(1);
+  };
   
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
@@ -2397,8 +2409,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           transform={`rotate(-90 ${center} ${center})`}
         />
         {/* Flowmodoro overlay removed (outer colored edge) */}
-        <text x="50%" y="50%" textAnchor="middle" dy=".3em" className="text-3xl font-bold fill-current text-slate-700">
-          {Math.round(totalProgress)}%
+        <text x="50%" y="50%" textAnchor="middle" dy=".3em" className="text-3xl font-bold fill-current text-slate-700 tabular-nums">
+          {formatOneDecimal(totalProgress)}%
         </text>
       </svg>
     </div>
@@ -4563,6 +4575,26 @@ const ActivityManagementPage = ({
                     setActivities(prev => 
                       prev.map(a => a.id === editingActivity.id ? editingActivity : a)
                     );
+                    // Immediate pre-session rebalance if timer not active and plan not frozen
+                    if (!isTimerActive && !sessionPlanFrozen) {
+                      setActivities(prev => {
+                        const totalDur = prev.filter(a => !a.countUp).reduce((s,a)=> s + (a.duration || 0), 0) || 1;
+                        const totalSecondsAll = calculateTotalSessionMinutes() * 60;
+                        return prev.map(a => {
+                          if (a.countUp) return a;
+                          const pct = Math.max(0, Math.round(((a.duration || 0) / totalDur) * 1000) / 10); // 0.1% precision
+                          const allocSeconds = Math.round((pct/100) * totalSecondsAll);
+                          return {
+                            ...a,
+                            percentage: pct,
+                            duration: allocSeconds / 60,
+                            timeRemaining: allocSeconds,
+                            isCompleted: false,
+                            originalPlannedSeconds: allocSeconds
+                          };
+                        });
+                      });
+                    }
                     setEditingActivity(null);
                   }}
                   disabled={!editingActivity.name.trim()}
@@ -7469,16 +7501,19 @@ export default function App() {
 
       // Map back: set duration to allocatedSeconds/60 (can be fractional minutes), timeRemaining to allocatedSeconds
       const pctMap = new Map(pctItems.map(x => [x.idx, x.floorSec]));
-    const next = prev.map((activity, i) => {
+      const next = prev.map((activity, i) => {
         const allocatedSeconds = !activity.countUp ? (pctMap.get(i) ?? 0) : 0;
-        const newDuration = allocatedSeconds / 60; // keep accurate, may be fractional minutes
+        const newDuration = allocatedSeconds / 60; // may be fractional minutes
         const newTimeRemaining = activity.countUp ? 0 : allocatedSeconds;
-        console.log(`Activity ${activity.name}: pct=${activity.percentage}% -> ${newDuration.toFixed(2)}min = ${newTimeRemaining}s (countUp: ${activity.countUp})`);
+        const originalPlannedSeconds = (typeof activity.originalPlannedSeconds === 'number' && activity.originalPlannedSeconds > 0)
+          ? activity.originalPlannedSeconds
+          : (!activity.countUp ? allocatedSeconds : 0);
         return {
           ...activity,
           duration: newDuration,
           timeRemaining: newTimeRemaining,
           isCompleted: false,
+          originalPlannedSeconds,
         };
       });
       return next;
@@ -7809,7 +7844,7 @@ export default function App() {
         const last = lastTickTimestampRef.current || now;
         let deltaMs = (now - last) + (tickRemainderMsRef.current || 0);
         const deltaSec = Math.floor(deltaMs / 1000);
-        if (deltaSec > 0 && deltaSec < 86400) {
+  if (deltaSec > 0 && deltaSec < 86400) {
           // Temporarily apply catch-up by advancing anchor and running the same logic deltaSec times in batch
           lastTickTimestampRef.current = now;
           tickRemainderMsRef.current = deltaMs - (deltaSec * 1000);
@@ -7823,7 +7858,9 @@ export default function App() {
             const pauseForFlowBreak = settings.flowmodoroEnabled && settings.flowmodoroMode === 'postpone' && flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
             if (pauseForFlowBreak) return newActivities;
 
-            while (secondsToProcess > 0) {
+            let safety = 0;
+            while (secondsToProcess > 0 && safety < 100000) {
+              safety++;
               const current = newActivities[cursorIndex];
               if (!current) break;
               if (current.countUp) {
@@ -7890,6 +7927,10 @@ export default function App() {
 
               // Flowmodoro break drain across all non-starred in drain mode (catch-up path)
               // Single-source Flowmodoro drain is handled in main tick; catch-up intentionally avoids multi-drain.
+              if (secondsToProcess > 0 && safety >= 100000) {
+                console.warn('Visibility catch-up loop aborted (safety cap reached)');
+                secondsToProcess = 0;
+              }
             }
             return newActivities;
           });
