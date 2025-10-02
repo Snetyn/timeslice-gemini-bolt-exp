@@ -24,21 +24,43 @@
     
     <title>TimeSlice Timer</title>
     <script>
-      // Ensure dev/preview loads in embedded browsers by removing any stale SW on localhost
-      (function() {
-        try {
-          var isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-          if ('serviceWorker' in navigator && isLocalhost) {
-            navigator.serviceWorker.getRegistrations && navigator.serviceWorker.getRegistrations().then(function(regs) {
-              regs.forEach(function(reg) { reg.unregister(); });
-            }).catch(function(){});
+      // Unregister any old service workers to prevent blank page from stale cache
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(registrations) {
+          for (var registration of registrations) {
+            registration.unregister();
           }
-        } catch (e) { /* ignore */ }
-      })();
+        }).catch(function(err) {
+          console.log('ServiceWorker unregister failed: ', err);
+        });
+        
+        // Clear all caches to ensure fresh content
+        if ('caches' in window) {
+          caches.keys().then(function(names) {
+            for (var name of names) {
+              caches.delete(name);
+            }
+          }).catch(function(err) {
+            console.log('Cache clear failed: ', err);
+          });
+        }
+      }
     </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Register service worker after app loads
+      if ('serviceWorker' in navigator && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        window.addEventListener('load', function() {
+          navigator.serviceWorker.register('/service-worker.js').then(function(registration) {
+            console.log('ServiceWorker registered: ', registration);
+          }).catch(function(err) {
+            console.log('ServiceWorker registration failed: ', err);
+          });
+        });
+      }
+    </script>
   </body>
 </html>
