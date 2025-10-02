@@ -5873,24 +5873,27 @@ export default function App() {
         const parsed = JSON.parse(savedActivities);
         // Validate and sanitize loaded activities
         if (Array.isArray(parsed)) {
-          return parsed.map(activity => ({
-            ...activity,
-            name: String(activity.name || "New Activity"), // Ensure name is always a string
-            id: String(activity.id || Date.now()),
-            percentage: Number(activity.percentage || 0),
-            color: String(activity.color || "hsl(220, 70%, 50%)"),
-            duration: Number(activity.duration || 0),
-            timeRemaining: Number(activity.timeRemaining || 0),
-            isCompleted: Boolean(activity.isCompleted),
-            isLocked: Boolean(activity.isLocked),
-            countUp: Boolean(activity.countUp || false),
-            tags: activity.tags || [] // Ensure tags array exists
-          }));
+          return parsed
+            .filter(Boolean)
+            .map(activity => ({
+              ...activity,
+              name: String(activity?.name || "New Activity"), // Ensure name is always a string
+              id: String(activity?.id || Date.now()),
+              percentage: Number(activity?.percentage || 0),
+              color: String(activity?.color || "hsl(220, 70%, 50%)"),
+              duration: Number(activity?.duration || 0),
+              timeRemaining: Number(activity?.timeRemaining || 0),
+              isCompleted: Boolean(activity?.isCompleted),
+              isLocked: Boolean(activity?.isLocked),
+              countUp: Boolean(activity?.countUp || false),
+              tags: Array.isArray(activity?.tags) ? activity.tags : [] // Ensure tags array exists
+            }));
         }
       }
     } catch (e) {
       console.error("Failed to load activities from localStorage", e);
     }
+    return [] as Activity[];
   });
 
   useEffect(() => {
