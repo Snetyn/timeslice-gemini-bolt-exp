@@ -52,41 +52,43 @@ self.addEventListener('activate', event => {
 
 // Fetch event: fires for every network request
 self.addEventListener('fetch', event => {
-  // Only handle GET requests
   if (event.request.method !== 'GET') {
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        // If the request is in the cache, return the cached response
-        if (response) {
+  // Always try the network first for navigations to avoid serving stale shells
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseClone));
           return response;
-        }
-        
-        // Otherwise, fetch from the network
-        return fetch(event.request).then(response => {
-          // Don't cache non-successful responses
-          if (!response || response.status !== 200 || response.type !== 'basic') {
+        })
+        .catch(async () => {
+          const cached = await caches.match(event.request);
+          if (cached) return cached;
+          return caches.match('/index.html');
+        })
+    );
+    return;
+  }
+
+  // For non-navigation requests, respond with cache first but refresh in background
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      const fetchPromise = fetch(event.request)
+        .then(response => {
+          if (!response || response.status !== 200 || response.type === 'opaque') {
             return response;
           }
-
-          // Clone the response because it's a stream
-          const responseToCache = response.clone();
-
-          caches.open(CACHE_NAME)
-            .then(cache => {
-              cache.put(event.request, responseToCache);
-            });
-
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseClone));
           return response;
-        }).catch(() => {
-          // If both cache and network fail, show offline page
-          if (event.request.destination === 'document') {
-            return caches.match('/index.html');
-          }
-        });
-      })
+        })
+        .catch(() => cached);
+
+      return cached || fetchPromise;
+    })
   );
 });
