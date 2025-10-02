@@ -7594,7 +7594,7 @@ export default function App() {
         const current = newActivities[currentActivityIndex];
         if (!current) break;
 
-        const flowBreakDrainActive = settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining||0)>0;
+  const flowBreakDrainActive = settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining||0)>0;
         if (current.countUp) {
           // For count-up activities, we add time instead of subtracting
           current.timeRemaining += secondsToProcess;
@@ -7675,11 +7675,13 @@ export default function App() {
 
         // Flowmodoro break drain: single-source hierarchy (vault -> groups by classifyForDrain)
         if (settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.isOnBreak && (flowmodoroState.breakTimeRemaining || 0) > 0) {
+          let drainedFromBreak = false;
           // Single-source hierarchy drain: vault -> lowest tier with available time (non priority & unlocked) -> ...
           let need = 1;
           if (vaultTime > 0 && need > 0) {
             setVaultTime(v => Math.max(0, v - 1));
             need -= 1;
+            drainedFromBreak = true;
           }
           if (need > 0) {
             const tierPools: { idx: number; act: any }[][] = [[],[],[],[]];
@@ -7694,6 +7696,15 @@ export default function App() {
               const pick = tier[ lastDrainedIndex.current = (lastDrainedIndex.current + 1) % tier.length ];
               newActivities[pick.idx].timeRemaining = Math.max(0, (newActivities[pick.idx].timeRemaining||0) - 1);
               need = 0;
+              drainedFromBreak = true;
+            }
+          }
+          if (flowBreakDrainActive) {
+            if (drainedFromBreak) {
+              secondsToProcess = Math.max(0, secondsToProcess - 1);
+            } else {
+              // Nothing could be drained, so exit the loop to prevent stalling
+              secondsToProcess = 0;
             }
           }
         }
