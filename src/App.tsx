@@ -1989,7 +1989,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   );
 };
 
-const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex, showAllocationRing = false, flowmodoroOverlaySeconds = 0, flowmodoroOverlayColor = '#8b5cf6' }) => {
+const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex, showAllocationRing = false, flowmodoroOverlaySeconds = 0, flowmodoroOverlayColor = '#8b5cf6', settings }) => {
   const size = 200;
   const strokeWidth = 12;
   const center = size / 2;
@@ -2271,7 +2271,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
               cx={center}
               cy={center}
               strokeLinecap="butt"
-              opacity={0.3}
+              opacity={0.28}
+              style={activity.isCompleted && settings.segmentShowCompletedStripes ? { strokeDasharray: `${segmentArcLength/4} ${segmentArcLength/4}`, strokeWidth: strokeWidth, opacity:0.35 } : undefined}
             />
             {fillArcLength > 0 && (
               <circle
@@ -2283,9 +2284,36 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                 cx={center}
                 cy={center}
                 strokeLinecap="butt"
-                opacity={0.95}
+                opacity={activity.isCompleted ? 0.6 : 0.95}
                 style={{ transition: 'opacity 200ms linear' }}
               />
+            )}
+            {settings.segmentHighlightStyle !== 'none' && idx===currentActivityIndex && !activity.isCompleted && (
+              settings.segmentHighlightStyle === 'pulse' ? (
+                <circle
+                  stroke={activity.color}
+                  fill="transparent"
+                  strokeWidth={strokeWidth + 4}
+                  strokeDasharray={`${fillArcLength||segmentArcLength} ${circumference}`}
+                  r={radius}
+                  cx={center}
+                  cy={center}
+                  strokeLinecap="round"
+                  style={{ opacity:0.35, filter:'blur(1px)', animation:'pulseSeg 2s ease-in-out infinite' }}
+                />
+              ) : (
+                <circle
+                  stroke={activity.color}
+                  fill="transparent"
+                  strokeWidth={4}
+                  strokeDasharray={`${segmentArcLength} ${circumference}`}
+                  r={radius + strokeWidth/2 + 1}
+                  cx={center}
+                  cy={center}
+                  strokeLinecap="butt"
+                  opacity={0.9}
+                />
+              )
             )}
           </g>
         );
@@ -2310,7 +2338,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   };
 
   const renderAllocationRing = () => {
-    if (!showAllocationRing) return null;
+  if (!showAllocationRing) return null;
     // Compute planned allocation irrespective of current style (percent or duration based)
     const totalSessionSecondsAlloc = totalSessionMinutes * 60;
     const plannedSeconds = activities.map(a => {
@@ -2336,7 +2364,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
       return (
         <circle
           key={`allocation-${activities[idx].id}`}
-          stroke={activities[idx].color}
+          stroke={'#d1d5db'}
           fill="transparent"
           strokeWidth={allocationStrokeWidth}
           strokeDasharray={`${arcLength} ${allocationCircumference}`}
@@ -2345,7 +2373,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           cy={center}
           transform={`rotate(${rotation} ${center} ${center})`}
           strokeLinecap="butt"
-          opacity={0.7}
+          opacity={0.9}
         />
       );
     });
@@ -2354,6 +2382,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   return (
     <div className="flex items-center justify-center py-4">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <style>{`@keyframes pulseSeg {0%{opacity:.25}50%{opacity:.6}100%{opacity:.25}}`}</style>
         {/* Planned allocation ring (optional) */}
         {renderAllocationRing()}
         {/* Background circles */}
@@ -6060,6 +6089,8 @@ export default function App() {
     flowmodoroAutoCatchup: true, // NEW: enable off-screen rest accrual reconciliation
     flowmodoroSmoothCatchup: false, // NEW: smooth large catch-up awards over ticks
     showDragPlaceholders: true, // NEW: allow disabling drag gap highlight
+    segmentHighlightStyle: 'pulse', // 'pulse' | 'bracket' | 'none'
+    segmentShowCompletedStripes: true, // visually differentiate completed segments
   redistributionUseVaultFirst: true, // new: take from vault before shrinking activities
   redistributionProportional: false, // new: use proportional instead of per-second loop
     flowmodoroIcon: '🌟',
@@ -9752,6 +9783,7 @@ export default function App() {
                 showAllocationRing={settings.showCircularAllocation}
                 flowmodoroOverlaySeconds={(settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.availableRestTime > 0) ? flowmodoroState.availableRestTime : 0}
                 flowmodoroOverlayColor={'#8b5cf6'}
+                settings={settings}
               />
             ) : (
               <div className="space-y-1">
@@ -10253,6 +10285,23 @@ export default function App() {
                   <div className="flex flex-wrap gap-2 pt-1">
                     <Button size="sm" variant="secondary" onClick={() => setFlowmodoroState(prev => ({ ...prev, availableRestTime: 0, availableRestMinutes: 0, accumulatedFractionalTime: 0, pendingCatchup: 0 }))}>Reset Reserve</Button>
                     <Button size="sm" variant="outline" onClick={() => setFlowmodoroState(prev => ({ availableRestTime: 0, totalEarnedToday: 0, cycleCount: 0, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0, lastResetDate: new Date().toDateString(), accumulatedFractionalTime: 0 }))}>Full Flow Reset</Button>
+                  </div>
+                </div>
+                <Separator />
+                {/* Segment Visualization */}
+                <div className="space-y-2">
+                  <Label className="font-semibold">Segment Visualization</Label>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Highlight current segment</span>
+                    <div className="flex gap-1">
+                      {['pulse','bracket','none'].map(opt => (
+                        <Button key={opt} size="sm" variant={settings.segmentHighlightStyle===opt?'default':'outline'} onClick={()=> setSettings(p=>({...p, segmentHighlightStyle: opt}))}>{opt}</Button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Completed segment stripes</span>
+                    <Switch checked={settings.segmentShowCompletedStripes} onCheckedChange={checked=> setSettings(p=>({...p, segmentShowCompletedStripes: checked}))} />
                   </div>
                 </div>
                 <Separator />
