@@ -1662,6 +1662,49 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
   }
 
+  // Optional aggregation (tags) – detect synthetic marker on first activity
+  if (activities.length && (activities as any)[0].__aggregateMode === 'tag') {
+    try {
+      const totalSessionSecondsAgg = totalSessionSeconds || 1;
+      const tagMap: Record<string, { planned: number; elapsed: number; color: string; name: string }> = {};
+      activities.forEach(a => {
+        const tagIds: string[] = (a.tags && a.tags.length) ? a.tags : ['__untagged'];
+        let planned = 0;
+        if (a.percentage && a.percentage > 0) planned = (a.percentage / 100) * totalSessionSecondsAgg;
+        else if (a.duration && a.duration > 0) planned = a.duration * 60;
+        const tr = a.timeRemaining;
+        let elapsed = 0;
+        if (a.countUp) elapsed = Math.max(0, tr || 0);
+        else if (typeof tr === 'number') elapsed = tr >= 0 ? Math.max(0, planned - tr) : Math.max(0, planned + Math.abs(tr));
+        tagIds.forEach(tid => {
+          if (!tagMap[tid]) tagMap[tid] = { planned: 0, elapsed: 0, color: a.color || '#64748b', name: tid === '__untagged' ? 'Untagged' : tid };
+          tagMap[tid].planned += planned;
+          tagMap[tid].elapsed += elapsed;
+        });
+      });
+      const totalPlannedTags = Object.values(tagMap).reduce((s, b) => s + b.planned, 0) || 1;
+      const tagActivities = Object.entries(tagMap).map(([tid, b]) => ({
+        id: `tag-${tid}`,
+        name: b.name,
+        color: b.color,
+        percentage: (b.planned / totalPlannedTags) * 100,
+        duration: b.planned / 60,
+        timeRemaining: Math.max(0, b.planned - b.elapsed),
+        isCompleted: b.elapsed >= b.planned,
+        countUp: false,
+        priority: false,
+        isLocked: true,
+        showOnBar: true,
+        completedElapsedSeconds: b.elapsed,
+        isAggregatedTag: true,
+      }));
+      // Replace activities for visualization only
+      augmentedActivities = tagActivities as any;
+    } catch (e) {
+      console.warn('Tag aggregation failed', e);
+    }
+  }
+
   // Optionally append a synthetic Flowmodoro pseudo-activity that reserves planned width
   // This should not alter upstream scheduling so we keep it local to progress visualization
   let augmentedActivities = activities;
@@ -1901,6 +1944,17 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
                   {flowmodoroActivityIcon}
                 </div>
               )}
+              {isFlowPseudo && typeof activity.timeRemaining === 'number' && activityTime > 0 && (
+                (()=>{
+                  const usedSeconds = activityTime - activity.timeRemaining; // earned
+                  const usedRatio = Math.min(1, Math.max(0, usedSeconds / activityTime));
+                  return usedRatio > 0 ? (
+                    <div className="absolute inset-0 pointer-events-none">
+                      <div className="h-full" style={{ width: `${usedRatio*100}%`, backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.35) 0, rgba(255,255,255,0.35) 4px, transparent 4px, transparent 8px)', mixBlendMode: 'overlay' }} title={`Flow used: ${Math.round(usedSeconds/60)}m`}></div>
+                    </div>
+                  ) : null;
+                })()
+              )}
             </div>
           );
         })}
@@ -1990,6 +2044,47 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
 };
 
 const CircularProgress = ({ activities, style, totalProgress, activityProgress, activityColor, totalSessionMinutes = 0, currentActivityIndex, showAllocationRing = false, flowmodoroOverlaySeconds = 0, flowmodoroOverlayColor = '#8b5cf6', settings }) => {
+  // Optional aggregation (tags) for circular view
+  let workingActivities = activities;
+  try {
+    if (settings?.progressAggregationMode === 'tag' && activities?.length) {
+      const totalSessionSecondsAgg = (totalSessionMinutes || 0) * 60 || 1;
+      const tagMap: Record<string, { planned: number; elapsed: number; color: string; name: string }> = {};
+      activities.forEach(a => {
+        const tagIds: string[] = (a.tags && a.tags.length) ? a.tags : ['__untagged'];
+        let planned = 0;
+        if (a.percentage && a.percentage > 0) planned = (a.percentage / 100) * totalSessionSecondsAgg;
+        else if (a.duration && a.duration > 0) planned = a.duration * 60;
+        const tr = a.timeRemaining;
+        let elapsed = 0;
+        if (a.countUp) elapsed = Math.max(0, tr || 0);
+        else if (typeof tr === 'number') elapsed = tr >= 0 ? Math.max(0, planned - tr) : Math.max(0, planned + Math.abs(tr));
+        tagIds.forEach(tid => {
+          if (!tagMap[tid]) tagMap[tid] = { planned: 0, elapsed: 0, color: a.color || '#64748b', name: tid === '__untagged' ? 'Untagged' : tid };
+          tagMap[tid].planned += planned;
+          tagMap[tid].elapsed += elapsed;
+        });
+      });
+      const totalPlannedTags = Object.values(tagMap).reduce((s, b) => s + b.planned, 0) || 1;
+      workingActivities = Object.entries(tagMap).map(([tid, b]) => ({
+        id: `tag-${tid}`,
+        name: b.name,
+        color: b.color,
+        percentage: (b.planned / totalPlannedTags) * 100,
+        duration: b.planned / 60,
+        timeRemaining: Math.max(0, b.planned - b.elapsed),
+        isCompleted: b.elapsed >= b.planned,
+        countUp: false,
+        priority: false,
+        isLocked: true,
+        showOnBar: true,
+        completedElapsedSeconds: b.elapsed,
+        isAggregatedTag: true,
+      }));
+    }
+  } catch (e) {
+    console.warn('Circular tag aggregation failed', e);
+  }
   const size = 200;
   const strokeWidth = 12;
   const center = size / 2;
@@ -2016,7 +2111,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
-  const totalTime = activities.reduce((sum, act) => {
+  const totalTime = workingActivities.reduce((sum, act) => {
     if (act.percentage > 0) {
       return sum + (act.percentage / 100) * totalSessionSeconds;
     } else if (act.duration > 0) {
@@ -2035,7 +2130,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
 
   const renderOuterRing = () => {
     // If no planned time, but elapsed exists (e.g., count-up), render elapsed-based ring instead of nothing
-    const perElapsedForFallback = activities.map(act => {
+  const perElapsedForFallback = workingActivities.map(act => {
       let planned = 0;
       if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
       else if (act.duration && act.duration > 0) planned = act.duration * 60;
@@ -2053,7 +2148,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     if (totalTime === 0) {
       if (totalElapsedForFallback <= 0) return null;
       let cumulativeRotation = -90;
-      return activities.map((activity, idx) => {
+  return workingActivities.map((activity, idx) => {
         const share = perElapsedForFallback[idx] / totalElapsedForFallback;
         if (!share || share <= 0) return null;
         const angle = share * 360;
@@ -2079,7 +2174,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
 
     if (style === 'dynamicColor') {
       // Compute elapsed seconds per activity (includes overtime and count-up)
-      const perElapsed = activities.map(act => {
+  const perElapsed = workingActivities.map(act => {
         let planned = 0;
         if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
         else if (act.duration && act.duration > 0) planned = act.duration * 60;
@@ -2097,7 +2192,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
       if (totalElapsed <= 0) return null;
 
       let cumulativeRotation = -90;
-      return activities.map((activity, idx) => {
+  return workingActivities.map((activity, idx) => {
         const share = perElapsed[idx] / totalElapsed;
         if (!share || share <= 0) return null;
         const angle = share * 360;
@@ -2123,7 +2218,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
 
     if (style === 'segmented') {
       // Planned seconds per activity
-      const plannedSeconds = activities.map(a => {
+  const plannedSeconds = workingActivities.map(a => {
         if (a.isCompleted) {
           return Math.max(0, a.completedElapsedSeconds || 0);
         }
@@ -2140,7 +2235,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   if ((totalPlannedRaw <= 0) || (anyCountUpWithElapsed && totalElapsedForFallback > 0)) {
         if (totalElapsedForFallback <= 0) return null;
         let cumulativeRotation = -90;
-        return activities.map((activity, idx) => {
+  return workingActivities.map((activity, idx) => {
           const share = perElapsedForFallback[idx] / totalElapsedForFallback;
           if (!share || share <= 0) return null;
           const angle = share * 360;
@@ -6133,8 +6228,10 @@ export default function App() {
       keepScreenAwake: false,
       overtimeType: 'none',
       showAllocationPercentage: true,
+  showActivityPercentOnlyDuringRun: false, // NEW: collapse activity display to percentage only while running
       progressBarStyle: 'default',
       progressView: 'linear',
+  progressAggregationMode: 'activity', // 'activity' | 'tag' | 'category'
       showActivityTime: true, // NEW: toggle for activity time next to bar
       // Mobile optimization settings
       mobileZoomLevel: 'normal', // 'compact', 'normal', 'large'
@@ -8750,6 +8847,20 @@ export default function App() {
     return activity.subtasks.every(subtask => subtask.completed);
   };
 
+  // Guard completion action globally (session activities) – intercepted when toggling completion
+  const attemptCompleteActivity = useCallback((activityId: string) => {
+    setActivities(prev => prev.map(a => {
+      if (a.id !== activityId) return a;
+      if (a.isCompleted) return a; // already done
+      if (!areAllSubtasksCompleted(a)) {
+        // Soft feedback: could integrate toast; for now console warn
+        console.warn('Cannot complete activity until all subtasks are finished');
+        return a;
+      }
+      return { ...a, isCompleted: true, completedElapsedSeconds: a.completedElapsedSeconds || 0 };
+    }));
+  }, [areAllSubtasksCompleted]);
+
   const toggleSubtaskCompletion = (activityId: string, subtaskId: string) => {
     setDailyActivities(prev => prev.map(activity => {
       if (activity.id === activityId) {
@@ -10079,6 +10190,7 @@ export default function App() {
                   const elapsed = tr >= 0 ? Math.max(0, plannedSec - tr) : (plannedSec + Math.abs(tr));
                   return Math.max(0, Math.round(elapsed));
                 })();
+                const percentOnly = settings.showActivityPercentOnlyDuringRun && isTimerActive && !isPaused;
                 return (
                   <div
                     key={activity.id}
@@ -10096,7 +10208,7 @@ export default function App() {
                     {settings.showDragPlaceholders && dragOverActivityId === activity.id && draggingActivityId && draggingActivityId !== activity.id && (
                       <div className="absolute -top-1 left-0 right-0 h-1 bg-blue-400 rounded-full" />
                     )}
-        {settings.showActivityProgress && (
+        {settings.showActivityProgress && !percentOnly && (
                       <div
                         className="absolute top-0 left-0 h-full"
                         style={{
@@ -10112,6 +10224,9 @@ export default function App() {
                       <input type="checkbox" className="h-4 w-4 rounded text-slate-600 focus:ring-slate-500" checked={activity.isCompleted} disabled={activity.isCompleted} onChange={() => handleCompleteActivity(activity.id)} />
                       <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activity.color }} />
                       <span className={`font-semibold text-sm ${activity.priority ? 'text-amber-700' : ''}`}>{activity.name}</span>
+                      {percentOnly && settings.showActivityProgress && (
+                        <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-slate-200 text-slate-700">{Math.round(displayProgress)}%</span>
+                      )}
                     </div>
                     <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
                       <Button
@@ -10127,7 +10242,7 @@ export default function App() {
                       >
                         <span className="text-xs">★</span>
                       </Button>
-                      {settings.showActivityTime && (
+                      {settings.showActivityTime && !percentOnly && (
                         <span className="text-xs font-mono z-10">
                           {activity.isCompleted
                             ? formatTime(spentForCompleted)
@@ -10329,7 +10444,7 @@ export default function App() {
                     <Button size="sm" variant={settings.progressView === 'circular' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressView: 'circular' }))}>Circular</Button>
                   </div>
                 </div>
-                {settings.progressView === 'circular' && (
+                {settings.progressView === 'linear' && (
                   <div className="flex items-center justify-between">
                     <Label htmlFor="show-circular-allocation">Show circular allocation ring</Label>
                     <Switch id="show-circular-allocation" checked={settings.showCircularAllocation} onCheckedChange={(checked) => setSettings(prev => ({ ...prev, showCircularAllocation: checked }))} />
@@ -10343,6 +10458,26 @@ export default function App() {
                 )}
                 <div className="space-y-2">
                   <Label>Progress Bar Style</Label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-600">Aggregate:</span>
+                      <select
+                        className="border rounded px-2 py-1 text-xs"
+                        value={settings.progressAggregationMode}
+                        onChange={(e) => setSettings(prev => ({ ...prev, progressAggregationMode: e.target.value as any }))}
+                      >
+                        <option value="activity">By Activity</option>
+                        <option value="tag">By Tag</option>
+                        {/* Future: <option value="category">By Category</option> */}
+                      </select>
+                      <label className="flex items-center gap-1 text-xs ml-2">
+                        <input
+                          type="checkbox"
+                          checked={settings.showActivityPercentOnlyDuringRun}
+                          onChange={(e) => setSettings(prev => ({ ...prev, showActivityPercentOnlyDuringRun: e.target.checked }))}
+                        />
+                        % only while running
+                      </label>
+                    </div>
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant={settings.progressBarStyle === 'default' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressBarStyle: 'default' }))}>Default</Button>
                     <Button size="sm" variant={settings.progressBarStyle === 'dynamicColor' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, progressBarStyle: 'dynamicColor' }))}>Dynamic</Button>
