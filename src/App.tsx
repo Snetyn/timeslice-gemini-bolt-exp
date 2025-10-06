@@ -2213,9 +2213,12 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
       }
 
       let cumulativeRotation = -90;
+      // Minimal visual angle to avoid disappearing very small segments (about 0.5 degrees)
+      const MIN_DEG = 0.5;
       return activities.map((activity, idx) => {
-        const segmentAngle = angles[idx];
+        let segmentAngle = angles[idx];
         if (!segmentAngle || segmentAngle <= 0) return null;
+        if (segmentAngle < MIN_DEG) segmentAngle = MIN_DEG;
         const segmentArcLength = (segmentAngle / 360) * circumference;
 
         // Fill overlay rules with persistence:
@@ -2271,8 +2274,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
               cx={center}
               cy={center}
               strokeLinecap="butt"
-              opacity={0.28}
-              style={activity.isCompleted && settings.segmentShowCompletedStripes ? { strokeDasharray: `${segmentArcLength/4} ${segmentArcLength/4}`, strokeWidth: strokeWidth, opacity:0.35 } : undefined}
+              opacity={0.24}
             />
             {fillArcLength > 0 && (
               <circle
@@ -2284,8 +2286,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                 cx={center}
                 cy={center}
                 strokeLinecap="butt"
-                opacity={activity.isCompleted ? 0.6 : 0.95}
-                style={{ transition: 'opacity 200ms linear' }}
+                opacity={activity.isCompleted ? 0.65 : 0.95}
+                style={{ transition: 'opacity 200ms linear', ...(activity.isCompleted && settings.segmentShowCompletedStripes ? { strokeDasharray: `${segmentArcLength/4} ${segmentArcLength/4}` }: {}) }}
               />
             )}
             {settings.segmentHighlightStyle !== 'none' && idx===currentActivityIndex && !activity.isCompleted && (
@@ -2294,7 +2296,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                   stroke={activity.color}
                   fill="transparent"
                   strokeWidth={strokeWidth + 4}
-                  strokeDasharray={`${fillArcLength||segmentArcLength} ${circumference}`}
+                  // Pulse follows actual progress but at least a sliver so user sees current even at 0%
+                  strokeDasharray={`${Math.max(fillArcLength,  (MIN_DEG/360)*circumference)} ${circumference}`}
                   r={radius}
                   cx={center}
                   cy={center}
@@ -2302,16 +2305,18 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
                   style={{ opacity:0.35, filter:'blur(1px)', animation:'pulseSeg 2s ease-in-out infinite' }}
                 />
               ) : (
+                // Bracket style: always span full segment regardless of progress; use outer radius but align ends
                 <circle
                   stroke={activity.color}
                   fill="transparent"
-                  strokeWidth={4}
+                  strokeWidth={strokeWidth + 2}
                   strokeDasharray={`${segmentArcLength} ${circumference}`}
-                  r={radius + strokeWidth/2 + 1}
+                  r={radius}
                   cx={center}
                   cy={center}
                   strokeLinecap="butt"
-                  opacity={0.9}
+                  opacity={0.45}
+                  style={{ filter:'drop-shadow(0 0 3px rgba(0,0,0,0.25))' }}
                 />
               )
             )}
@@ -4516,7 +4521,90 @@ const ActivityManagementPage = ({
                     type="number"
                     min="0"
                     value={editingActivity.duration || 0}
-                    onChange={(e) => setEditingActivity(prev => prev ? ({ ...prev, duration: parseInt(e.target.value) || 0 }) : null)}
+                    onChange={(e) => {
+                      const valRaw = e.target.value;
+                      setEditingActivity(prev => prev ? ({ ...prev, duration: parseInt(valRaw) || 0 }) : null);
+                      if (valRaw === '') return; // don't rebalance while clearing field
+                      if (isTimerActive || sessionPlanFrozen) return; // only pre-session & editable
+                      const newMinutes = parseInt(valRaw) || 0;
+                      const activityId = editingActivity.id;
+                      setActivities(prev => {
+                        const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
+                        if (!totalSessionSeconds) return prev;
+                        const idx = prev.findIndex(a => a.id === activityId);
+                        if (idx === -1) return prev;
+                        const target = prev[idx];
+                        if (target.countUp) return prev;
+                        const newTargetSecondsRequested = Math.max(0, Math.round(newMinutes * 60));
+                        const getPlanned = (a: any) => {
+                          if (typeof a.originalPlannedSeconds === 'number') return a.originalPlannedSeconds;
+                          if (typeof a.timeRemaining === 'number' && a.timeRemaining > 0) return a.timeRemaining;
+                          if (typeof a.percentage === 'number') return Math.round((a.percentage / 100) * totalSessionSeconds);
+                          if (typeof a.duration === 'number') return Math.round(a.duration * 60);
+                          return 0;
+                        };
+                        const lockedOthers = prev.filter(a => a.id !== activityId && a.isLocked && !a.countUp);
+                        const lockedOthersSeconds = lockedOthers.reduce((s,a)=> s + getPlanned(a), 0);
+                        const maxTargetSeconds = Math.max(0, totalSessionSeconds - lockedOthersSeconds);
+                        const newTargetSeconds = Math.min(newTargetSecondsRequested, maxTargetSeconds);
+                        const unlockedOthers = prev.filter(a => a.id !== activityId && !a.isLocked && !a.countUp);
+                        const sumUnlockedOthersCurrent = unlockedOthers.reduce((s,a)=> s + getPlanned(a), 0);
+                        const remainingForUnlockedOthers = Math.max(0, totalSessionSeconds - lockedOthersSeconds - newTargetSeconds);
+                        let redistributed: Record<string, number> = {};
+                        if (unlockedOthers.length > 0) {
+                          if (sumUnlockedOthersCurrent > 0) {
+                            unlockedOthers.forEach(a => {
+                              const base = getPlanned(a);
+                              redistributed[a.id] = Math.round((base / sumUnlockedOthersCurrent) * remainingForUnlockedOthers);
+                            });
+                          } else {
+                            const even = Math.floor(remainingForUnlockedOthers / unlockedOthers.length);
+                            let remainder = remainingForUnlockedOthers - even * unlockedOthers.length;
+                            unlockedOthers.forEach((a,i) => {
+                              redistributed[a.id] = even + (i < remainder ? 1 : 0);
+                            });
+                          }
+                        }
+                        const afterSum = Object.values(redistributed).reduce((s,v)=>s+v,0);
+                        let drift = remainingForUnlockedOthers - afterSum;
+                        if (drift !== 0 && unlockedOthers.length > 0) {
+                          const sign = drift > 0 ? 1 : -1;
+                          let i = 0;
+                          while (drift !== 0 && i < 5000) {
+                            const targetId = unlockedOthers[i % unlockedOthers.length].id;
+                            redistributed[targetId] = (redistributed[targetId] || 0) + sign;
+                            drift -= sign;
+                            i++;
+                          }
+                        }
+                        return prev.map(a => {
+                          if (a.id === activityId) {
+                            const pct = totalSessionSeconds ? (newTargetSeconds / totalSessionSeconds) * 100 : 0;
+                            return {
+                              ...a,
+                              duration: Math.round(newTargetSeconds / 60),
+                              timeRemaining: newTargetSeconds,
+                              originalPlannedSeconds: newTargetSeconds,
+                              percentage: Math.round(pct * 10) / 10,
+                              isCompleted: false
+                            };
+                          }
+                          if (redistributed[a.id] != null) {
+                            const ps = redistributed[a.id];
+                            const pct = totalSessionSeconds ? (ps / totalSessionSeconds) * 100 : 0;
+                            return {
+                              ...a,
+                              duration: Math.round(ps / 60),
+                              timeRemaining: ps,
+                              originalPlannedSeconds: ps,
+                              percentage: Math.round(pct * 10) / 10,
+                              isCompleted: false
+                            };
+                          }
+                          return a;
+                        });
+                      });
+                    }}
                     className="flex-1 h-8 sm:h-10 text-xs sm:text-sm"
                     placeholder="Enter minutes"
                   />
@@ -4601,29 +4689,7 @@ const ActivityManagementPage = ({
                 <Button 
                   onClick={() => {
                     // Save changes to the activity
-                    setActivities(prev => 
-                      prev.map(a => a.id === editingActivity.id ? editingActivity : a)
-                    );
-                    // Immediate pre-session rebalance if timer not active and plan not frozen
-                    if (!isTimerActive && !sessionPlanFrozen) {
-                      setActivities(prev => {
-                        const totalDur = prev.filter(a => !a.countUp).reduce((s,a)=> s + (a.duration || 0), 0) || 1;
-                        const totalSecondsAll = calculateTotalSessionMinutes() * 60;
-                        return prev.map(a => {
-                          if (a.countUp) return a;
-                          const pct = Math.max(0, Math.round(((a.duration || 0) / totalDur) * 1000) / 10); // 0.1% precision
-                          const allocSeconds = Math.round((pct/100) * totalSecondsAll);
-                          return {
-                            ...a,
-                            percentage: pct,
-                            duration: allocSeconds / 60,
-                            timeRemaining: allocSeconds,
-                            isCompleted: false,
-                            originalPlannedSeconds: allocSeconds
-                          };
-                        });
-                      });
-                    }
+                    setActivities(prev => prev.map(a => a.id === editingActivity.id ? { ...a, ...editingActivity } : a));
                     setEditingActivity(null);
                   }}
                   disabled={!editingActivity.name.trim()}
@@ -6995,6 +7061,59 @@ export default function App() {
     }
   });
 
+  // Unified helper to award Flowmodoro rest time given elapsed focused work seconds.
+  // Handles ratio conversion, fractional accumulation, caps, optional deferred (smooth) catch-up.
+  const awardFlowmodoroWork = useCallback((elapsedSecs: number, opts: { deferLargeCatchup?: boolean } = {}) => {
+    if (!settings.flowmodoroEnabled) return;
+    if (!elapsedSecs || elapsedSecs <= 0) return;
+    // Don't accrue while on a break
+    if (flowmodoroState.isOnBreak) return;
+    const ratio = Math.max(1, settings.flowmodoroRatio || 1);
+    setFlowmodoroState(prev => {
+      // If state flipped to break mid-schedule, abort
+      if (prev.isOnBreak) return prev;
+      const accum = (prev.accumulatedFractionalTime || 0) + elapsedSecs;
+      const restToAdd = Math.floor(accum / ratio);
+      const remainingFrac = accum % ratio;
+      if (restToAdd <= 0) {
+        return { ...prev, accumulatedFractionalTime: accum };
+      }
+      // Cap logic (combine legacy cap + pseudo activity cap)
+      const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+      const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
+      const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
+
+      // Optional smoothing / deferral for large catch-up bursts
+      const shouldDefer = opts.deferLargeCatchup && settings.flowmodoroSmoothCatchup && restToAdd > 5;
+      if (shouldDefer) {
+        // Queue the whole restToAdd; we don't apply cap until dispensing to avoid losing potential time
+        const pending = ((prev as any).pendingCatchup || 0) + restToAdd;
+        return { ...prev, pendingCatchup: pending, accumulatedFractionalTime: remainingFrac } as any;
+      }
+
+      let actualAdd = restToAdd;
+      if (effectiveCap > 0) {
+        const remainingCap = Math.max(0, effectiveCap - prev.availableRestTime);
+        if (remainingCap <= 0) {
+          // Cap reached; just update fractional accumulator for future day reset
+            return { ...prev, accumulatedFractionalTime: remainingFrac };
+        }
+        actualAdd = Math.min(actualAdd, remainingCap);
+      }
+      if (actualAdd <= 0) {
+        return { ...prev, accumulatedFractionalTime: remainingFrac };
+      }
+      const nextAvailable = prev.availableRestTime + actualAdd;
+      return {
+        ...prev,
+        availableRestTime: nextAvailable,
+        totalEarnedToday: (prev.totalEarnedToday || 0) + actualAdd,
+        availableRestMinutes: Math.floor(nextAvailable / 60),
+        accumulatedFractionalTime: remainingFrac
+      };
+    });
+  }, [settings.flowmodoroEnabled, settings.flowmodoroRatio, settings.flowmodoroMaxPerSessionMinutes, settings.flowmodoroSessionActivityMinutes, settings.flowmodoroSmoothCatchup, flowmodoroState.isOnBreak]);
+
   // Siphon Time functionality (NEW)
   const siphonTime = (sourceActivityId, targetActivityId, amount, targetIsVault = false) => {
     if (!Number.isFinite(amount) || amount <= 0) return;
@@ -7585,15 +7704,16 @@ export default function App() {
         setFlowmodoroState(prev => {
           const pending = (prev as any).pendingCatchup || 0;
           if (!pending) return prev;
-          // Award up to a small chunk per real tick (e.g., 3 * elapsedSeconds or at least 5 seconds)
           const chunk = Math.min(pending, Math.max(5, elapsedSeconds * 3));
-          let nextAvailable = prev.availableRestTime + chunk;
           const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
           const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
           const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
-          if (effectiveCap > 0) nextAvailable = Math.min(nextAvailable, effectiveCap);
-          const remainingPending = pending - chunk;
-          const base = { ...prev, availableRestTime: nextAvailable, availableRestMinutes: Math.floor(nextAvailable/60), totalEarnedToday: (prev.totalEarnedToday||0) + chunk } as any;
+          const remainingCap = effectiveCap > 0 ? Math.max(0, effectiveCap - prev.availableRestTime) : chunk;
+          const actualAdd = effectiveCap > 0 ? Math.min(chunk, remainingCap) : chunk;
+          if (actualAdd <= 0) return prev; // cap reached, keep pending for future resets
+          const nextAvailable = prev.availableRestTime + actualAdd;
+          const remainingPending = Math.max(0, pending - actualAdd);
+          const base: any = { ...prev, availableRestTime: nextAvailable, availableRestMinutes: Math.floor(nextAvailable/60), totalEarnedToday: (prev.totalEarnedToday||0) + actualAdd };
           if (remainingPending > 0) base.pendingCatchup = remainingPending; else delete base.pendingCatchup;
           return base;
         });
@@ -7617,36 +7737,7 @@ export default function App() {
   // - Daily mode when at least one daily activity is active (status 'active' or 'overtime')
   const hasActiveDailyWork = currentMode === 'daily' && dailyActivities.some(a => a.isActive || a.status === 'active' || a.status === 'overtime');
     if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak && ((isTimerActive && !isPaused) || hasActiveDailyWork)) {
-      // Add elapsed seconds to fractional accumulator and calculate how much rest time to award
-      const newAccumulated = flowmodoroState.accumulatedFractionalTime + elapsedSeconds;
-      // For a 2:1 ratio, every 2 work seconds earns 1 rest second
-      // For a 5:1 ratio, every 5 work seconds earns 1 rest second
-      const workSecondsPerRestSecond = settings.flowmodoroRatio;
-      const restSecondsToAdd = Math.floor(newAccumulated / workSecondsPerRestSecond);
-      const remainingFractional = newAccumulated % workSecondsPerRestSecond;
-      
-      if (restSecondsToAdd > 0) {
-        setFlowmodoroState(prevFlow => {
-          let nextAvailable = prevFlow.availableRestTime + restSecondsToAdd;
-          // Enforce both legacy max-per-session cap and pseudo-activity cap (use the lower if both >0)
-          const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-          const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
-          const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
-          if (effectiveCap > 0) nextAvailable = Math.min(nextAvailable, effectiveCap);
-          return ({
-            ...prevFlow,
-            availableRestTime: nextAvailable,
-            totalEarnedToday: prevFlow.totalEarnedToday + restSecondsToAdd,
-            availableRestMinutes: Math.floor(nextAvailable / 60),
-            accumulatedFractionalTime: remainingFractional
-          });
-        });
-      } else {
-        setFlowmodoroState(prevFlow => ({
-          ...prevFlow,
-          accumulatedFractionalTime: newAccumulated
-        }));
-      }
+      awardFlowmodoroWork(elapsedSeconds);
     }
 
     // If we're on a Flowmodoro break in 'postpone' mode, pause activity draining entirely
@@ -7843,28 +7934,8 @@ export default function App() {
             const nowTs = Date.now();
             if (storedTs > 0 && nowTs > storedTs) {
               const deltaHiddenSec = Math.min(7200, Math.floor((nowTs - storedTs)/1000)); // cap 2h
-              // Heuristic: only award if timer logically active (shouldHandleTick) and hidden gap > 2s
               if (deltaHiddenSec > 2) {
-                setFlowmodoroState(prevFlow => {
-                  if (prevFlow.isOnBreak) return prevFlow;
-                  const workSecondsPerRestSecond = settings.flowmodoroRatio;
-                  const accum = (prevFlow.accumulatedFractionalTime || 0) + deltaHiddenSec;
-                  const restSecondsToAdd = Math.floor(accum / workSecondsPerRestSecond);
-                  const remainingFractional = accum % workSecondsPerRestSecond;
-                  if (restSecondsToAdd > 0) {
-                    let nextAvailable = (prevFlow.availableRestTime || 0) + restSecondsToAdd;
-                    const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-                    const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
-                    const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
-                    if (effectiveCap > 0) nextAvailable = Math.min(nextAvailable, effectiveCap);
-                    if (settings.flowmodoroSmoothCatchup && restSecondsToAdd > 5) {
-                      // Defer awarding into pendingCatchup queue; process gradually in main ticks
-                      return { ...prevFlow, pendingCatchup: ((prevFlow as any).pendingCatchup || 0) + restSecondsToAdd, accumulatedFractionalTime: remainingFractional } as any;
-                    }
-                    return { ...prevFlow, availableRestTime: nextAvailable, totalEarnedToday: (prevFlow.totalEarnedToday||0)+restSecondsToAdd, availableRestMinutes: Math.floor(nextAvailable/60), accumulatedFractionalTime: remainingFractional };
-                  }
-                  return { ...prevFlow, accumulatedFractionalTime: accum };
-                });
+                awardFlowmodoroWork(deltaHiddenSec, { deferLargeCatchup: true });
               }
             }
             localStorage.setItem('flowLastWorkTs', String(nowTs));
@@ -7971,28 +8042,7 @@ export default function App() {
           }
           // Also advance flowmodoro if applicable
           if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
-            setFlowmodoroState(prevFlow => {
-              const workSecondsPerRestSecond = settings.flowmodoroRatio;
-              const newAccum = (prevFlow.accumulatedFractionalTime || 0) + deltaSec;
-              const restSecondsToAdd = Math.floor(newAccum / workSecondsPerRestSecond);
-              const remainingFractional = newAccum % workSecondsPerRestSecond;
-              if (restSecondsToAdd > 0) {
-                let updatedAvailable = (prevFlow.availableRestTime || 0) + restSecondsToAdd;
-                // Apply same effective cap logic during catch-up
-                const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-                const capB = Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60);
-                const effectiveCap = (capA > 0 && capB > 0) ? Math.min(capA, capB) : (capA > 0 ? capA : (capB > 0 ? capB : 0));
-                if (effectiveCap > 0) updatedAvailable = Math.min(updatedAvailable, effectiveCap);
-                return {
-                  ...prevFlow,
-                  availableRestTime: updatedAvailable,
-                  totalEarnedToday: (prevFlow.totalEarnedToday || 0) + restSecondsToAdd,
-                  availableRestMinutes: Math.floor(updatedAvailable / 60),
-                  accumulatedFractionalTime: remainingFractional,
-                };
-              }
-              return { ...prevFlow, accumulatedFractionalTime: newAccum };
-            });
+            awardFlowmodoroWork(deltaSec, { deferLargeCatchup: true });
           }
         } else {
           // Nothing meaningful to catch up; just reset anchor
@@ -8233,9 +8283,24 @@ export default function App() {
       if (!isTimerActive) {
         const lockedTotal = updatedActivities.filter(a => a.isLocked).reduce((sum, a) => sum + (a.percentage || 0), 0);
         const unlockedActivities = updatedActivities.filter(a => !a.isLocked);
-        const remainingPercentage = 100 - lockedTotal;
+        const remainingPercentage = Math.max(0, 100 - lockedTotal);
         const equalPercentage = unlockedActivities.length > 0 ? remainingPercentage / unlockedActivities.length : 0;
-        return updatedActivities.map(act => act.isLocked ? act : { ...act, percentage: equalPercentage });
+        // Ensure each unlocked gets at least a minimal slice so it renders (convert to seconds later)
+        const MIN_PCT = 0.2; // ~0.2% minimal visual presence
+        let provisional = updatedActivities.map(act => act.isLocked ? act : { ...act, percentage: equalPercentage });
+        // Adjust if any unlocked ended at 0 due to rounding
+        const zeros = provisional.filter(a=>!a.isLocked && a.percentage<=0.0001);
+        if (zeros.length && remainingPercentage > 0) {
+          const bumpTotal = MIN_PCT * zeros.length;
+          const scaleDownFactor = (remainingPercentage - bumpTotal) / remainingPercentage;
+          provisional = provisional.map(a => {
+            if (a.isLocked) return a;
+            let pct = a.percentage * scaleDownFactor;
+            if (pct < MIN_PCT) pct = MIN_PCT;
+            return { ...a, percentage: pct };
+          });
+        }
+        return provisional;
       }
 
       // Session active: if no preset time provided and no percentage (user wants a zero-width placeholder), just append with 0%.
@@ -8348,6 +8413,68 @@ export default function App() {
         return { ...a, percentage: pct };
       });
       return [...recomputed, newActivity];
+    });
+  };
+
+  // --- Shared helper: instant rebalance when manually editing minutes pre-session ---
+  const rebalanceAfterManualMinutes = (activityId: string, newMinutes: number) => {
+    if (isTimerActive || sessionPlanFrozen) return; // only before session starts & editable
+    const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
+    if (!totalSessionSeconds) return;
+    setActivities(prev => {
+      const idx = prev.findIndex(a => a.id === activityId);
+      if (idx === -1) return prev;
+      const target = prev[idx];
+      if (target.countUp) return prev;
+      const requestedSeconds = Math.max(0, Math.round(newMinutes * 60));
+      const getPlanned = (a: any) => {
+        if (typeof a.originalPlannedSeconds === 'number') return a.originalPlannedSeconds;
+        if (typeof a.timeRemaining === 'number' && a.timeRemaining > 0) return a.timeRemaining;
+        if (typeof a.percentage === 'number') return Math.round((a.percentage / 100) * totalSessionSeconds);
+        if (typeof a.duration === 'number') return Math.round(a.duration * 60);
+        return 0;
+      };
+      const lockedOthers = prev.filter(a => a.id !== activityId && a.isLocked && !a.countUp);
+      const lockedSeconds = lockedOthers.reduce((s,a)=> s + getPlanned(a), 0);
+      const maxTargetSeconds = Math.max(0, totalSessionSeconds - lockedSeconds);
+      const targetSeconds = Math.min(requestedSeconds, maxTargetSeconds);
+      const unlockedOthers = prev.filter(a => a.id !== activityId && !a.isLocked && !a.countUp);
+      const sumUnlockedOthersCurrent = unlockedOthers.reduce((s,a)=> s + getPlanned(a), 0);
+      const remainingForOthers = Math.max(0, totalSessionSeconds - lockedSeconds - targetSeconds);
+      let redistributed: Record<string, number> = {};
+      if (unlockedOthers.length > 0) {
+        if (sumUnlockedOthersCurrent > 0) {
+          unlockedOthers.forEach(a => {
+            const base = getPlanned(a);
+            redistributed[a.id] = Math.round((base / sumUnlockedOthersCurrent) * remainingForOthers);
+          });
+        } else {
+          const even = Math.floor(remainingForOthers / unlockedOthers.length);
+            let remainder = remainingForOthers - even * unlockedOthers.length;
+            unlockedOthers.forEach((a,i)=>{
+              redistributed[a.id] = even + (i < remainder ? 1 : 0);
+            });
+        }
+        // Drift correction
+        const after = Object.values(redistributed).reduce((s,v)=>s+v,0);
+        let drift = remainingForOthers - after;
+        if (drift !== 0 && unlockedOthers.length) {
+          const sign = drift > 0 ? 1 : -1;
+          let i=0; while (drift!==0 && i<5000) { const id = unlockedOthers[i % unlockedOthers.length].id; redistributed[id]=(redistributed[id]||0)+sign; drift-=sign; i++; }
+        }
+      }
+      return prev.map(a => {
+        if (a.id === activityId) {
+          const pct = totalSessionSeconds ? (targetSeconds / totalSessionSeconds) * 100 : 0;
+          return { ...a, duration: Math.round(targetSeconds/60), timeRemaining: targetSeconds, originalPlannedSeconds: targetSeconds, percentage: Math.round(pct*10)/10, isCompleted:false };
+        }
+        if (redistributed[a.id] != null) {
+          const ps = redistributed[a.id];
+          const pct = totalSessionSeconds ? (ps / totalSessionSeconds) * 100 : 0;
+          return { ...a, duration: Math.round(ps/60), timeRemaining: ps, originalPlannedSeconds: ps, percentage: Math.round(pct*10)/10, isCompleted:false };
+        }
+        return a;
+      });
     });
   };
 
@@ -9587,28 +9714,33 @@ export default function App() {
   // Session End Report
   const [sessionReportOpen, setSessionReportOpen] = useState(false);
   const [lastSessionReport, setLastSessionReport] = useState<any>(null);
+  const plannedAtStartRef = useRef<Record<string, number> | null>(null);
 
   const computeSessionReport = useCallback(() => {
+    const snapshot = plannedAtStartRef.current || ((typeof window !== 'undefined' && (window as any).__plannedAtStart) ? (window as any).__plannedAtStart : null);
     const rows = activities.map(a => {
-      // Prefer planned snapshot captured at session start for stable planned values
-      const plannedSnapshot = (typeof window !== 'undefined' && (window as any).__plannedAtStart) ? (window as any).__plannedAtStart : null;
-      const planned = plannedSnapshot && plannedSnapshot[a.id] != null ? plannedSnapshot[a.id] : getAllocatedSeconds(a);
+      const planned = snapshot && snapshot[a.id] != null ? snapshot[a.id] : getAllocatedSeconds(a);
       let actual = 0;
-      if (a.isCompleted && Number.isFinite(a.completedElapsedSeconds)) {
-        actual = Math.max(0, a.completedElapsedSeconds || 0);
-      } else if (a.countUp) {
+      if (a.countUp) {
         actual = Math.max(0, a.timeRemaining || 0);
+      } else if (a.isCompleted && Number.isFinite(a.completedElapsedSeconds)) {
+        actual = Math.max(0, a.completedElapsedSeconds || 0);
       } else if (typeof a.timeRemaining === 'number') {
         const tr = a.timeRemaining;
-        actual = tr >= 0 ? Math.max(0, planned - tr) : planned + Math.abs(tr);
+        if (tr >= 0) {
+          actual = Math.max(0, planned - tr);
+        } else {
+          // Overtime: cap to planned + overtime but not more than +25% to avoid donor double counting visual side-effects
+          const overtime = Math.abs(tr);
+          const cap = planned + Math.round(planned * 0.25);
+          actual = Math.min(planned + overtime, cap);
+        }
       }
       const delta = actual - planned;
       const pct = planned > 0 ? (actual / planned) * 100 : 0;
       return { id: a.id, name: a.name, planned, actual, delta, pct };
     });
-    const totals = rows.reduce((acc, r) => {
-      acc.planned += r.planned; acc.actual += r.actual; return acc;
-    }, { planned: 0, actual: 0 });
+    const totals = rows.reduce((acc, r) => { acc.planned += r.planned; acc.actual += r.actual; return acc; }, { planned: 0, actual: 0 });
     const totalsDelta = totals.actual - totals.planned;
     const totalsPct = totals.planned > 0 ? (totals.actual / totals.planned) * 100 : 0;
     return { rows, totals: { ...totals, delta: totalsDelta, pct: totalsPct } };
@@ -9785,31 +9917,7 @@ export default function App() {
                 flowmodoroOverlayColor={'#8b5cf6'}
                 settings={settings}
               />
-            ) : (
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs text-gray-600">
-                  <span>Overall Progress</span>
-                  <span>{Math.round(getOverallProgress())}%</span>
-                </div>
-                <VisualProgress
-                  activities={activities.filter(a => a.showOnBar !== false)}
-                  style={settings.progressBarStyle}
-                  className="h-3"
-                  overallProgress={getOverallProgress()}
-                  currentActivityColor={currentActivity?.color}
-                  totalSessionMinutes={totalSessionMinutes}
-                  currentActivityIndex={currentActivityIndex}
-                  showDrainOverlay={settings.showDrainOverlay}
-                  flowmodoroOverlaySeconds={(settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.availableRestTime > 0) ? flowmodoroState.availableRestTime : 0}
-                  flowmodoroOverlayColor={'#8b5cf6'}
-                  showFlowmodoroActivity={settings.flowmodoroEnabled && settings.flowmodoroShowAsActivity && settings.flowmodoroMode === 'drain'}
-                  flowmodoroActivityCapSeconds={Math.max(0, (settings.flowmodoroSessionActivityMinutes || 0) * 60)}
-                  flowmodoroActivityAvailableSeconds={flowmodoroState.availableRestTime || 0}
-                  flowmodoroActivityColor={'#8b5cf6'}
-                  flowmodoroActivityIcon={settings.flowmodoroIcon || '🌟'}
-                />
-              </div>
-            )
+            ) : null
           )}
           <div className="text-center space-y-2">
             <div className="flex items-center justify-center space-x-2">
@@ -11946,7 +12054,10 @@ export default function App() {
                           }
                           const num = Number.parseInt(val);
                           if (Number.isNaN(num) || num < 0) return;
+                          // Store draft for user editing
                           setActivities(prev => prev.map(a => a.id === activity.id ? { ...a, durationDraft: num } : a));
+                          // Instant rebalance (pre-session only). Use draft minutes.
+                          rebalanceAfterManualMinutes(activity.id, num);
                         }}
                         onBlur={(e) => {
                           const draft = (activity as any).durationDraft;
