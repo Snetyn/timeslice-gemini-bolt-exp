@@ -7563,6 +7563,20 @@ export default function App() {
   // Track total elapsed seconds per sharedId to sync only additive deltas to daily
   const sharedElapsedSnapshotRef = useRef<Record<string, number>>({});
   const lastDrainedIndex = useRef(-1);
+  // Precise drain tracking: map activity.id -> seconds drained (donated away) & received (overtime gained beyond its own countdown)
+  const drainStatsRef = useRef<{ donated: Record<string, number>; received: Record<string, number> }>({ donated: {}, received: {} });
+
+  // Helper to record a donor drain event of 1 second from donorId into receiverId (overtime for receiver)
+  const recordDrain = (donorId: string | null, receiverId: string | null) => {
+    if (donorId) {
+      const donated = drainStatsRef.current.donated;
+      donated[donorId] = (donated[donorId] || 0) + 1;
+    }
+    if (receiverId) {
+      const received = drainStatsRef.current.received;
+      received[receiverId] = (received[receiverId] || 0) + 1;
+    }
+  };
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // Stable baseline for overall progress (sum of allocated seconds at session start)
   const initialTotalAllocatedRef = useRef<number>(0);
@@ -7789,6 +7803,7 @@ export default function App() {
                 const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
                 const donorToDrain = donors[donorIndex];
                 newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
+                recordDrain(newActivities[donorToDrain.originalIndex].id, current.id);
               }
               current.timeRemaining -= 1;
               secondsToProcess -= 1;
@@ -7842,6 +7857,7 @@ export default function App() {
             setVaultTime(v => Math.max(0, v - 1));
             need -= 1;
             drainedFromBreak = true;
+            recordDrain(null, null); // vault drain (not attributing)
           }
           if (need > 0) {
             const tierPools: { idx: number; act: any }[][] = [[],[],[],[]];
@@ -7857,6 +7873,7 @@ export default function App() {
               newActivities[pick.idx].timeRemaining = Math.max(0, (newActivities[pick.idx].timeRemaining||0) - 1);
               need = 0;
               drainedFromBreak = true;
+              recordDrain(newActivities[pick.idx].id, null);
             }
           }
           if (flowBreakDrainActive) {
@@ -7975,7 +7992,7 @@ export default function App() {
                   secondsToProcess -= timeToTake;
                 }
                 if ((current.timeRemaining || 0) <= 0) {
-                  if (settings.overtimeType === 'drain') {
+                    if (settings.overtimeType === 'drain') {
                     // Donor ordering: not locked & not priority -> locked & not priority -> priority (not locked) -> priority & locked
                     const donorPools: ((typeof newActivities)[number] & { originalIndex: number })[][] = [[], [], [], []];
                     newActivities.forEach((act, index) => {
@@ -7995,6 +8012,7 @@ export default function App() {
                       const donorIndex = lastDrainedIndex.current = (lastDrainedIndex.current + 1) % donors.length;
                       const donorToDrain = donors[donorIndex];
                       newActivities[donorToDrain.originalIndex].timeRemaining = (newActivities[donorToDrain.originalIndex].timeRemaining || 0) - 1;
+                      recordDrain(newActivities[donorToDrain.originalIndex].id, current.id);
                     }
                     current.timeRemaining = (current.timeRemaining || 0) - 1;
                     secondsToProcess -= 1;
@@ -9720,27 +9738,43 @@ export default function App() {
     const snapshot = plannedAtStartRef.current || ((typeof window !== 'undefined' && (window as any).__plannedAtStart) ? (window as any).__plannedAtStart : null);
     const rows = activities.map(a => {
       const planned = snapshot && snapshot[a.id] != null ? snapshot[a.id] : getAllocatedSeconds(a);
-      let actual = 0;
+      let rawActual = 0;
+      let overtimeSeconds = 0;
+      // Use precise tracked drain donated seconds
+      const donatedMap = drainStatsRef.current.donated;
+      const receivedMap = drainStatsRef.current.received;
+      const drainedSeconds = donatedMap[a.id] || 0;
+      const receivedOvertime = receivedMap[a.id] || 0;
+
       if (a.countUp) {
-        actual = Math.max(0, a.timeRemaining || 0);
+        rawActual = Math.max(0, a.timeRemaining || 0);
       } else if (a.isCompleted && Number.isFinite(a.completedElapsedSeconds)) {
-        actual = Math.max(0, a.completedElapsedSeconds || 0);
+        rawActual = Math.max(0, a.completedElapsedSeconds || 0);
       } else if (typeof a.timeRemaining === 'number') {
         const tr = a.timeRemaining;
         if (tr >= 0) {
-          actual = Math.max(0, planned - tr);
+          rawActual = Math.max(0, planned - tr);
         } else {
-          // Overtime: cap to planned + overtime but not more than +25% to avoid donor double counting visual side-effects
-          const overtime = Math.abs(tr);
-          const cap = planned + Math.round(planned * 0.25);
-          actual = Math.min(planned + overtime, cap);
+          overtimeSeconds = Math.abs(tr);
+          rawActual = planned + overtimeSeconds;
         }
       }
+
+      // Cap overtime contribution to avoid inflation from donor double-count artifacts
+      const overtimeCap = planned + Math.round(planned * 0.25);
+      let actual = rawActual;
+      if (!a.countUp) actual = Math.min(actual, overtimeCap);
+      if (overtimeSeconds > 0) {
+        overtimeSeconds = Math.max(0, actual - planned); // recalc after cap
+      }
+
       const delta = actual - planned;
       const pct = planned > 0 ? (actual / planned) * 100 : 0;
-      return { id: a.id, name: a.name, planned, actual, delta, pct };
+      return { id: a.id, name: a.name, planned, actual, delta, pct, overtimeSeconds, drainedSeconds, receivedOvertime };
     });
-    const totals = rows.reduce((acc, r) => { acc.planned += r.planned; acc.actual += r.actual; return acc; }, { planned: 0, actual: 0 });
+    const totals = rows.reduce((acc, r) => {
+      acc.planned += r.planned; acc.actual += r.actual; acc.overtime += r.overtimeSeconds; acc.drained += r.drainedSeconds; acc.received += r.receivedOvertime; return acc;
+    }, { planned: 0, actual: 0, overtime: 0, drained: 0, received: 0 });
     const totalsDelta = totals.actual - totals.planned;
     const totalsPct = totals.planned > 0 ? (totals.actual / totals.planned) * 100 : 0;
     return { rows, totals: { ...totals, delta: totalsDelta, pct: totalsPct } };
@@ -10146,12 +10180,15 @@ export default function App() {
             </div>
 
             <div className="max-h-72 overflow-auto border rounded">
-              <div className="grid grid-cols-12 gap-2 p-2 text-[11px] font-semibold bg-slate-50">
+              <div className="grid grid-cols-16 gap-2 p-2 text-[11px] font-semibold bg-slate-50">
                 <div className="col-span-4">Activity</div>
                 <div className="col-span-2 text-right">Planned</div>
                 <div className="col-span-1 text-right">(%)</div>
                 <div className="col-span-2 text-right">Actual</div>
                 <div className="col-span-1 text-right">(%)</div>
+                <div className="col-span-1 text-right" title="Overtime seconds (capped)">OT(s)</div>
+                <div className="col-span-1 text-right" title="Approx drained seconds inferred">Drn(s)</div>
+                <div className="col-span-1 text-right" title="Donor-derived overtime received">Recv(s)</div>
                 <div className="col-span-2 text-right">Δ</div>
               </div>
               {lastSessionReport.rows
@@ -10175,7 +10212,7 @@ export default function App() {
                   const barPct = Math.min(100, Math.round((Math.abs(deltaMin) / cap) * 100));
                   const isPositive = deltaMin >= 0;
                   return (
-                    <div key={r.id} className={`grid grid-cols-12 gap-2 items-center p-2 text-[11px] border-t ${activities.find(x => x.id === r.id)?.priority ? 'bg-amber-50' : ''}`}>
+                    <div key={r.id} className={`grid grid-cols-16 gap-2 items-center p-2 text-[11px] border-t ${activities.find(x => x.id === r.id)?.priority ? 'bg-amber-50' : ''}`}>
                       <div className="col-span-4 min-w-0">
                         <div className="truncate font-medium" title={r.name}>
                           {activities.find(x => x.id === r.id)?.priority ? '★ ' : ''}{r.name}
@@ -10212,6 +10249,9 @@ export default function App() {
                       <div className="col-span-1 text-right tabular-nums text-slate-500">{plannedPct}%</div>
                       <div className="col-span-2 text-right tabular-nums">{safeActual}</div>
                       <div className="col-span-1 text-right tabular-nums text-slate-500">{actualPct}%</div>
+                      <div className="col-span-1 text-right tabular-nums text-purple-600" title="Overtime (s)">{r.overtimeSeconds || 0}</div>
+                      <div className="col-span-1 text-right tabular-nums text-amber-600" title="Donated away (s)">{r.drainedSeconds || 0}</div>
+                      <div className="col-span-1 text-right tabular-nums text-indigo-600" title="Received overtime (s)">{r.receivedOvertime || 0}</div>
                       <div className="col-span-2">
                         <div className="flex items-center justify-end gap-2">
                           <div className={`text-right tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>{deltaMin}</div>
@@ -10225,12 +10265,15 @@ export default function App() {
                 })}
             </div>
 
-            <div className="mt-3 grid grid-cols-12 items-start text-sm border-t pt-2">
+            <div className="mt-3 grid grid-cols-16 items-start text-sm border-t pt-2">
               <div className="col-span-4 font-semibold">Totals</div>
               <div className="col-span-2 text-right tabular-nums font-semibold">{Math.round(lastSessionReport.totals.planned/60)}</div>
               <div className="col-span-1 text-right tabular-nums text-slate-500 font-semibold">100%</div>
               <div className="col-span-2 text-right tabular-nums font-semibold">{Math.round(lastSessionReport.totals.actual/60)}</div>
               <div className="col-span-1 text-right tabular-nums text-slate-500 font-semibold">100%</div>
+              <div className="col-span-1 text-right tabular-nums text-purple-700" title="Total overtime seconds">{lastSessionReport.totals.overtime}</div>
+              <div className="col-span-1 text-right tabular-nums text-amber-700" title="Total donated seconds">{lastSessionReport.totals.drained}</div>
+              <div className="col-span-1 text-right tabular-nums text-indigo-700" title="Total received overtime seconds">{lastSessionReport.totals.received}</div>
               <div className="col-span-2 flex flex-col items-end text-right">
                 <div className={`tabular-nums ${lastSessionReport.totals.delta>=0?'text-emerald-700':'text-red-700'}`}>Δ: {Math.round(lastSessionReport.totals.delta/60)}m ({Math.round(lastSessionReport.totals.pct)}%)</div>
               </div>
