@@ -9670,7 +9670,13 @@ export default function App() {
       setVaultTime(prev => prev + timeToVault);
     }
 
-    setActivities(updatedActivities);
+    // Reorder: move newly completed activity to end (stable order for others)
+    let reordered = updatedActivities;
+    if (completedActivity) {
+      const remaining = updatedActivities.filter(a => a.id !== completedActivity!.id);
+      reordered = [...remaining, completedActivity];
+    }
+    setActivities(reordered);
 
     // Shared progress sync will be handled by useEffect
 
@@ -9687,8 +9693,8 @@ export default function App() {
       return;
     }
 
-  if (updatedActivities[currentActivityIndex].isCompleted) {
-      const nextIndex = updatedActivities.findIndex((act) => !act.isCompleted);
+  if (reordered[currentActivityIndex].isCompleted) {
+    const nextIndex = reordered.findIndex((act) => !act.isCompleted);
       if (nextIndex !== -1) {
         setCurrentActivityIndex(nextIndex);
       } else {
