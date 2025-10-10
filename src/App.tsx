@@ -7436,7 +7436,8 @@ export default function App() {
         isPaused,
         currentActivityIndex,
         lastActiveTimestamp: isTimerActive && !isPaused ? Date.now() : null,
-        sessionPlanFrozen
+        sessionPlanFrozen,
+        initialAllocatedSeconds: initialTotalAllocatedRef.current > 0 ? initialTotalAllocatedRef.current : null
       };
       localStorage.setItem('timeSliceSessionState', JSON.stringify(sessionState));
     } catch (e) {
@@ -7548,6 +7549,10 @@ export default function App() {
       if (saved) {
         const sessionState = JSON.parse(saved);
         
+        if (typeof sessionState.initialAllocatedSeconds === 'number' && sessionState.initialAllocatedSeconds > 0) {
+          initialTotalAllocatedRef.current = sessionState.initialAllocatedSeconds;
+        }
+
         // If the session was active when the user left, handle the time gap
         if (sessionState.isTimerActive && !sessionState.isPaused && sessionState.lastActiveTimestamp) {
           // Populate baseline allocated seconds if missing
@@ -9872,8 +9877,22 @@ export default function App() {
   const getOverallProgress = () => {
     // Prefer stable baseline captured at session start
     const liveAllocated = activities.reduce((sum, act) => sum + getAllocatedSeconds(act), 0);
-    const totalAllocatedSeconds = initialTotalAllocatedRef.current > 0 ? initialTotalAllocatedRef.current : liveAllocated;
-  if (!Number.isFinite(totalAllocatedSeconds) || totalAllocatedSeconds <= 0) return 0;
+    let totalAllocatedSeconds = initialTotalAllocatedRef.current > 0 ? initialTotalAllocatedRef.current : liveAllocated;
+    if (!Number.isFinite(totalAllocatedSeconds) || totalAllocatedSeconds <= 0) {
+      const reconstructed = activities.reduce((sum, act) => {
+        if (act.countUp) return sum;
+        if (typeof act.originalPlannedSeconds === 'number' && act.originalPlannedSeconds > 0) return sum + act.originalPlannedSeconds;
+        if (typeof act.duration === 'number' && act.duration > 0) return sum + Math.round(act.duration * 60);
+        if (typeof act.completedElapsedSeconds === 'number' && act.completedElapsedSeconds > 0) return sum + act.completedElapsedSeconds;
+        if (typeof act.timeRemaining === 'number' && act.timeRemaining > 0) return sum + act.timeRemaining;
+        return sum;
+      }, 0);
+      if (reconstructed > 0) {
+        initialTotalAllocatedRef.current = reconstructed;
+        totalAllocatedSeconds = reconstructed;
+      }
+    }
+    if (!Number.isFinite(totalAllocatedSeconds) || totalAllocatedSeconds <= 0) return 0;
     // Compute elapsed as baseline minus remaining to avoid drift from changing allocations
     const totalRemaining = activities.reduce((sum, act) => {
       if (act.countUp) return sum; // count-up doesn't contribute to baseline
