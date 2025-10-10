@@ -6235,6 +6235,7 @@ export default function App() {
     }
     return 0;
   });
+  const hasRestoredSessionStateRef = useRef(false);
   // Freeze the session plan (allocations/timeRemaining) once a session starts, so exiting doesn't reset progress
   const [sessionPlanFrozen, setSessionPlanFrozen] = useState<boolean>(() => {
     try {
@@ -7428,6 +7429,7 @@ export default function App() {
 
   // Save session state to localStorage
   useEffect(() => {
+    if (!hasRestoredSessionStateRef.current) return;
     try {
       const sessionState = {
         isTimerActive,
@@ -7642,6 +7644,7 @@ export default function App() {
     } catch (e) {
       console.error('Failed to restore session state:', e);
     }
+    hasRestoredSessionStateRef.current = true;
   }, []); // Run only once on mount
 
   // Check if daily activities need to be reset for a new day
