@@ -3856,6 +3856,8 @@ export default function App() {
   
   // Mode state - 'session' or 'daily'
   const [currentMode, setCurrentMode] = useState('session');
+
+  const hasRestoredSessionStateRef = useRef(false);
   
   // Daily Mode State (Step 1: Basic daily activities) - Load from localStorage
   const [dailyActivities, setDailyActivities] = useState(() => {
@@ -4532,6 +4534,7 @@ export default function App() {
 
   // Save session state to localStorage
   useEffect(() => {
+    if (!hasRestoredSessionStateRef.current) return;
     try {
       const sessionState = {
         isTimerActive,
@@ -4663,6 +4666,7 @@ export default function App() {
     } catch (e) {
       console.error('Failed to restore session state:', e);
     }
+    hasRestoredSessionStateRef.current = true;
   }, []); // Run only once on mount
 
   // Check if daily activities need to be reset for a new day
