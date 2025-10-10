@@ -3543,6 +3543,10 @@ const ActivityManagementPage = ({
   
   // Activity customization state
   const [editingActivity, setEditingActivity] = useState<any | null>(null);
+
+    // Local drag state for reordering session activities within management view
+    const [draggingActivityId, setDraggingActivityId] = useState<string | null>(null);
+    const [dragOverActivityId, setDragOverActivityId] = useState<string | null>(null);
   
   // Categories and tags are provided by parent and persisted globally
 
