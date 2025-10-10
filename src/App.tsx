@@ -7809,7 +7809,12 @@ export default function App() {
       const pctMap = new Map(pctItems.map(x => [x.idx, x.floorSec]));
       const next = prev.map((activity, i) => {
         const allocatedSeconds = !activity.countUp ? (pctMap.get(i) ?? 0) : 0;
-        const newDuration = allocatedSeconds / 60; // may be fractional minutes
+        const rawMinutes = allocatedSeconds / 60;
+        const newDuration = Number.isFinite(rawMinutes)
+          ? Math.abs(rawMinutes - Math.round(rawMinutes)) < 1e-6
+            ? Math.round(rawMinutes)
+            : Math.round(rawMinutes * 10) / 10
+          : 0;
         const newTimeRemaining = activity.countUp ? 0 : allocatedSeconds;
         const originalPlannedSeconds = (typeof activity.originalPlannedSeconds === 'number' && activity.originalPlannedSeconds > 0)
           ? activity.originalPlannedSeconds
