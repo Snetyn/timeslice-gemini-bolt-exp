@@ -8078,20 +8078,14 @@ export default function App() {
       const shouldHandleTick = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
       
       if (document.visibilityState === 'visible' && shouldHandleTick) {
-        // Reconcile Flowmodoro off-screen accrual (work done while tab hidden)
-        if (settings.flowmodoroEnabled && settings.flowmodoroAutoCatchup && !flowmodoroState.isOnBreak) {
-          try {
-            const storedTs = Number(localStorage.getItem('flowLastWorkTs')) || 0;
-            const nowTs = Date.now();
-            if (storedTs > 0 && nowTs > storedTs) {
-              const deltaHiddenSec = Math.min(7200, Math.floor((nowTs - storedTs)/1000)); // cap 2h
-              if (deltaHiddenSec > 2) {
-                awardFlowmodoroWork(deltaHiddenSec, { deferLargeCatchup: true });
-              }
-            }
-            localStorage.setItem('flowLastWorkTs', String(nowTs));
-          } catch {}
-        }
+        // Reconcile Flowmodoro off-screen timing (track last active timestamp regardless of catch-up preference)
+        let offscreenSeconds = 0;
+        try {
+          const storedTs = Number(localStorage.getItem('flowLastWorkTs')) || 0;
+          const nowTs = Date.now();
+          offscreenSeconds = storedTs > 0 && nowTs > storedTs ? Math.min(7200, Math.floor((nowTs - storedTs) / 1000)) : 0;
+          localStorage.setItem('flowLastWorkTs', String(nowTs));
+        } catch {}
         // On resume, compute wall-clock delta since last tick and process catch-up seconds
         const now = Date.now();
         const last = lastTickTimestampRef.current || now;
@@ -8192,9 +8186,22 @@ export default function App() {
           if (typeof postCursorIndex === 'number' && postCursorIndex !== currentActivityIndex) {
             setCurrentActivityIndex(postCursorIndex);
           }
-          // Also advance flowmodoro if applicable
-          if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
-            awardFlowmodoroWork(deltaSec, { deferLargeCatchup: true });
+          // Apply Flowmodoro adjustments for the elapsed off-screen time
+          if (deltaSec > 0) {
+            const flowCatchupSeconds = offscreenSeconds > 0 ? Math.max(offscreenSeconds, deltaSec) : deltaSec;
+            if (flowCatchupSeconds > 0 && settings.flowmodoroEnabled && settings.flowmodoroAutoCatchup && !flowmodoroState.isOnBreak) {
+              awardFlowmodoroWork(flowCatchupSeconds, { deferLargeCatchup: true });
+            }
+            if (flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
+              setFlowmodoroState(prev => {
+                if (!prev.isOnBreak) return prev;
+                const remaining = Math.max(0, (prev.breakTimeRemaining || 0) - deltaSec);
+                if (remaining <= 0) {
+                  return { ...prev, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0 };
+                }
+                return { ...prev, breakTimeRemaining: remaining };
+              });
+            }
           }
         } else {
           // Nothing meaningful to catch up; just reset anchor
@@ -8204,7 +8211,17 @@ export default function App() {
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isTimerActive, isPaused, handleTimerTick, currentMode, dailyActivities, flowmodoroState.isOnBreak, flowmodoroState.breakTimeRemaining]);
+  }, [
+    isTimerActive,
+    isPaused,
+    handleTimerTick,
+    currentMode,
+    dailyActivities,
+    flowmodoroState.isOnBreak,
+    flowmodoroState.breakTimeRemaining,
+    settings.flowmodoroEnabled,
+    settings.flowmodoroAutoCatchup
+  ]);
 
   // Screen Wake Lock
   useEffect(() => {
@@ -9513,7 +9530,7 @@ export default function App() {
   // --- Flowmodoro off-screen accrual support ---
   const lastWorkTsRef = useRef<number | null>(null);
   useEffect(() => {
-    if (isTimerActive && !isPaused && settings.flowmodoroEnabled && settings.flowmodoroAutoCatchup && !flowmodoroState.isOnBreak) {
+    if (isTimerActive && !isPaused && settings.flowmodoroEnabled && !flowmodoroState.isOnBreak) {
       lastWorkTsRef.current = Date.now();
       try { localStorage.setItem('flowLastWorkTs', String(lastWorkTsRef.current)); } catch {}
     }
@@ -10607,10 +10624,16 @@ export default function App() {
                     <span className="text-sm">Off-screen catch-up</span>
                     <Switch checked={settings.flowmodoroAutoCatchup} onCheckedChange={checked => setSettings(p=>({...p, flowmodoroAutoCatchup: checked}))} />
                   </div>
+                  <p className="text-xs text-slate-500 pl-1">
+                    Automatically earn missed rest time when you return after the timer was running in the background.
+                  </p>
                   <div className="flex items-center justify-between pl-4">
                     <span className="text-sm">Smooth large catch-up awards</span>
                     <Switch checked={settings.flowmodoroSmoothCatchup} disabled={!settings.flowmodoroAutoCatchup} onCheckedChange={checked => setSettings(p=>({...p, flowmodoroSmoothCatchup: checked}))} />
                   </div>
+                  <p className="text-xs text-slate-500 pl-5">
+                    When enabled, big catch-up deposits trickle in over several ticks instead of hitting the reserve all at once.
+                  </p>
                   <div className="flex flex-wrap gap-2 pt-1">
                     <Button size="sm" variant="secondary" onClick={() => setFlowmodoroState(prev => ({ ...prev, availableRestTime: 0, availableRestMinutes: 0, accumulatedFractionalTime: 0, pendingCatchup: 0 }))}>Reset Reserve</Button>
                     <Button size="sm" variant="outline" onClick={() => setFlowmodoroState(prev => ({ availableRestTime: 0, totalEarnedToday: 0, cycleCount: 0, isOnBreak: false, breakTimeRemaining: 0, initialBreakDuration: 0, lastResetDate: new Date().toDateString(), accumulatedFractionalTime: 0 }))}>Full Flow Reset</Button>
