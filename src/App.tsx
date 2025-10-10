@@ -2310,6 +2310,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
       let cumulativeRotation = -90;
       // Minimal visual angle to avoid disappearing very small segments (about 0.5 degrees)
       const MIN_DEG = 0.5;
+
       return activities.map((activity, idx) => {
         let segmentAngle = angles[idx];
         if (!segmentAngle || segmentAngle <= 0) return null;
@@ -2353,7 +2354,13 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
           }
           fillAngle = segmentAngle * shown;
         }
-        const fillArcLength = (fillAngle / 360) * circumference;
+  const fillArcLength = (fillAngle / 360) * circumference;
+  const arcForFill = activity.isCompleted ? segmentArcLength : fillArcLength;
+  const shouldStripe = activity.isCompleted && settings.segmentShowCompletedStripes;
+  const baseDashArray = `${Math.max(0, arcForFill)} ${circumference}`;
+  const stripeDash = shouldStripe ? Math.max(2, segmentArcLength / 18) : 0;
+  const stripeDashArray = shouldStripe ? `${stripeDash} ${stripeDash}` : '';
+  const maskId = shouldStripe ? `segment-stripe-mask-${idx}-${activity.id}` : undefined;
 
         const rotation = cumulativeRotation;
         cumulativeRotation += segmentAngle;
@@ -2371,19 +2378,49 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
               strokeLinecap="butt"
               opacity={0.24}
             />
-            {fillArcLength > 0 && (
-              <circle
-                stroke={activity.color}
-                fill="transparent"
-                strokeWidth={strokeWidth}
-                strokeDasharray={`${fillArcLength} ${circumference}`}
-                r={radius}
-                cx={center}
-                cy={center}
-                strokeLinecap="butt"
-                opacity={activity.isCompleted ? 0.65 : 0.95}
-                style={{ transition: 'opacity 200ms linear', ...(activity.isCompleted && settings.segmentShowCompletedStripes ? { strokeDasharray: `${segmentArcLength/4} ${segmentArcLength/4}` }: {}) }}
-              />
+            {arcForFill > 0 && (
+              <>
+                <circle
+                  stroke={activity.color}
+                  fill="transparent"
+                  strokeWidth={strokeWidth}
+                  strokeDasharray={baseDashArray}
+                  r={radius}
+                  cx={center}
+                  cy={center}
+                  strokeLinecap="butt"
+                  opacity={activity.isCompleted ? 0.65 : 0.95}
+                  style={{ transition: 'opacity 200ms linear' }}
+                />
+                {shouldStripe && maskId && (
+                  <>
+                    <mask id={maskId}>
+                      <circle
+                        stroke="#ffffff"
+                        fill="transparent"
+                        strokeWidth={strokeWidth}
+                        strokeDasharray={`${segmentArcLength} ${circumference}`}
+                        r={radius}
+                        cx={center}
+                        cy={center}
+                        strokeLinecap="butt"
+                      />
+                    </mask>
+                    <circle
+                      stroke={activity.color}
+                      fill="transparent"
+                      strokeWidth={strokeWidth}
+                      strokeDasharray={stripeDashArray}
+                      r={radius}
+                      cx={center}
+                      cy={center}
+                      strokeLinecap="butt"
+                      opacity={0.85}
+                      mask={`url(#${maskId})`}
+                    />
+                  </>
+                )}
+              </>
             )}
             {settings.segmentHighlightStyle !== 'none' && idx===currentActivityIndex && !activity.isCompleted && (
               settings.segmentHighlightStyle === 'pulse' ? (
