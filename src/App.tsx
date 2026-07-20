@@ -1,5 +1,12 @@
 ﻿// @ts-nocheck
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { appStorage } from './lib/storage';
+import { isNewDay } from './lib/timing';
+
+// Keep the existing component code isolated from browser storage details. This
+// facade writes only to `timeslice.state.v2`, leaving legacy installations
+// untouched for rollback or manual recovery.
+const localStorage = appStorage;
 
 // Module-level ref for detecting session end transitions without rerender churn
 let staticPrevTimerStateRef: { wasActive: boolean } | undefined;
@@ -7662,9 +7669,9 @@ export default function App() {
       const lastSavedDate = localStorage.getItem('timeSliceDailyActivitiesDate');
       const today = new Date().toDateString();
       
-      if (lastSavedDate && lastSavedDate !== today) {
+      if (isNewDay(lastSavedDate, new Date())) {
         // New day detected - reset all daily activities progress
-        setActivities(prev => prev.map(act => ({
+        setDailyActivities(prev => prev.map(act => ({
           ...act,
           status: 'scheduled',
           isActive: false,
@@ -10218,8 +10225,9 @@ export default function App() {
                   const displaySeconds = onBreak ? breakRemaining : rawEarned;
                   const pct = capSec > 0 ? (displaySeconds / capSec) * 100 : 0;
                   return (
-                    <button
-                      type="button"
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         if (flowmodoroState.availableRestTime > 0 && !flowmodoroState.isOnBreak) {
                           // Auto start a break using all earned time (existing handler)
@@ -10228,6 +10236,12 @@ export default function App() {
                           // Open settings panel (scroll or toggle) – simplest: scroll to Flowmodoro section if present
                           const el = document.querySelector('#flowmodoro-settings');
                           if (el) el.scrollIntoView({ behavior: 'smooth' });
+                        }
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          event.currentTarget.click();
                         }
                       }}
                       title={flowmodoroState.isOnBreak ? 'Break in progress – click settings to adjust' : (flowmodoroState.availableRestTime > 0 ? 'Click to start break with earned Flow time' : 'No Flow time yet – click to adjust settings')}
@@ -10253,7 +10267,7 @@ export default function App() {
                           >Reset</button>
                         )}
                       </div>
-                    </button>
+                    </div>
                   );
                 })()
               )}
@@ -11034,13 +11048,15 @@ export default function App() {
 
           <div className="space-y-4">
             {/* Mode Selector */}
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-4 sm:mb-6">
-              <span className="text-xs sm:text-sm font-medium">Mode:</span>
+            <div className="rounded-xl border border-slate-200/80 bg-white/80 p-2 shadow-sm backdrop-blur-sm">
+              <div role="tablist" aria-label="TimeSlice mode" className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
               <Button 
                 size="sm" 
                 variant={currentMode === 'session' ? 'default' : 'outline'}
                 className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'session' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('session')}
+                role="tab"
+                aria-selected={currentMode === 'session'}
               >
                 Session
               </Button>
@@ -11049,6 +11065,8 @@ export default function App() {
                 variant={currentMode === 'daily' ? 'default' : 'outline'}
                 className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'daily' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('daily')}
+                role="tab"
+                aria-selected={currentMode === 'daily'}
               >
                 Daily
               </Button>
@@ -11057,6 +11075,8 @@ export default function App() {
                 variant={currentMode === 'single' ? 'default' : 'outline'}
                 className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'single' ? 'bg-blue-600 hover:bg-blue-700 text-white' : ''}`}
                 onClick={() => setCurrentMode('single')}
+                role="tab"
+                aria-selected={currentMode === 'single'}
               >
                 Single
               </Button>
@@ -11066,10 +11086,14 @@ export default function App() {
                 className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === 'flowmodoro' ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'border-purple-400 text-purple-600 hover:bg-purple-50'}`}
                 onClick={() => setCurrentMode('flowmodoro')}
                 title="Standalone Flowmodoro timer - use your earned break time"
+                role="tab"
+                aria-label="Flowmodoro"
+                aria-selected={currentMode === 'flowmodoro'}
               >
                 <span className="hidden sm:inline">🌟 Flowmodoro</span>
                 <span className="sm:hidden">🌟 Flow</span>
               </Button>
+            </div>
             </div>
 
             {currentMode === 'session' ? (

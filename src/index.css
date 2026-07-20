@@ -6,20 +6,22 @@
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
+  color: #172033;
+  background: #f6f8fc;
+  font-synthesis: none;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  /* PWA touch optimizations */
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  -khtml-user-select: none;
-  -moz-user-select: none;
-  -ms-user-select: none;
-  user-select: none;
   -webkit-tap-highlight-color: transparent;
+  background: radial-gradient(
+    circle at top,
+    #eef3ff 0,
+    #f6f8fc 34rem,
+    #f8fafc 100%
+  );
 }
 
 /* PWA button optimizations */
@@ -28,8 +30,23 @@ button {
   -webkit-appearance: none;
 }
 
+button:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, 0.5);
+  outline-offset: 2px;
+}
+
+::selection {
+  color: #172033;
+  background: #bfdbfe;
+}
+
 /* Prevent zoom on focus for PWA */
-input[type="number"], input[type="text"] {
+input[type="number"],
+input[type="text"] {
   font-size: 16px;
 }
 
@@ -68,7 +85,8 @@ input[type="number"], input[type="text"] {
 }
 
 @keyframes completionGlow {
-  0%, 100% {
+  0%,
+  100% {
     box-shadow: 0 0 5px rgba(34, 197, 94, 0.5);
   }
   50% {
@@ -77,7 +95,8 @@ input[type="number"], input[type="text"] {
 }
 
 @keyframes progressPulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: scaleY(1);
   }
   50% {
@@ -112,10 +131,12 @@ input[type="number"], input[type="text"] {
 }
 
 .timeline-progress-overlay {
-  background: linear-gradient(90deg, 
+  background: linear-gradient(
+    90deg,
     rgba(34, 197, 94, 0.15) 0%,
     rgba(16, 185, 129, 0.2) 50%,
-    rgba(5, 150, 105, 0.25) 100%);
+    rgba(5, 150, 105, 0.25) 100%
+  );
 }
 
 .timeline-progress-overlay.active {
@@ -123,6 +144,22 @@ input[type="number"], input[type="text"] {
 }
 
 @keyframes progressShimmer {
-  0%, 100% { opacity: 0.15; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
