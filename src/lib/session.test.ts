@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildProgressEntries, distributeEarlyCompletion } from "./session";
+import {
+  allocateSessionSeconds,
+  buildProgressEntries,
+  distributeEarlyCompletion,
+} from "./session";
 
 describe("session progress model", () => {
   it("keeps a zero count-up task out of planned and dynamic geometry", () => {
@@ -51,5 +55,19 @@ describe("session progress model", () => {
       "missing",
     );
     expect(result.activities[1].timeRemaining).toBe(30);
+  });
+
+  it("updates minute allocations from percentages without rounding drift", () => {
+    const allocations = allocateSessionSeconds(
+      [
+        { id: "first", percentage: 80 },
+        { id: "second", percentage: 20 },
+      ],
+      113 * 60,
+    );
+    expect(allocations).toEqual({ first: 5424, second: 1356 });
+    expect(
+      Object.values(allocations).reduce((sum, value) => sum + value, 0),
+    ).toBe(113 * 60);
   });
 });

@@ -67,6 +67,56 @@ export const buildProgressEntries = (
 export const dynamicProgressEntries = (entries: ProgressEntry[]) =>
   entries.filter((entry) => entry.elapsedSeconds > 0);
 
+/**
+ * Converts percentages to whole seconds while guaranteeing that the allocated
+ * countdown total is exactly the requested session duration. The final few
+ * seconds are assigned by largest fractional remainder, so sliders and number
+ * inputs cannot accumulate rounding drift.
+ */
+export const allocateSessionSeconds = (
+  activities: SessionActivityLike[],
+  totalSessionSeconds: number,
+): Record<string, number> => {
+  const safeTotal = Math.max(0, Math.floor(totalSessionSeconds));
+  const countdown = activities.filter((activity) => !activity.countUp);
+  const percentageTotal = countdown.reduce(
+    (sum, activity) => sum + Math.max(0, Number(activity.percentage) || 0),
+    0,
+  );
+  if (!countdown.length || percentageTotal <= 0 || safeTotal <= 0) {
+    return Object.fromEntries(activities.map((activity) => [activity.id, 0]));
+  }
+
+  const allocations = countdown.map((activity, index) => {
+    const exact =
+      (Math.max(0, Number(activity.percentage) || 0) / percentageTotal) *
+      safeTotal;
+    const seconds = Math.floor(exact);
+    return { id: activity.id, index, seconds, fraction: exact - seconds };
+  });
+  let remainder =
+    safeTotal - allocations.reduce((sum, item) => sum + item.seconds, 0);
+  allocations
+    .slice()
+    .sort(
+      (left, right) =>
+        right.fraction - left.fraction || left.index - right.index,
+    )
+    .forEach((item) => {
+      if (remainder <= 0) return;
+      const target = allocations.find((entry) => entry.id === item.id);
+      if (target) target.seconds += 1;
+      remainder -= 1;
+    });
+
+  return Object.fromEntries([
+    ...activities
+      .filter((activity) => activity.countUp)
+      .map((activity) => [activity.id, 0]),
+    ...allocations.map((item) => [item.id, item.seconds]),
+  ]);
+};
+
 export type EarlyCompletionPolicy = "vault" | "target" | "distribute";
 
 export const distributeEarlyCompletion = (

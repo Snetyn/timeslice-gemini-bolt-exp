@@ -8,7 +8,11 @@ import React, {
 } from "react";
 import { appStorage, flushAppStorage } from "./lib/storage";
 import { isNewDay } from "./lib/timing";
-import { buildProgressEntries, distributeEarlyCompletion } from "./lib/session";
+import {
+  allocateSessionSeconds,
+  buildProgressEntries,
+  distributeEarlyCompletion,
+} from "./lib/session";
 import { SessionReportModal } from "./components/SessionReportModal";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
@@ -9677,7 +9681,6 @@ export default function App() {
           })),
         );
         setActiveDailyActivity(null);
-        recalibratePlannedVisuals();
         console.log("Daily activities reset for new day");
       }
 
@@ -9689,7 +9692,6 @@ export default function App() {
   }, []); // Run only on mount
 
   useEffect(() => {
-    recalibratePlannedVisuals();
     try {
       localStorage.setItem("timeSliceTotalHours", JSON.stringify(totalHours));
     } catch (e) {
@@ -9706,7 +9708,6 @@ export default function App() {
     } catch (e) {
       console.error("Failed to save total minutes", e);
     }
-    recalibratePlannedVisuals();
   }, [totalMinutes]);
 
   // --- End of State Saving Logic ---
@@ -9811,6 +9812,32 @@ export default function App() {
 
   // This effect keeps durations in sync with percentages and total time
   const activityPercentages = activities.map((a) => a.percentage).join(",");
+  const applyPlannedDurations = useCallback(
+    (items: Activity[], totalSeconds: number) => {
+      const allocations = allocateSessionSeconds(items, totalSeconds);
+      return items.map((activity) => {
+        const allocatedSeconds = activity.countUp
+          ? 0
+          : (allocations[activity.id] ?? 0);
+        const rawMinutes = allocatedSeconds / 60;
+        const duration = Number.isFinite(rawMinutes)
+          ? Math.abs(rawMinutes - Math.round(rawMinutes)) < 1e-6
+            ? Math.round(rawMinutes)
+            : Math.round(rawMinutes * 10) / 10
+          : 0;
+        return {
+          ...activity,
+          duration,
+          timeRemaining: allocatedSeconds,
+          originalPlannedSeconds: allocatedSeconds,
+          isCompleted: false,
+          completedElapsedSeconds: 0,
+        };
+      });
+    },
+    [],
+  );
+
   useEffect(() => {
     console.log("Duration sync effect triggered:", {
       isTimerActive,
@@ -9822,78 +9849,14 @@ export default function App() {
     const totalMins = calculateTotalSessionMinutes();
     const totalSeconds = totalMins * 60;
 
-    setActivities((prev) => {
-      // Build allocation info for non-countUp activities based purely on percentages
-      const alloc = prev.map((a, idx) => {
-        if (!a.countUp) {
-          const exact = Math.max(0, (a.percentage / 100) * totalSeconds);
-          const floorSec = Math.floor(exact);
-          return {
-            idx,
-            exact,
-            floorSec,
-            remainder: exact - floorSec,
-            type: "pct" as const,
-          };
-        }
-        // Count-up activities don't receive allocated time
-        return {
-          idx,
-          exact: 0,
-          floorSec: 0,
-          remainder: 0,
-          type: "countUp" as const,
-        };
-      });
-
-      // Distribute remaining seconds so sum equals total session seconds
-      const pctItems = alloc.filter((x) => x.type === "pct");
-      const floorSum = pctItems.reduce((s, x) => s + x.floorSec, 0);
-      let remainderToGive = Math.max(0, totalSeconds - floorSum);
-      // Sort by largest fractional remainder
-      pctItems.sort((a, b) => b.remainder - a.remainder);
-      for (
-        let i = 0;
-        i < pctItems.length && remainderToGive > 0;
-        i++, remainderToGive--
-      ) {
-        pctItems[i].floorSec += 1;
-      }
-
-      // Map back: set duration to allocatedSeconds/60 (can be fractional minutes), timeRemaining to allocatedSeconds
-      const pctMap = new Map(pctItems.map((x) => [x.idx, x.floorSec]));
-      const next = prev.map((activity, i) => {
-        const allocatedSeconds = !activity.countUp ? (pctMap.get(i) ?? 0) : 0;
-        const rawMinutes = allocatedSeconds / 60;
-        const newDuration = Number.isFinite(rawMinutes)
-          ? Math.abs(rawMinutes - Math.round(rawMinutes)) < 1e-6
-            ? Math.round(rawMinutes)
-            : Math.round(rawMinutes * 10) / 10
-          : 0;
-        const newTimeRemaining = activity.countUp ? 0 : allocatedSeconds;
-        const originalPlannedSeconds =
-          typeof activity.originalPlannedSeconds === "number" &&
-          activity.originalPlannedSeconds > 0
-            ? activity.originalPlannedSeconds
-            : !activity.countUp
-              ? allocatedSeconds
-              : 0;
-        return {
-          ...activity,
-          duration: newDuration,
-          timeRemaining: newTimeRemaining,
-          isCompleted: false,
-          originalPlannedSeconds,
-        };
-      });
-      return next;
-    });
+    setActivities((prev) => applyPlannedDurations(prev, totalSeconds));
   }, [
     activityPercentages,
     totalSessionMinutes,
     isTimerActive,
     sessionPlanFrozen,
     calculateTotalSessionMinutes,
+    applyPlannedDurations,
   ]);
 
   const handleTimerTick = useCallback(() => {
@@ -10953,7 +10916,11 @@ export default function App() {
     activityId: string,
     newMinutes: number,
   ) => {
-    if (isTimerActive || sessionPlanFrozen) return; // only before session starts & editable
+    if (isTimerActive) return;
+    if (sessionPlanFrozen) {
+      setSessionPlanFrozen(false);
+      initialTotalAllocatedRef.current = 0;
+    }
     const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
     if (!totalSessionSeconds) return;
     setActivities((prev) => {
@@ -10963,10 +10930,6 @@ export default function App() {
       if (target.countUp) return prev;
       const requestedSeconds = Math.max(0, Math.round(newMinutes * 60));
       const getPlanned = (a: any) => {
-        if (typeof a.originalPlannedSeconds === "number")
-          return a.originalPlannedSeconds;
-        if (typeof a.timeRemaining === "number" && a.timeRemaining > 0)
-          return a.timeRemaining;
         if (typeof a.percentage === "number")
           return Math.round((a.percentage / 100) * totalSessionSeconds);
         if (typeof a.duration === "number") return Math.round(a.duration * 60);
@@ -12066,6 +12029,11 @@ export default function App() {
   };
 
   const updateAndScalePercentages = (idOfChangedActivity, newPercentage) => {
+    if (isTimerActive) return;
+    if (sessionPlanFrozen) {
+      setSessionPlanFrozen(false);
+      initialTotalAllocatedRef.current = 0;
+    }
     setActivities((prev) => {
       const clone = prev.map((a) => ({ ...a }));
       const locked = clone.filter((a) => a.isLocked && !a.countUp);
@@ -12114,7 +12082,7 @@ export default function App() {
         remainder--;
       }
       nonCount.forEach((a, i) => (a.percentage = floors[i]));
-      return clone;
+      return applyPlannedDurations(clone, calculateTotalSessionMinutes() * 60);
     });
   };
 
@@ -12558,6 +12526,7 @@ export default function App() {
 
   const handleBarDrag = useCallback(
     (e) => {
+      if (isTimerActive) return;
       const bar = e.currentTarget;
       const rect = bar.getBoundingClientRect();
 
@@ -12582,7 +12551,13 @@ export default function App() {
         return;
       }
 
-      const handleMouseMove = (moveEvent) => {
+      if (sessionPlanFrozen) {
+        setSessionPlanFrozen(false);
+        initialTotalAllocatedRef.current = 0;
+      }
+      const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
+
+      const handlePointerMove = (moveEvent) => {
         moveEvent.preventDefault();
 
         const mousePercentage =
@@ -12598,15 +12573,16 @@ export default function App() {
           const newRightPercentage = combinedOriginal - newLeftPercentage;
 
           if (newLeftPercentage >= 0 && newRightPercentage >= 0) {
-            setActivities((prev) =>
-              prev.map((act) => {
+            setActivities((prev) => {
+              const updated = prev.map((act) => {
                 if (act.id === leftActivity.id)
                   return { ...act, percentage: newLeftPercentage };
                 if (act.id === rightActivity.id)
                   return { ...act, percentage: newRightPercentage };
                 return act;
-              }),
-            );
+              });
+              return applyPlannedDurations(updated, totalSessionSeconds);
+            });
           }
         } else if (!leftActivity.isLocked) {
           const newLeftPercentage = mousePercentage - prefixPercentage;
@@ -12626,15 +12602,23 @@ export default function App() {
         }
       };
 
-      const handleMouseUp = () => {
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
+      const handlePointerUp = () => {
+        document.removeEventListener("pointermove", handlePointerMove);
+        document.removeEventListener("pointerup", handlePointerUp);
       };
 
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
+      document.addEventListener("pointermove", handlePointerMove, {
+        passive: false,
+      });
+      document.addEventListener("pointerup", handlePointerUp);
     },
-    [activities],
+    [
+      activities,
+      isTimerActive,
+      sessionPlanFrozen,
+      calculateTotalSessionMinutes,
+      applyPlannedDurations,
+    ],
   );
 
   const getTotalRemainingTime = () => {
@@ -15094,7 +15078,10 @@ export default function App() {
                       variant={
                         durationType === "duration" ? "default" : "outline"
                       }
-                      onClick={() => setDurationType("duration")}
+                      onClick={() => {
+                        if (!isTimerActive) setSessionPlanFrozen(false);
+                        setDurationType("duration");
+                      }}
                       className="h-9 text-sm flex-1 sm:flex-none"
                     >
                       Set Duration
@@ -15104,7 +15091,10 @@ export default function App() {
                       variant={
                         durationType === "endTime" ? "default" : "outline"
                       }
-                      onClick={() => setDurationType("endTime")}
+                      onClick={() => {
+                        if (!isTimerActive) setSessionPlanFrozen(false);
+                        setDurationType("endTime");
+                      }}
                       className="h-9 text-sm flex-1 sm:flex-none"
                     >
                       Set End Time
@@ -16617,6 +16607,7 @@ export default function App() {
                           max="12"
                           value={totalHours}
                           onChange={(e) => {
+                            if (!isTimerActive) setSessionPlanFrozen(false);
                             const value = e.target.value;
                             // Allow empty string during editing
                             if (value === "") {
@@ -16647,6 +16638,7 @@ export default function App() {
                           max="59"
                           value={totalMinutes}
                           onChange={(e) => {
+                            if (!isTimerActive) setSessionPlanFrozen(false);
                             const value = e.target.value;
                             // Allow empty string during editing
                             if (value === "") {
@@ -16673,7 +16665,10 @@ export default function App() {
                         id="end-time"
                         type="time"
                         value={endTime}
-                        onChange={(e) => setEndTime(e.target.value)}
+                        onChange={(e) => {
+                          if (!isTimerActive) setSessionPlanFrozen(false);
+                          setEndTime(e.target.value);
+                        }}
                         className="w-32 h-9 text-sm"
                       />
                     </div>
@@ -16772,8 +16767,9 @@ export default function App() {
                     </>
                   )}
                   <div
-                    className="relative h-16 sm:h-12 bg-gray-200 rounded-lg overflow-hidden flex"
-                    onMouseDown={handleBarDrag}
+                    className="relative h-16 sm:h-12 bg-gray-200 rounded-lg overflow-hidden flex touch-none"
+                    onPointerDown={handleBarDrag}
+                    data-testid="allocation-slider"
                   >
                     {activities
                       .filter((activity) => !activity.countUp)
@@ -16865,6 +16861,7 @@ export default function App() {
                       <div
                         key={activity.id}
                         className="border rounded-lg bg-white p-3"
+                        data-testid={`session-activity-${activity.id}`}
                       >
                         {/* First Row: Color + Name + Lock + Delete */}
                         <div className="flex items-center gap-3 mb-3">
@@ -16934,6 +16931,7 @@ export default function App() {
                         <div className="flex items-center justify-center gap-6">
                           <div className="flex items-center gap-2">
                             <Input
+                              aria-label={`${activity.name} percentage`}
                               type="number"
                               min="0"
                               max="100"
@@ -16970,6 +16968,7 @@ export default function App() {
 
                           <div className="flex items-center gap-2">
                             <Input
+                              aria-label={`${activity.name} minutes`}
                               type="number"
                               min="0"
                               step="1"
@@ -17025,20 +17024,17 @@ export default function App() {
                                   0,
                                   Math.min(draft, totalMins || draft),
                                 );
-                                if (totalMins > 0) {
-                                  const newPerc = (newDur / totalMins) * 100;
-                                  updateAndScalePercentages(
-                                    activity.id,
-                                    newPerc,
-                                  );
-                                }
+                                rebalanceAfterManualMinutes(
+                                  activity.id,
+                                  newDur,
+                                );
                                 setActivities((prev) =>
                                   prev.map((a) =>
                                     a.id === activity.id
                                       ? (() => {
                                           const { durationDraft, ...rest } =
                                             a as any;
-                                          return { ...rest, duration: newDur };
+                                          return rest;
                                         })()
                                       : a,
                                   ),
