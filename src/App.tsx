@@ -25,6 +25,13 @@ import {
   startTimer,
 } from "./domain/timer";
 import { getTimer, saveTimer } from "./data/timerRepository";
+import {
+  applyAppearanceToDocument,
+  normalizeAppearanceSettings,
+} from "./lib/appearance";
+import { AppShell } from "./components/AppShell";
+import { AppearanceSettingsPanel } from "./components/AppearanceSettingsPanel";
+import { TimerDisplay } from "./components/TimerDisplay";
 
 // Keep the existing component code isolated from browser storage details. This
 // compatibility facade is hydrated from IndexedDB; browser localStorage is
@@ -294,18 +301,18 @@ const Button: React.FC<ButtonProps> = ({
   ...props
 }) => {
   const baseClasses =
-    "inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 touch-manipulation";
+    "ts-button inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 touch-manipulation";
   const sizeClasses = {
     default: "h-9 sm:h-10 px-3 sm:px-4 py-2 text-sm",
     sm: "h-8 sm:h-9 rounded-md px-2 sm:px-3 text-xs sm:text-sm",
     lg: "h-10 sm:h-11 rounded-md px-4 sm:px-6 md:px-8 text-sm sm:text-base",
   };
   const variantClasses = {
-    default: "bg-slate-900 text-slate-50 hover:bg-slate-900/90",
-    destructive: "bg-red-500 text-slate-50 hover:bg-red-500/90",
+    default: "ts-button-default",
+    destructive: "ts-button-destructive",
     outline:
-      "border border-slate-200 bg-transparent hover:bg-slate-100 hover:text-slate-900",
-    ghost: "hover:bg-slate-100 hover:text-slate-900",
+      "ts-button-outline border border-slate-200 bg-transparent hover:bg-slate-100 hover:text-slate-900",
+    ghost: "ts-button-ghost hover:bg-slate-100 hover:text-slate-900",
   };
   return (
     <button
@@ -322,7 +329,7 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 const Input: React.FC<InputProps> = ({ className = "", ...props }) => (
   <input
-    className={`flex h-9 sm:h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 touch-manipulation ${className}`}
+    className={`ts-input flex h-9 sm:h-10 w-full rounded-md border border-slate-200 bg-transparent px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 touch-manipulation ${className}`}
     {...props}
   />
 );
@@ -333,7 +340,7 @@ interface BasicChildrenProps {
 }
 const Card: React.FC<BasicChildrenProps> = ({ className = "", children }) => (
   <div
-    className={`rounded-lg border bg-white text-slate-950 shadow-sm ${className}`}
+    className={`ts-card rounded-lg border bg-white text-slate-950 shadow-sm ${className}`}
   >
     {children}
   </div>
@@ -3497,7 +3504,12 @@ const BorrowTimeModal = ({
   const maxSeconds = maxTime % 60;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Borrow time from vault"
+    >
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Borrow from Vault</CardTitle>
@@ -3636,6 +3648,9 @@ const SiphonTimeModal = ({
       className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
       onClick={handleCloseModal}
       style={{ touchAction: "manipulation" }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Transfer time"
     >
       <div onClick={(e) => e.stopPropagation()}>
         <Card className="w-full max-w-sm">
@@ -3898,7 +3913,12 @@ const AddActivityModal = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add new activity"
+    >
       <Card className="w-full max-w-md mx-4">
         <CardHeader>
           <CardTitle className="text-lg text-center">
@@ -3964,7 +3984,7 @@ const AddActivityModal = ({
                   setSelectedTemplate(null); // Clear template selection when typing
                   // Remove color clearing - colors are now random
                 }}
-                onKeyPress={handleKeyPress}
+                onKeyDown={handleKeyPress}
                 autoFocus
                 className="text-base py-3"
               />
@@ -4428,7 +4448,7 @@ const ActivityManagementPage = ({
     };
 
     return (
-      <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans">
+      <div className="ts-management-page font-sans">
         <div className="max-w-6xl mx-auto">
           <Card>
             <CardHeader>
@@ -4438,13 +4458,13 @@ const ActivityManagementPage = ({
                     variant="ghost"
                     size="sm"
                     onClick={onBackToTimer}
-                    className="flex items-center space-x-1 sm:space-x-2 h-8 sm:h-9 text-xs sm:text-sm"
+                    className="hidden"
                   >
                     <Icon name="rotateCcw" className="h-3 w-3 sm:h-4 sm:w-4" />
                     <span>Back to Timer</span>
                   </Button>
                   <CardTitle className="text-xl sm:text-2xl lg:text-3xl font-bold">
-                    Activity Management
+                    Activity library
                   </CardTitle>
                 </div>
                 <div className="flex items-center space-x-1 sm:space-x-2">
@@ -5644,7 +5664,7 @@ const ActivityManagementPage = ({
                       id="new-category"
                       placeholder="Enter category name"
                       className="h-8 sm:h-10 text-xs sm:text-sm"
-                      onKeyPress={(e) => {
+                      onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           const value = e.target.value.trim().toLowerCase();
                           if (value && !allCategories.includes(value)) {
@@ -5733,7 +5753,7 @@ const ActivityManagementPage = ({
                       id="new-tag"
                       placeholder="Enter tag name"
                       className="h-8 sm:h-10 text-xs sm:text-sm"
-                      onKeyPress={(e) => {
+                      onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           const value = e.target.value.trim().toLowerCase();
                           if (value && !allTags.includes(value)) {
@@ -6367,7 +6387,12 @@ const DailyActivityEditModal = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div
+      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-label={isNewActivity ? "Add daily activity" : "Edit daily activity"}
+    >
       <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <h2 className="text-xl font-semibold text-gray-900">
@@ -6468,7 +6493,7 @@ const DailyActivityEditModal = ({
                 onChange={(e) => setNewSubtaskName(e.target.value)}
                 placeholder="Add a subtask..."
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                onKeyPress={(e) => {
+                onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
                     addSubtask();
@@ -6666,6 +6691,7 @@ const FlowmodoroMode = ({
   onSkipBreak,
   onReset,
   formatTime,
+  settings,
 }) => {
   const [customBreakMinutes, setCustomBreakMinutes] = useState(0);
   const [customBreakSeconds, setCustomBreakSeconds] = useState(0);
@@ -6698,7 +6724,7 @@ const FlowmodoroMode = ({
   return (
     <div className="max-w-4xl mx-auto p-2 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
       {/* Header */}
-      <div className="text-center">
+      <div className="hidden text-center">
         <h2 className="text-xl sm:text-2xl md:text-3xl font-bold bg-gradient-to-r from-purple-600 to-green-600 bg-clip-text text-transparent mb-2">
           🌟 Flowmodoro Mode
         </h2>
@@ -6713,20 +6739,32 @@ const FlowmodoroMode = ({
         <Card className="border-2 border-purple-300 bg-gradient-to-r from-purple-50 to-green-50">
           <CardContent className="p-4 sm:p-6 md:p-8 text-center">
             <div className="space-y-4 sm:space-y-6">
-              <div>
-                <h3 className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">
-                  Break in Progress
-                </h3>
-                <div
-                  className="text-4xl sm:text-6xl md:text-8xl font-mono font-bold text-purple-600"
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
-                  {formatTime(flowmodoroState.breakTimeRemaining)}
-                </div>
-                <div className="text-sm sm:text-base md:text-lg text-gray-600 mt-2">
-                  Enjoy your well-earned break! 🌱
-                </div>
-              </div>
+              <TimerDisplay
+                variant={normalizeAppearanceSettings(settings).timerDisplay}
+                model={{
+                  title: "Break in progress",
+                  timeText: formatTime(flowmodoroState.breakTimeRemaining),
+                  subtitle: "Enjoy your well-earned break",
+                  status: "break",
+                  progress:
+                    flowmodoroState.initialBreakDuration > 0
+                      ? (flowmodoroState.breakTimeRemaining /
+                          flowmodoroState.initialBreakDuration) *
+                        100
+                      : 0,
+                  accent: "#8b5cf6",
+                  metrics: [
+                    {
+                      label: "Available after break",
+                      value: formatTime(flowmodoroState.availableRestTime),
+                    },
+                    {
+                      label: "Earned today",
+                      value: formatTime(flowmodoroState.totalEarnedToday),
+                    },
+                  ],
+                }}
+              />
 
               <div className="flex justify-center">
                 <Button
@@ -6750,7 +6788,38 @@ const FlowmodoroMode = ({
       {!flowmodoroState.isOnBreak && (
         <Card className="border-2 border-green-200">
           <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 mb-4 sm:mb-6">
+            <TimerDisplay
+              variant={normalizeAppearanceSettings(settings).timerDisplay}
+              model={{
+                title: "Available break time",
+                timeText: formatTime(flowmodoroState.availableRestTime),
+                subtitle: "Ready when you are",
+                status: "ready",
+                progress: Math.min(
+                  100,
+                  (flowmodoroState.availableRestTime /
+                    (Math.max(
+                      1,
+                      settings?.flowmodoroMaxProgressMinutes || 30,
+                    ) *
+                      60)) *
+                    100,
+                ),
+                accent: "#8b5cf6",
+                metrics: [
+                  {
+                    label: "Available",
+                    value: `${availableMinutes}m ${availableSeconds}s`,
+                  },
+                  {
+                    label: "Earned today",
+                    value: `${totalEarnedMinutes}m ${totalEarnedSeconds}s`,
+                  },
+                ],
+              }}
+              className="mb-4"
+            />
+            <div className="hidden grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 mb-4 sm:mb-6">
               <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-200">
                 <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">
                   Available Break Time
@@ -7353,7 +7422,7 @@ const SingleActivityMode = ({
   return (
     <div className="max-w-4xl mx-auto p-2 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
       {/* Header */}
-      <div className="text-center">
+      <div className="hidden text-center">
         <h2 className="text-xl sm:text-2xl md:text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent mb-2">
           Single Activity Mode
         </h2>
@@ -7382,7 +7451,7 @@ const SingleActivityMode = ({
                 placeholder="Enter a quick task or activity..."
                 value={activityName}
                 onChange={(e) => setActivityName(e.target.value)}
-                onKeyPress={handleKeyPress}
+                onKeyDown={handleKeyPress}
                 className="flex-1 text-sm sm:text-base md:text-lg p-3 sm:p-4 border-2 focus:border-purple-400"
                 maxLength={100}
                 autoFocus
@@ -7406,52 +7475,44 @@ const SingleActivityMode = ({
         <Card className="border-2 border-purple-300">
           <CardContent className="p-4 sm:p-6 md:p-8 text-center">
             <div className="space-y-4 sm:space-y-6 md:space-y-8">
-              <div>
-                <h3 className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">
-                  Current Activity
-                </h3>
-                <div className="text-xl sm:text-2xl md:text-3xl font-bold text-purple-600 min-h-8 sm:min-h-10 md:min-h-12 flex items-center justify-center px-2">
-                  {singleState.activityName}
-                </div>
-                {currentChainLength > 0 && (
-                  <div className="mt-2 text-xs sm:text-sm text-green-600 font-medium">
-                    🔗 Chained #{currentChainLength + 1} •{" "}
-                    {(
-                      1 +
-                      Math.min(currentChainLength, 10) *
-                        0.08 *
-                        Math.pow(0.95, currentChainLength)
-                    ).toFixed(2)}
-                    x Multiplier
-                  </div>
-                )}
-              </div>
-
-              <div className="relative">
-                <div
-                  className={`text-4xl sm:text-6xl md:text-8xl font-mono font-bold transition-all duration-300 ${isPaused ? "text-orange-500" : "text-gray-900"}`}
-                  style={{
-                    fontVariantNumeric: "tabular-nums",
-                    textShadow: isPaused
-                      ? "0 0 20px rgba(249, 115, 22, 0.3)"
-                      : "0 0 20px rgba(139, 92, 246, 0.3)",
-                  }}
-                >
-                  {formatElapsedTime(currentElapsed)}
-                </div>
-                {totalSessionTime > currentElapsed && (
-                  <div className="text-sm sm:text-base md:text-lg text-purple-600 font-medium mt-2">
-                    Total Flow: {formatElapsedTime(totalSessionTime)}
-                  </div>
-                )}
-                {isPaused && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="bg-orange-500 text-white px-3 sm:px-4 py-1 sm:py-2 rounded-lg text-sm sm:text-base md:text-lg font-bold">
-                      PAUSED
-                    </div>
-                  </div>
-                )}
-              </div>
+              <TimerDisplay
+                variant={normalizeAppearanceSettings(settings).timerDisplay}
+                model={{
+                  title: singleState.activityName || "Single activity",
+                  timeText: formatElapsedTime(currentElapsed),
+                  subtitle:
+                    currentChainLength > 0
+                      ? `Chain ${currentChainLength + 1} · ${(
+                          1 +
+                          Math.min(currentChainLength, 10) *
+                            0.08 *
+                            Math.pow(0.95, currentChainLength)
+                        ).toFixed(2)}× multiplier`
+                      : "Build momentum one activity at a time",
+                  status: isPaused ? "paused" : "running",
+                  progress: Math.min(
+                    100,
+                    (currentElapsed /
+                      (Math.max(
+                        1,
+                        settings?.flowmodoroMaxProgressMinutes || 30,
+                      ) *
+                        60)) *
+                      100,
+                  ),
+                  accent: "#7c3aed",
+                  metrics: [
+                    {
+                      label: "Total flow",
+                      value: formatElapsedTime(totalSessionTime),
+                    },
+                    {
+                      label: "Current reward",
+                      value: formatTime(Math.round(currentReward)),
+                    },
+                  ],
+                }}
+              />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:justify-center gap-2 sm:gap-3">
                 <Button
@@ -7522,7 +7583,7 @@ const SingleActivityMode = ({
                           placeholder="Enter next activity..."
                           value={newActivityName}
                           onChange={(e) => setNewActivityName(e.target.value)}
-                          onKeyPress={handleNewActivityKeyPress}
+                          onKeyDown={handleNewActivityKeyPress}
                           className="flex-1 border-2 border-blue-300 focus:border-blue-500"
                           maxLength={100}
                           autoFocus
@@ -7939,14 +8000,47 @@ export default function App() {
       dailyShowElapsedDayOverlay: true,
       // Time window filtering control
       enableTimeWindowFiltering: true,
+      appearance: normalizeAppearanceSettings(undefined),
     };
     try {
       const saved = localStorage.getItem("timeSliceSettings");
-      return saved ? { ...defaultValue, ...JSON.parse(saved) } : defaultValue;
+      if (!saved) return defaultValue;
+      const parsed = JSON.parse(saved);
+      return {
+        ...defaultValue,
+        ...parsed,
+        appearance: normalizeAppearanceSettings(parsed),
+      };
     } catch (e) {
       return defaultValue;
     }
   });
+  const appearance = normalizeAppearanceSettings(settings);
+
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const apply = () =>
+      applyAppearanceToDocument(appearance, document, media?.matches);
+    apply();
+    media?.addEventListener?.("change", apply);
+    return () => media?.removeEventListener?.("change", apply);
+  }, [
+    appearance.theme,
+    appearance.accent,
+    appearance.density,
+    appearance.motion,
+    appearance.timerDisplay,
+  ]);
+
+  const updateAppearance = useCallback((patch) => {
+    setSettings((previous) => ({
+      ...previous,
+      appearance: {
+        ...normalizeAppearanceSettings(previous),
+        ...patch,
+      },
+    }));
+  }, []);
   const [durationType, setDurationType] = useState("duration");
   const [endTime, setEndTime] = useState("23:30");
   const [vaultTime, setVaultTime] = useState(0);
@@ -12247,6 +12341,7 @@ export default function App() {
   const startSession = () => {
     if (Math.abs(totalPercentage - 100) < 0.1 && activities.length > 0) {
       console.log("Starting session with activities:", activities);
+      window.scrollTo({ top: 0, behavior: "auto" });
       setIsTimerActive(true);
       setIsPaused(false);
       void persistSessionTimer("start").catch((error) =>
@@ -12863,9 +12958,6 @@ export default function App() {
   const displayActivities = activities.filter(
     (activity) => activity.showOnBar !== false,
   );
-  const displayCurrentActivityIndex = displayActivities.findIndex(
-    (activity) => activity.id === currentActivity?.id,
-  );
 
   // If no current activity exists, this indicates a serious state issue
   if (isTimerActive && !currentActivity) {
@@ -12895,6 +12987,43 @@ export default function App() {
           (currentActivity.duration * 60)) *
         100
       : 0;
+  const sessionDisplayEntries = buildProgressEntries(
+    displayActivities,
+    Math.max(0, Number(totalSessionMinutes) || 0) * 60,
+  );
+  const sessionTimerSegments = sessionDisplayEntries
+    .map((entry) => ({
+      id: entry.id,
+      label: entry.name || "Activity",
+      color: entry.color || "#64748b",
+      value:
+        settings.progressBarStyle === "dynamicColor"
+          ? entry.elapsedSeconds
+          : entry.plannedSeconds || entry.elapsedSeconds,
+    }))
+    .filter((segment) => segment.value > 0);
+
+  const activeDestination = showSettings
+    ? "settings"
+    : currentPage === "manage-activities"
+      ? "manage"
+      : currentMode;
+
+  const handleShellNavigate = (destination) => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+    if (destination === "settings") {
+      setCurrentPage("timer");
+      setShowSettings(true);
+      return;
+    }
+    setShowSettings(false);
+    if (destination === "manage") {
+      setCurrentPage("manage-activities");
+      return;
+    }
+    setCurrentPage("timer");
+    setCurrentMode(destination);
+  };
 
   const mainContent =
     currentPage === "manage-activities" ? (
@@ -12987,10 +13116,10 @@ export default function App() {
           );
         })()}
       </div>
-    ) : isTimerActive ? (
+    ) : isTimerActive && !showSettings && currentMode === "session" ? (
       <div className="max-w-2xl mx-auto">
-        <Card>
-          <CardHeader className="pb-3">
+        <Card className="ts-session-card">
+          <CardHeader className="ts-session-toolbar pb-3">
             <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle className="text-lg sm:text-xl">
                 TimeSlice Timer
@@ -13043,73 +13172,40 @@ export default function App() {
             </div>
           </CardHeader>
           <CardContent className="space-y-3 pt-0">
-            {settings.showMainProgress &&
-              (settings.progressView === "circular" ? (
-                <CircularProgress
-                  activities={displayActivities}
-                  style={settings.progressBarStyle}
-                  totalProgress={getOverallProgress()}
-                  activityProgress={activityProgress}
-                  activityColor={currentActivity?.color}
-                  totalSessionMinutes={totalSessionMinutes}
-                  currentActivityIndex={displayCurrentActivityIndex}
-                  showAllocationRing={settings.showCircularAllocation}
-                  flowmodoroOverlaySeconds={
-                    settings.flowmodoroEnabled &&
-                    settings.flowmodoroMode === "drain" &&
-                    flowmodoroState.availableRestTime > 0
-                      ? flowmodoroState.availableRestTime
-                      : 0
-                  }
-                  flowmodoroOverlayColor={"#8b5cf6"}
-                  settings={settings}
-                />
-              ) : (
-                <VisualProgress
-                  activities={displayActivities}
-                  style={settings.progressBarStyle}
-                  overallProgress={getOverallProgress()}
-                  currentActivityColor={currentActivity?.color}
-                  totalSessionMinutes={totalSessionMinutes}
-                  currentActivityIndex={displayCurrentActivityIndex}
-                  showDrainOverlay={settings.showDrainOverlay}
-                  flowmodoroOverlaySeconds={
-                    settings.flowmodoroEnabled &&
-                    settings.flowmodoroMode === "drain" &&
-                    flowmodoroState.availableRestTime > 0
-                      ? flowmodoroState.availableRestTime
-                      : 0
-                  }
-                  flowmodoroOverlayColor={"#8b5cf6"}
-                  className="mb-2"
-                />
-              ))}
-            <div className="text-center space-y-2">
-              <div className="flex items-center justify-center space-x-2">
-                <div
-                  className="w-4 h-4 sm:w-5 sm:h-5 rounded-full"
-                  style={{ backgroundColor: currentActivity?.color }}
-                />
-                <h2 className="text-xl sm:text-2xl font-bold">
-                  {currentActivity?.name}
-                </h2>
-              </div>
-              {settings.showActivityTimer && (
-                <div className="text-4xl sm:text-5xl font-mono font-bold text-slate-800">
-                  {currentActivity?.isCompleted
-                    ? "COMPLETED"
-                    : formatTime(currentActivity?.timeRemaining || 0)}
-                </div>
-              )}
-              {isPaused && (
-                <Badge
-                  variant="secondary"
-                  className="text-sm sm:text-base px-3 py-1"
-                >
-                  PAUSED
-                </Badge>
-              )}
-            </div>
+            <TimerDisplay
+              variant={
+                settings.showMainProgress
+                  ? appearance.timerDisplay
+                  : "minimal"
+              }
+              model={{
+                title: currentActivity?.name || "Session",
+                timeText: settings.showActivityTimer
+                  ? currentActivity?.isCompleted
+                    ? "Complete"
+                    : formatTime(currentActivity?.timeRemaining || 0)
+                  : undefined,
+                subtitle: `${activities.filter((activity) => !activity.isCompleted).length} activities remaining`,
+                status: currentActivity?.isCompleted
+                  ? "complete"
+                  : isPaused
+                    ? "paused"
+                    : "running",
+                progress: getOverallProgress(),
+                accent: currentActivity?.color,
+                segments: sessionTimerSegments,
+                metrics: [
+                  { label: "Current task", value: `${Math.round(activityProgress)}%` },
+                  { label: "Session progress", value: `${Math.round(getOverallProgress())}%` },
+                  {
+                    label: "Task allocation",
+                    value: formatTime(
+                      Math.max(0, Number(currentActivity?.duration) || 0) * 60,
+                    ),
+                  },
+                ],
+              }}
+            />
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-center">
               <div className="space-y-0.5">
                 <div className="text-xs text-gray-600">Time Vault</div>
@@ -13728,7 +13824,7 @@ export default function App() {
           </div>
         )}
         <Card className="overflow-hidden">
-          <CardHeader>
+          <CardHeader className="hidden">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
               <CardTitle className="text-2xl sm:text-3xl font-bold">
                 TimeSlice
@@ -13762,7 +13858,25 @@ export default function App() {
           </CardHeader>
           <CardContent className="space-y-6 p-4 sm:p-6">
             {showSettings && (
-              <Card className="bg-gray-50">
+              <div className="ts-settings-page">
+                <div className="ts-settings-intro">
+                  <div>
+                    <span className="ts-eyebrow">Workspace preferences</span>
+                    <h2>Make TimeSlice feel like yours</h2>
+                    <p>
+                      Appearance changes are immediate. Advanced timer options
+                      stay available without crowding the everyday controls.
+                    </p>
+                  </div>
+                </div>
+                <AppearanceSettingsPanel
+                  value={appearance}
+                  onChange={updateAppearance}
+                />
+                <details className="ts-advanced-settings">
+                  <summary>Advanced timer and scheduling settings</summary>
+                  <div className="ts-advanced-settings-content">
+              <Card className="bg-gray-50 border-0 shadow-none">
                 <CardHeader>
                   <CardTitle className="text-lg">Timer Settings</CardTitle>
                 </CardHeader>
@@ -13913,6 +14027,10 @@ export default function App() {
                           setSettings((prev) => ({
                             ...prev,
                             progressView: "linear",
+                            appearance: {
+                              ...normalizeAppearanceSettings(prev),
+                              timerDisplay: "bar",
+                            },
                           }))
                         }
                       >
@@ -13929,6 +14047,10 @@ export default function App() {
                           setSettings((prev) => ({
                             ...prev,
                             progressView: "circular",
+                            appearance: {
+                              ...normalizeAppearanceSettings(prev),
+                              timerDisplay: "ring",
+                            },
                           }))
                         }
                       >
@@ -14410,6 +14532,10 @@ export default function App() {
                           setSettings((prev) => ({
                             ...prev,
                             mobileZoomLevel: "compact",
+                            appearance: {
+                              ...normalizeAppearanceSettings(prev),
+                              density: "compact",
+                            },
                           }))
                         }
                       >
@@ -14426,6 +14552,10 @@ export default function App() {
                           setSettings((prev) => ({
                             ...prev,
                             mobileZoomLevel: "normal",
+                            appearance: {
+                              ...normalizeAppearanceSettings(prev),
+                              density: "comfortable",
+                            },
                           }))
                         }
                       >
@@ -14442,6 +14572,10 @@ export default function App() {
                           setSettings((prev) => ({
                             ...prev,
                             mobileZoomLevel: "large",
+                            appearance: {
+                              ...normalizeAppearanceSettings(prev),
+                              density: "spacious",
+                            },
                           }))
                         }
                       >
@@ -15008,11 +15142,17 @@ export default function App() {
                   </div>
                 </CardContent>
               </Card>
+                  </div>
+                </details>
+              </div>
             )}
 
-            <div className="space-y-4">
+            <div
+              className={showSettings ? "hidden" : "space-y-4"}
+              aria-hidden={showSettings}
+            >
               {/* Mode Selector */}
-              <div className="rounded-xl border border-slate-200/80 bg-white/80 p-2 shadow-sm backdrop-blur-sm">
+              <div className="hidden">
                 <div
                   role="tablist"
                   aria-label="TimeSlice mode"
@@ -15104,38 +15244,62 @@ export default function App() {
               ) : currentMode === "daily" ? (
                 // Daily Mode Content
                 <>
-                  <h2 className="text-lg sm:text-xl font-semibold">
+                  <h2 className="hidden text-lg sm:text-xl font-semibold">
                     Daily Progress
                   </h2>
 
                   {/* Current Time Display */}
-                  <div className="text-center p-3 bg-blue-50 rounded-lg">
-                    <div className="text-lg font-semibold text-blue-800">
-                      Current Time:{" "}
-                      {currentTime.toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: false,
-                      })}
-                    </div>
-                    <div className="text-sm text-blue-600">
-                      Until Reset (00:30):{" "}
-                      {Math.floor(
-                        (24 * 60 -
-                          (currentTime.getHours() * 60 +
-                            currentTime.getMinutes()) +
-                          30) /
-                          60,
-                      )}
-                      h{" "}
-                      {(24 * 60 -
-                        (currentTime.getHours() * 60 +
-                          currentTime.getMinutes()) +
-                        30) %
-                        60}
-                      m remaining
-                    </div>
-                  </div>
+                  <TimerDisplay
+                    variant={appearance.timerDisplay}
+                    model={{
+                      title: activeDailyActivity?.name || "Daily overview",
+                      timeText: activeDailyActivity
+                        ? formatTime(
+                            Math.max(
+                              0,
+                              Math.round(
+                                activeDailyActivity.duration * 60 -
+                                  getRealTimeSpent(activeDailyActivity) * 60,
+                              ),
+                            ),
+                          )
+                        : currentTime.toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            hour12: false,
+                          }),
+                      subtitle: activeDailyActivity
+                        ? "Active daily activity"
+                        : "Your day at a glance",
+                      status: activeDailyActivity ? "running" : "ready",
+                      progress: getDailyOverallProgress(),
+                      accent: activeDailyActivity?.color,
+                      segments: dailyActivities
+                        .filter((activity) => activity.duration > 0)
+                        .map((activity) => ({
+                          id: activity.id,
+                          label: activity.name,
+                          color: activity.color,
+                          value: activity.duration,
+                        })),
+                      metrics: [
+                        {
+                          label: "Completed",
+                          value: `${getDailySummary().completedActivities}/${getDailySummary().totalActivities}`,
+                        },
+                        {
+                          label: "Remaining",
+                          value: formatMinutesHM(
+                            getDailySummary().remainingMinutes,
+                          ),
+                        },
+                        {
+                          label: "Day progress",
+                          value: `${Math.round(getDailyOverallProgress())}%`,
+                        },
+                      ],
+                    }}
+                  />
 
                   {/* Flowmodoro Rest Timer for Daily Mode */}
                   {settings.flowmodoroEnabled && (
@@ -16382,7 +16546,7 @@ export default function App() {
                                     type="text"
                                     placeholder="Add subtask..."
                                     className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                    onKeyPress={(e) => {
+                                    onKeyDown={(e) => {
                                       if (e.key === "Enter") {
                                         e.stopPropagation();
                                         const target =
@@ -16440,7 +16604,7 @@ export default function App() {
                             type="text"
                             placeholder="Quick add activity (press Enter)"
                             className="font-medium bg-transparent border-none outline-none flex-1 text-gray-700 placeholder-gray-500"
-                            onKeyPress={(e) => {
+                            onKeyDown={(e) => {
                               const target = e.target as HTMLInputElement;
                               if (e.key === "Enter" && target.value.trim()) {
                                 quickAddDailyActivity(target.value);
@@ -16587,11 +16751,12 @@ export default function App() {
                   onSkipBreak={skipFlowmodoroBreak}
                   onReset={resetFlowmodoroState}
                   formatTime={formatTime}
+                  settings={settings}
                 />
               ) : null}
             </div>
 
-            {currentMode === "session" && (
+            {!showSettings && currentMode === "session" && (
               <>
                 <div className="space-y-4">
                   {durationType === "duration" ? (
@@ -17104,7 +17269,7 @@ export default function App() {
     );
 
   return (
-    <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans">
+    <div className="ts-app-root font-sans">
       {!controller.isController && (
         <div
           className="mx-auto mb-3 flex max-w-4xl items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
@@ -17131,7 +17296,9 @@ export default function App() {
         }
         aria-disabled={!controller.isController}
       >
-        {mainContent}
+        <AppShell active={activeDestination} onNavigate={handleShellNavigate}>
+          {mainContent}
+        </AppShell>
       </div>
       {/* Removed ColorPicker - using simple random colors instead */}
       {borrowModalState.isOpen && (
@@ -17192,7 +17359,12 @@ export default function App() {
 
       {/* Step 15: Activity Settings Modal */}
       {activitySettingsModal.isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Activity settings"
+        >
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[80vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex items-center justify-between mb-4">

@@ -2,8 +2,12 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.tsx";
-import { hydrateAppStorage } from "./lib/storage";
+import { appStorage, hydrateAppStorage } from "./lib/storage";
 import { timerController } from "./lib/controller";
+import {
+  applyAppearanceToDocument,
+  normalizeAppearanceSettings,
+} from "./lib/appearance";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -15,6 +19,14 @@ const root = createRoot(rootElement);
 async function boot() {
   try {
     await hydrateAppStorage();
+    const savedSettings = appStorage.getItem("timeSliceSettings");
+    let parsedSettings: Record<string, unknown> | undefined;
+    try {
+      parsedSettings = savedSettings ? JSON.parse(savedSettings) : undefined;
+    } catch {
+      parsedSettings = undefined;
+    }
+    applyAppearanceToDocument(normalizeAppearanceSettings(parsedSettings));
     await timerController.claim();
     root.render(
       <StrictMode>
