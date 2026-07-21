@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   allocateSessionSeconds,
   buildProgressEntries,
+  drainFlowBreakActivities,
   distributeEarlyCompletion,
 } from "./session";
 
@@ -69,5 +70,45 @@ describe("session progress model", () => {
     expect(
       Object.values(allocations).reduce((sum, value) => sum + value, 0),
     ).toBe(113 * 60);
+  });
+
+  it("drains one Flowmodoro source until it is empty", () => {
+    const first = drainFlowBreakActivities(
+      [
+        { id: "first", timeRemaining: 10 },
+        { id: "second", timeRemaining: 10 },
+      ],
+      3,
+    );
+    expect(first.activities.map((activity) => activity.timeRemaining)).toEqual([
+      7, 10,
+    ]);
+    expect(first.sourceId).toBe("first");
+
+    const second = drainFlowBreakActivities(
+      first.activities,
+      4,
+      first.sourceId,
+    );
+    expect(second.activities.map((activity) => activity.timeRemaining)).toEqual([
+      3, 10,
+    ]);
+    expect(second.sourceId).toBe("first");
+  });
+
+  it("moves to the next eligible Flowmodoro source only after exhaustion", () => {
+    const result = drainFlowBreakActivities(
+      [
+        { id: "first", timeRemaining: 2 },
+        { id: "second", timeRemaining: 10 },
+      ],
+      5,
+      "first",
+    );
+    expect(result.activities.map((activity) => activity.timeRemaining)).toEqual([
+      0, 7,
+    ]);
+    expect(result.drainedSecondsById).toEqual({ first: 2, second: 3 });
+    expect(result.sourceId).toBe("second");
   });
 });

@@ -9,6 +9,8 @@ export type SessionActivityLike = {
   isCompleted?: boolean;
   completedElapsedSeconds?: number;
   showOnBar?: boolean;
+  priority?: boolean;
+  isLocked?: boolean;
 };
 
 export type ProgressEntry = SessionActivityLike & {
@@ -115,6 +117,58 @@ export const allocateSessionSeconds = (
       .map((activity) => [activity.id, 0]),
     ...allocations.map((item) => [item.id, item.seconds]),
   ]);
+};
+
+export const drainFlowBreakActivities = (
+  activities: SessionActivityLike[],
+  seconds: number,
+  preferredSourceId: string | null = null,
+) => {
+  const next = activities.map((activity) => ({ ...activity }));
+  const drainedSecondsById: Record<string, number> = {};
+  let remaining = Math.max(0, Math.floor(seconds));
+  let sourceId = preferredSourceId;
+
+  const isEligible = (activity: SessionActivityLike | undefined) =>
+    Boolean(
+      activity &&
+        !activity.isCompleted &&
+        !activity.countUp &&
+        Number.isFinite(activity.timeRemaining) &&
+        (activity.timeRemaining || 0) > 0,
+    );
+  const tier = (activity: SessionActivityLike) =>
+    activity.priority ? (activity.isLocked ? 3 : 2) : activity.isLocked ? 1 : 0;
+
+  while (remaining > 0) {
+    let source = next.find((activity) => activity.id === sourceId);
+    if (!isEligible(source)) {
+      source = next
+        .map((activity, index) => ({ activity, index }))
+        .filter(({ activity }) => isEligible(activity))
+        .sort(
+          (left, right) =>
+            tier(left.activity) - tier(right.activity) ||
+            left.index - right.index,
+        )[0]?.activity;
+      sourceId = source?.id || null;
+    }
+    if (!source) break;
+
+    const drained = Math.min(remaining, Math.max(0, source.timeRemaining || 0));
+    source.timeRemaining = Math.max(0, (source.timeRemaining || 0) - drained);
+    drainedSecondsById[source.id] =
+      (drainedSecondsById[source.id] || 0) + drained;
+    remaining -= drained;
+    if ((source.timeRemaining || 0) <= 0) sourceId = null;
+  }
+
+  return {
+    activities: next,
+    sourceId,
+    drainedSecondsById,
+    drainedSeconds: Math.max(0, Math.floor(seconds)) - remaining,
+  };
 };
 
 export type EarlyCompletionPolicy = "vault" | "target" | "distribute";

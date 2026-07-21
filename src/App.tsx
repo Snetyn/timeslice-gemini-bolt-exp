@@ -11,6 +11,7 @@ import { isNewDay } from "./lib/timing";
 import {
   allocateSessionSeconds,
   buildProgressEntries,
+  drainFlowBreakActivities,
   distributeEarlyCompletion,
 } from "./lib/session";
 import { SessionReportModal } from "./components/SessionReportModal";
@@ -7949,6 +7950,12 @@ export default function App() {
   const [durationType, setDurationType] = useState("duration");
   const [endTime, setEndTime] = useState("23:30");
   const [vaultTime, setVaultTime] = useState(0);
+  const vaultTimeRef = useRef(0);
+  const flowBreakDrainSourceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    vaultTimeRef.current = vaultTime;
+  }, [vaultTime]);
 
   // Mode state - 'session', 'daily', 'single', or 'flowmodoro'
   const [currentMode, setCurrentMode] = useState("session");
@@ -9216,6 +9223,7 @@ export default function App() {
       return;
 
     const breakDuration = Math.min(duration, flowmodoroState.availableRestTime);
+    flowBreakDrainSourceRef.current = null;
 
     setFlowmodoroState((prev) => ({
       ...prev,
@@ -9230,6 +9238,7 @@ export default function App() {
   };
 
   const skipFlowmodoroBreak = () => {
+    flowBreakDrainSourceRef.current = null;
     setFlowmodoroState((prev) => ({
       ...prev,
       isOnBreak: false,
@@ -9240,6 +9249,7 @@ export default function App() {
   };
 
   const resetFlowmodoroState = () => {
+    flowBreakDrainSourceRef.current = null;
     setFlowmodoroState((prev) => ({
       ...prev,
       availableRestTime: 0,
@@ -9987,39 +9997,79 @@ export default function App() {
       flowmodoroState.isOnBreak &&
       flowmodoroState.breakTimeRemaining > 0;
 
+    const flowBreakDrainActive =
+      settings.flowmodoroEnabled &&
+      settings.flowmodoroMode === "drain" &&
+      flowmodoroState.isOnBreak &&
+      flowmodoroState.breakTimeRemaining > 0;
+    const elapsedBreakSeconds =
+      pauseForFlowBreak || flowBreakDrainActive
+        ? Math.min(elapsedSeconds, flowmodoroState.breakTimeRemaining)
+        : 0;
+    const normalSessionSeconds = elapsedSeconds - elapsedBreakSeconds;
+    let flowActivityDrainSeconds = 0;
+
+    if (flowBreakDrainActive && elapsedBreakSeconds > 0) {
+      const availableVaultSeconds = Math.max(0, vaultTimeRef.current);
+      const vaultDrainSeconds = Math.min(
+        availableVaultSeconds,
+        elapsedBreakSeconds,
+      );
+      if (vaultDrainSeconds > 0) {
+        const nextVaultSeconds = availableVaultSeconds - vaultDrainSeconds;
+        vaultTimeRef.current = nextVaultSeconds;
+        setVaultTime(nextVaultSeconds);
+      }
+      flowActivityDrainSeconds = elapsedBreakSeconds - vaultDrainSeconds;
+    } else {
+      flowBreakDrainSourceRef.current = null;
+    }
+
     setActivities((prev) => {
       if (elapsedSeconds <= 0) return prev;
-      if (pauseForFlowBreak) return prev;
 
-      let newActivities = [...prev];
-      let secondsToProcess = elapsedSeconds;
+      let newActivities = prev;
+      if (flowActivityDrainSeconds > 0) {
+        const result = drainFlowBreakActivities(
+          newActivities,
+          flowActivityDrainSeconds,
+          flowBreakDrainSourceRef.current,
+        );
+        newActivities = result.activities as Activity[];
+        flowBreakDrainSourceRef.current = result.sourceId;
+        Object.entries(result.drainedSecondsById).forEach(
+          ([activityId, drainedSeconds]) => {
+            const donated = drainStatsRef.current.donated;
+            donated[activityId] =
+              (donated[activityId] || 0) + drainedSeconds;
+          },
+        );
+      }
+
+      if (normalSessionSeconds <= 0) return newActivities;
+
+      newActivities = newActivities.map((activity) => ({ ...activity }));
+      let secondsToProcess = normalSessionSeconds;
 
       while (secondsToProcess > 0) {
         const current = newActivities[currentActivityIndex];
         if (!current) break;
 
-        const flowBreakDrainActive =
-          settings.flowmodoroEnabled &&
-          settings.flowmodoroMode === "drain" &&
-          flowmodoroState.isOnBreak &&
-          (flowmodoroState.breakTimeRemaining || 0) > 0;
         if (current.countUp) {
           // For count-up activities, we add time instead of subtracting
           current.timeRemaining += secondsToProcess;
           secondsToProcess = 0; // Count-up activities don't "complete" in the traditional sense
         } else {
-          if (!flowBreakDrainActive) {
-            if (current.timeRemaining > 0) {
-              const timeToTake = Math.min(
-                secondsToProcess,
-                current.timeRemaining,
-              );
-              current.timeRemaining -= timeToTake;
-              secondsToProcess -= timeToTake;
-            }
+          if (current.timeRemaining > 0) {
+            const timeToTake = Math.min(
+              secondsToProcess,
+              current.timeRemaining,
+            );
+            current.timeRemaining -= timeToTake;
+            secondsToProcess -= timeToTake;
           }
 
-          if (!flowBreakDrainActive && current.timeRemaining <= 0) {
+          if (current.timeRemaining <= 0) {
             if (settings.overtimeType === "drain") {
               // Donor ordering: not locked & not priority -> locked & not priority -> priority (not locked) -> priority & locked
               const donorPools: ((typeof newActivities)[number] & {
@@ -10101,57 +10151,6 @@ export default function App() {
             }
           }
         }
-
-        // Flowmodoro break drain: single-source hierarchy (vault -> groups by classifyForDrain)
-        if (
-          settings.flowmodoroEnabled &&
-          settings.flowmodoroMode === "drain" &&
-          flowmodoroState.isOnBreak &&
-          (flowmodoroState.breakTimeRemaining || 0) > 0
-        ) {
-          let drainedFromBreak = false;
-          // Single-source hierarchy drain: vault -> lowest tier with available time (non priority & unlocked) -> ...
-          let need = 1;
-          if (vaultTime > 0 && need > 0) {
-            setVaultTime((v) => Math.max(0, v - 1));
-            need -= 1;
-            drainedFromBreak = true;
-            recordDrain(null, null); // vault drain (not attributing)
-          }
-          if (need > 0) {
-            const tierPools: { idx: number; act: any }[][] = [[], [], [], []];
-            newActivities.forEach((a, i) => {
-              if (a.isCompleted || a.countUp) return;
-              if (typeof a.timeRemaining !== "number" || a.timeRemaining <= 0)
-                return;
-              tierPools[classifyForDrain(a)].push({ idx: i, act: a });
-            });
-            const tier = tierPools.find((p) => p.length > 0);
-            if (tier && tier.length) {
-              // rotate deterministically
-              const pick =
-                tier[
-                  (lastDrainedIndex.current =
-                    (lastDrainedIndex.current + 1) % tier.length)
-                ];
-              newActivities[pick.idx].timeRemaining = Math.max(
-                0,
-                (newActivities[pick.idx].timeRemaining || 0) - 1,
-              );
-              need = 0;
-              drainedFromBreak = true;
-              recordDrain(newActivities[pick.idx].id, null);
-            }
-          }
-          if (flowBreakDrainActive) {
-            if (drainedFromBreak) {
-              secondsToProcess = Math.max(0, secondsToProcess - 1);
-            } else {
-              // Nothing could be drained, so exit the loop to prevent stalling
-              secondsToProcess = 0;
-            }
-          }
-        }
       }
       return newActivities;
     });
@@ -10159,6 +10158,7 @@ export default function App() {
     currentActivityIndex,
     settings.overtimeType,
     settings.flowmodoroEnabled,
+    settings.flowmodoroMode,
     settings.flowmodoroRatio,
     settings.flowmodoroMaxProgressMinutes,
     flowmodoroState.isOnBreak,
