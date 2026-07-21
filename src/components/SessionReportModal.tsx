@@ -31,9 +31,16 @@ const minutes = (seconds: number) =>
 export function SessionReportModal({
   report,
   onClose,
+  history = [],
+  onSelectHistory,
 }: {
   report: SessionReport;
   onClose: () => void;
+  history?: Array<{
+    id: string;
+    value: { completedAtMs: number; report: SessionReport };
+  }>;
+  onSelectHistory?: (report: SessionReport) => void;
 }) {
   const planned = Math.max(0, report.totals.planned);
   const actual = Math.max(0, report.totals.actual);
@@ -177,6 +184,30 @@ export function SessionReportModal({
               );
             })}
         </div>
+        {history.length > 0 && (
+          <details className="mt-4 rounded-lg border border-slate-200 p-3 text-sm">
+            <summary className="cursor-pointer font-semibold text-slate-700">
+              Recent sessions ({history.length})
+            </summary>
+            <div className="mt-2 space-y-2">
+              {history.slice(0, 8).map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="flex w-full items-center justify-between rounded-md bg-slate-50 px-2 py-2 text-left hover:bg-slate-100"
+                  onClick={() => onSelectHistory?.(item.value.report)}
+                >
+                  <span>
+                    {new Date(item.value.completedAtMs).toLocaleString()}
+                  </span>
+                  <span className="font-semibold">
+                    {Math.round(item.value.report.totals.pct)}%
+                  </span>
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
         <div className="mt-5 flex justify-end">
           <button
             type="button"

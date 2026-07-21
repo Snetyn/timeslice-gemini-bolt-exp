@@ -1,20 +1,27 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { appStorage, STORAGE_KEY } from "./storage";
+import {
+  appStorage,
+  hydrateAppStorage,
+  resetAppStorageForTests,
+} from "./storage";
+import { timeSliceDb } from "../data/timesliceDb";
 
 describe("appStorage", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(async () => {
+    await resetAppStorageForTests();
+    window.localStorage.clear();
+  });
 
-  it("uses a single v2 envelope without touching legacy values", () => {
+  it("imports legacy data without touching browser localStorage", async () => {
     window.localStorage.setItem("timeSliceActivities", '["legacy"]');
-    appStorage.setItem("timeSliceActivities", '["new"]');
+    await hydrateAppStorage();
 
-    expect(appStorage.getItem("timeSliceActivities")).toBe('["new"]');
+    expect(appStorage.getItem("timeSliceActivities")).toBe('["legacy"]');
     expect(window.localStorage.getItem("timeSliceActivities")).toBe(
       '["legacy"]',
     );
-    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual({
-      version: 2,
-      values: { timeSliceActivities: '["new"]' },
-    });
+    expect((await timeSliceDb.sessionActivities.get("all"))?.value).toBe(
+      '["legacy"]',
+    );
   });
 });

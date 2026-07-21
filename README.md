@@ -15,9 +15,13 @@ and Flowmodoro modes. It is a Vite + React progressive web app.
 
 ## Local data
 
-The refreshed app writes its state to a versioned `timeslice.state.v2` localStorage
-envelope. It intentionally does not import, modify, or delete legacy `timeSlice*`
-keys, so rolling back to a previous build remains possible.
+TimeSlice now uses IndexedDB as its primary local database. On first launch it
+copies the existing `timeslice.state.v2` envelope and any missing legacy
+`timeSlice*` values into a versioned database without changing or deleting the
+old localStorage keys. Timers use persisted timestamps rather than persisted
+per-second counters; an installed PWA can request protected device storage from
+Timer Settings. A second open TimeSlice window is view-only until it explicitly
+takes control.
 
 ## PWA behavior
 
