@@ -11,7 +11,7 @@
     "test": "vitest run --config vitest.config.ts --environment jsdom",
     "test:watch": "vitest --config vitest.config.ts --environment jsdom",
     "test:e2e": "playwright test",
-    "format:check": "prettier --check \"src/lib/**/*.{ts,tsx}\" \"e2e/**/*.{ts,tsx}\" playwright.config.ts vitest.config.ts tsconfig.json package.json index.html public/service-worker.js src/index.css",
+    "format:check": "prettier --check \"src/lib/**/*.{ts,tsx}\" \"src/components/**/*.{ts,tsx}\" \"e2e/**/*.{ts,tsx}\" playwright.config.ts vitest.config.ts tsconfig.json package.json index.html public/service-worker.js src/index.css",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
     "serve": "npm run build && npm run preview"
   },

@@ -2,6 +2,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { appStorage } from './lib/storage';
 import { isNewDay } from './lib/timing';
+import { buildProgressEntries, distributeEarlyCompletion } from './lib/session';
+import { SessionReportModal } from './components/SessionReportModal';
 
 // Keep the existing component code isolated from browser storage details. This
 // facade writes only to `timeslice.state.v2`, leaving legacy installations
@@ -1616,32 +1618,9 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   const lastFillShownRef = useRef<Record<string, number>>({});
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
-  const totalTime = activities.reduce((sum, act) => {
-    if (act.percentage > 0) {
-      return sum + (act.percentage / 100) * totalSessionSeconds;
-    } else if (act.duration > 0) {
-      return sum + (act.duration * 60);
-    }
-    return sum;
-  }, 0);
-
-  // Helper: compute actual elapsed seconds per activity (includes overtime and count-up)
-  const perActivityElapsed = activities.map(act => {
-    let planned = 0;
-    if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
-    else if (act.duration && act.duration > 0) planned = act.duration * 60;
-
-    if (act.countUp) {
-      return Math.max(0, act.timeRemaining || 0);
-    }
-    const tr = act.timeRemaining;
-    if (typeof tr === 'number') {
-      // If tr >= 0, elapsed = planned - tr; if tr < 0, elapsed = planned + |tr| (overtime)
-      return Math.max(0, planned - tr);
-    }
-    // No timer yet → zero elapsed
-    return 0;
-  });
+  const progressEntries = buildProgressEntries(activities, totalSessionSeconds);
+  const totalTime = progressEntries.reduce((sum, entry) => sum + entry.plannedSeconds, 0);
+  const perActivityElapsed = progressEntries.map(entry => entry.elapsedSeconds);
   const totalElapsed = perActivityElapsed.reduce((s, v) => s + v, 0);
   // Only treat count-up activities as triggering fallback once they have produced elapsed time
   const hasAnyCountUp = activities.some(a => a.countUp);
@@ -1669,6 +1648,7 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
     return <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`} />;
   }
 
+  let augmentedActivities = activities;
   // Optional aggregation (tags) – detect synthetic marker on first activity
   if (activities.length && (activities as any)[0].__aggregateMode === 'tag') {
     try {
@@ -1714,7 +1694,6 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
 
   // Optionally append a synthetic Flowmodoro pseudo-activity that reserves planned width
   // This should not alter upstream scheduling so we keep it local to progress visualization
-  let augmentedActivities = activities;
   if (showFlowmodoroActivity && flowmodoroActivityCapSeconds > 0) {
     const capMinutes = flowmodoroActivityCapSeconds / 60;
     const pseudo: any = {
@@ -1999,24 +1978,6 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   }
 
   if (style === 'dynamicColor') {
-    // Compute actual elapsed seconds per activity, including overtime and count-up
-    const perActivityElapsed = activities.map(act => {
-      let planned = 0;
-      if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
-      else if (act.duration && act.duration > 0) planned = act.duration * 60;
-
-      if (act.countUp) {
-        return Math.max(0, act.timeRemaining || 0);
-      }
-      const tr = act.timeRemaining;
-      if (typeof tr === 'number') {
-        // If tr >= 0, elapsed = planned - tr; if tr < 0, elapsed = planned + |tr| (overtime)
-        return Math.max(0, planned - tr);
-      }
-      // No timer yet → zero elapsed
-      return 0;
-    });
-    const totalElapsed = perActivityElapsed.reduce((s, v) => s + v, 0);
     // Fallback to previous behavior if nothing has elapsed yet
     if (totalElapsed <= 0) {
       return (
@@ -2044,7 +2005,6 @@ const VisualProgress = ({ activities, style, className, overallProgress, current
   // Default style
   return (
     <div className={`relative h-4 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
-      <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
       <div className="h-full transition-all" style={{ width: `${overallProgress}%`, backgroundColor: '#0f172a' }} />
     </div>
   );
@@ -2118,14 +2078,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   
   // Calculate total time considering both allocated and added activities
   const totalSessionSeconds = totalSessionMinutes * 60;
-  const totalTime = workingActivities.reduce((sum, act) => {
-    if (act.percentage > 0) {
-      return sum + (act.percentage / 100) * totalSessionSeconds;
-    } else if (act.duration > 0) {
-      return sum + (act.duration * 60);
-    }
-    return sum;
-  }, 0);
+  const circularEntries = buildProgressEntries(workingActivities, totalSessionSeconds);
+  const totalTime = circularEntries.reduce((sum, entry) => sum + entry.plannedSeconds, 0);
 
   const activityOffset = activityCircumference - (activityProgress / 100) * activityCircumference;
 
@@ -2136,21 +2090,8 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
   };
 
   const renderOuterRing = () => {
-    // If no planned time, but elapsed exists (e.g., count-up), render elapsed-based ring instead of nothing
-  const perElapsedForFallback = workingActivities.map(act => {
-      let planned = 0;
-      if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
-      else if (act.duration && act.duration > 0) planned = act.duration * 60;
-
-      if (act.countUp) {
-        return Math.max(0, act.timeRemaining || 0);
-      }
-      const tr = act.timeRemaining;
-      if (typeof tr === 'number') {
-        return tr >= 0 ? Math.max(0, planned - tr) : planned + Math.abs(tr);
-      }
-      return 0;
-    });
+    // Linear and circular views share the same count-up/completion/overtime model.
+  const perElapsedForFallback = circularEntries.map(entry => entry.elapsedSeconds);
     const totalElapsedForFallback = perElapsedForFallback.reduce((s, v) => s + v, 0);
     if (totalTime === 0) {
       if (totalElapsedForFallback <= 0) return null;
@@ -2180,21 +2121,7 @@ const CircularProgress = ({ activities, style, totalProgress, activityProgress, 
     }
 
     if (style === 'dynamicColor') {
-      // Compute elapsed seconds per activity (includes overtime and count-up)
-  const perElapsed = workingActivities.map(act => {
-        let planned = 0;
-        if (act.percentage && act.percentage > 0) planned = (act.percentage / 100) * totalSessionSeconds;
-        else if (act.duration && act.duration > 0) planned = act.duration * 60;
-
-        if (act.countUp) {
-          return Math.max(0, act.timeRemaining || 0);
-        }
-        const tr = act.timeRemaining;
-        if (typeof tr === 'number') {
-          return tr >= 0 ? Math.max(0, planned - tr) : planned + Math.abs(tr);
-        }
-        return 0;
-      });
+      const perElapsed = circularEntries.map(entry => entry.elapsedSeconds);
       const totalElapsed = perElapsed.reduce((s, v) => s + v, 0);
       if (totalElapsed <= 0) return null;
 
@@ -3185,7 +3112,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], existingColo
       if (selectedTemplate.category) effectiveCategory = selectedTemplate.category;
       if (selectedTemplate.tags) effectiveTags = selectedTemplate.tags;
     } else if (!name) {
-      name = "New Activity";
+      return;
     }
 
     if (usePresetTime) {
@@ -3504,7 +3431,7 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], existingColo
 
             {!activityName.trim() && !selectedTemplate && (
               <p className="text-sm text-gray-500 text-center">
-                Choose a template or leave empty to use "New Activity"
+            Enter a task name or choose a template
               </p>
             )}
           </div>
@@ -3513,8 +3440,8 @@ const AddActivityModal = ({ isOpen, onClose, onAdd, templates = [], existingColo
             <Button variant="outline" onClick={handleClose} className="px-6">
               Cancel
             </Button>
-            <Button onClick={handleAdd} className="px-6">
-              Add {selectedTemplate ? `"${selectedTemplate.name}"` : activityName.trim() ? `"${activityName.trim()}"` : '"New Activity"'}
+            <Button onClick={handleAdd} disabled={!selectedTemplate && !activityName.trim()} className="px-6">
+              Add {selectedTemplate ? `"${selectedTemplate.name}"` : activityName.trim() ? `"${activityName.trim()}"` : ''}
             </Button>
           </div>
         </CardContent>
@@ -6303,6 +6230,8 @@ export default function App() {
     showDragPlaceholders: true, // NEW: allow disabling drag gap highlight
     segmentHighlightStyle: 'pulse', // 'pulse' | 'bracket' | 'none'
     segmentShowCompletedStripes: true, // visually differentiate completed segments
+    earlyCompletionPolicy: 'vault', // 'vault' | 'target' | 'distribute'
+    earlyCompletionTargetId: '',
   redistributionUseVaultFirst: true, // new: take from vault before shrinking activities
   redistributionProportional: false, // new: use proportional instead of per-second loop
     flowmodoroIcon: '🌟',
@@ -7909,6 +7838,9 @@ export default function App() {
   // - Daily mode when at least one daily activity is active (status 'active' or 'overtime')
   const hasActiveDailyWork = currentMode === 'daily' && dailyActivities.some(a => a.isActive || a.status === 'active' || a.status === 'overtime');
     if (settings.flowmodoroEnabled && !flowmodoroState.isOnBreak && ((isTimerActive && !isPaused) || hasActiveDailyWork)) {
+      // Persist the same wall-clock anchor used for the tick so visibility
+      // recovery awards only the genuinely missed interval.
+      try { localStorage.setItem('flowLastWorkTs', String(nowMs)); } catch {}
       awardFlowmodoroWork(elapsedSeconds);
     }
 
@@ -8075,10 +8007,13 @@ export default function App() {
     const shouldRunTimer = (isTimerActive && !isPaused) || hasActiveDailyActivity || hasActiveFlowmodoroBreak;
     
     if (shouldRunTimer) {
-      lastTickTimestampRef.current = Date.now();
+      // Preserve the monotonic anchor across harmless rerenders. Resetting it
+      // here can create competing interval/visibility deltas for count-up.
+      if (!lastTickTimestampRef.current) lastTickTimestampRef.current = Date.now();
       const interval = setInterval(handleTimerTick, 1000);
       return () => clearInterval(interval);
     }
+    lastTickTimestampRef.current = 0;
   }, [
     isTimerActive,
     isPaused,
@@ -9702,7 +9637,7 @@ export default function App() {
   const handleCompleteActivity = (activityId: string) => {
     let timeToVault = 0;
     let completedActivity: Activity | null = null;
-    const updatedActivities = activities.map(act => {
+    let updatedActivities = activities.map(act => {
       if (act.id === activityId && !act.isCompleted) {
         // Compute actual elapsed seconds for this activity
         const plannedSec = (!act.countUp)
@@ -9743,6 +9678,18 @@ export default function App() {
       }
       return act;
     });
+
+    if (timeToVault > 0 && isTimerActive && settings.earlyCompletionPolicy !== 'vault') {
+      const redistribution = distributeEarlyCompletion(
+        updatedActivities,
+        activityId,
+        timeToVault,
+        settings.earlyCompletionPolicy,
+        settings.earlyCompletionTargetId,
+      );
+      updatedActivities = redistribution.activities as Activity[];
+      timeToVault = redistribution.vaultSeconds;
+    }
 
   if (timeToVault > 0) {
       setVaultTime(prev => prev + timeToVault);
@@ -9979,7 +9926,7 @@ export default function App() {
 
       const delta = actual - planned;
       const pct = planned > 0 ? (actual / planned) * 100 : 0;
-      return { id: a.id, name: a.name, planned, actual, delta, pct, overtimeSeconds, drainedSeconds, receivedOvertime };
+      return { id: a.id, name: a.name, color: a.color, planned, actual, delta, pct, overtimeSeconds, drainedSeconds, receivedOvertime };
     });
     const totals = rows.reduce((acc, r) => {
       acc.planned += r.planned; acc.actual += r.actual; acc.overtime += r.overtimeSeconds; acc.drained += r.drainedSeconds; acc.received += r.receivedOvertime; return acc;
@@ -10030,6 +9977,8 @@ export default function App() {
   // Ensure currentActivityIndex is valid and currentActivity exists
   const validCurrentActivityIndex = Math.max(0, Math.min(currentActivityIndex, activities.length - 1));
   const currentActivity = activities[validCurrentActivityIndex] || null;
+  const displayActivities = activities.filter(activity => activity.showOnBar !== false);
+  const displayCurrentActivityIndex = displayActivities.findIndex(activity => activity.id === currentActivity?.id);
 
   // If no current activity exists, this indicates a serious state issue
   if (isTimerActive && !currentActivity) {
@@ -10116,9 +10065,9 @@ export default function App() {
     <div className="max-w-2xl mx-auto">
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle className="text-lg sm:text-xl">TimeSlice Timer</CardTitle>
-            <div className="flex space-x-1 sm:space-x-2">
+            <div className="grid w-full grid-cols-4 gap-1 sm:w-auto sm:flex sm:space-x-2">
               <Button variant="outline" size="sm" onClick={pauseResumeTimer} className="h-7 w-16 sm:h-8 sm:w-20 text-xs">
                 <Icon name={isPaused ? "play" : "pause"} className="h-3 w-3 mr-1" />
                 {isPaused ? "Resume" : "Pause"}
@@ -10148,19 +10097,32 @@ export default function App() {
           {settings.showMainProgress && (
             settings.progressView === 'circular' ? (
               <CircularProgress
-                activities={activities.filter(a => a.showOnBar !== false)}
+                activities={displayActivities}
                 style={settings.progressBarStyle}
                 totalProgress={getOverallProgress()}
                 activityProgress={activityProgress}
                 activityColor={currentActivity?.color}
                 totalSessionMinutes={totalSessionMinutes}
-                currentActivityIndex={currentActivityIndex}
+                currentActivityIndex={displayCurrentActivityIndex}
                 showAllocationRing={settings.showCircularAllocation}
                 flowmodoroOverlaySeconds={(settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.availableRestTime > 0) ? flowmodoroState.availableRestTime : 0}
                 flowmodoroOverlayColor={'#8b5cf6'}
                 settings={settings}
               />
-            ) : null
+            ) : (
+              <VisualProgress
+                activities={displayActivities}
+                style={settings.progressBarStyle}
+                overallProgress={getOverallProgress()}
+                currentActivityColor={currentActivity?.color}
+                totalSessionMinutes={totalSessionMinutes}
+                currentActivityIndex={displayCurrentActivityIndex}
+                showDrainOverlay={settings.showDrainOverlay}
+                flowmodoroOverlaySeconds={(settings.flowmodoroEnabled && settings.flowmodoroMode === 'drain' && flowmodoroState.availableRestTime > 0) ? flowmodoroState.availableRestTime : 0}
+                flowmodoroOverlayColor={'#8b5cf6'}
+                className="mb-2"
+              />
+            )
           )}
           <div className="text-center space-y-2">
             <div className="flex items-center justify-center space-x-2">
@@ -10389,6 +10351,9 @@ export default function App() {
   ) : (
     <div className="max-w-4xl mx-auto px-4 sm:px-6">
       {sessionReportOpen && lastSessionReport && (
+        <SessionReportModal report={lastSessionReport} onClose={() => setSessionReportOpen(false)} />
+      )}
+      {false && sessionReportOpen && lastSessionReport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-4 sm:p-5">
             <div className="flex items-center justify-between mb-2">
@@ -10540,6 +10505,34 @@ export default function App() {
                     <Button size="sm" variant={settings.overtimeType === 'postpone' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, overtimeType: 'postpone' }))}>Postpone</Button>
                     <Button size="sm" variant={settings.overtimeType === 'drain' ? 'default' : 'outline'} onClick={() => setSettings(prev => ({ ...prev, overtimeType: 'drain' }))}>Drain</Button>
                   </div>
+                </div>
+                <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                  <div>
+                    <Label htmlFor="early-completion-policy">Early completion</Label>
+                    <p className="mt-1 text-xs text-slate-500">Choose where unused countdown time goes when a task is marked complete.</p>
+                  </div>
+                  <select
+                    id="early-completion-policy"
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                    value={settings.earlyCompletionPolicy}
+                    onChange={(event) => setSettings(prev => ({ ...prev, earlyCompletionPolicy: event.target.value, earlyCompletionTargetId: event.target.value === 'target' ? prev.earlyCompletionTargetId : '' }))}
+                  >
+                    <option value="vault">Send unused time to vault</option>
+                    <option value="target">Add it to one task (keep session end)</option>
+                    <option value="distribute">Distribute it across remaining tasks (keep session end)</option>
+                  </select>
+                  {settings.earlyCompletionPolicy === 'target' && (
+                    <select
+                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                      value={settings.earlyCompletionTargetId}
+                      onChange={(event) => setSettings(prev => ({ ...prev, earlyCompletionTargetId: event.target.value }))}
+                    >
+                      <option value="">Choose a target task</option>
+                      {activities.filter(activity => !activity.isCompleted && !activity.countUp).map(activity => (
+                        <option key={activity.id} value={activity.id}>{activity.name}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 <Separator />
                 <div className="space-y-2">

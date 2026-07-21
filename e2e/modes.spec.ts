@@ -32,3 +32,13 @@ test("the mode workspace remains usable at a mobile viewport", async ({
     page.getByRole("heading", { name: /Daily Progress/i }),
   ).toBeVisible();
 });
+
+test("early-completion redistribution is configurable", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  const policy = page.locator("#early-completion-policy");
+  await expect(policy).toBeVisible();
+  await policy.selectOption("distribute");
+  await expect(policy).toHaveValue("distribute");
+});
