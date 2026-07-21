@@ -17127,7 +17127,16 @@ export default function App() {
           </Button>
         </div>
       )}
-      {mainContent}
+      <div
+        className={
+          controller.isController
+            ? undefined
+            : "pointer-events-none select-none opacity-75"
+        }
+        aria-disabled={!controller.isController}
+      >
+        {mainContent}
+      </div>
       {/* Removed ColorPicker - using simple random colors instead */}
       {borrowModalState.isOpen && (
         <BorrowTimeModal
