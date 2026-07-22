@@ -25,8 +25,11 @@ describe("appStorage", () => {
     );
   });
 
-  it("keeps the Phase 0 database schema at version 2", async () => {
+  it("adds the Phase 1 ledger at database version 3", async () => {
     await hydrateAppStorage();
-    expect(timeSliceDb.verno).toBe(2);
+    expect(timeSliceDb.verno).toBe(3);
+    expect(timeSliceDb.tables.map((table) => table.name)).toContain(
+      "activitySessions",
+    );
   });
 });

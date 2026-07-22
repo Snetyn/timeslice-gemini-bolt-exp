@@ -16,6 +16,14 @@ import {
   MutationIdConflictError,
   type SessionHistoryRecord,
 } from "./timesliceDb";
+import {
+  applyActivitySessionCommand,
+  type ActivitySessionCommand,
+} from "./activitySessionRepository";
+import type {
+  ActivitySessionContext,
+  ActivitySessionEndReason,
+} from "../domain/activitySession";
 
 export { MutationIdConflictError } from "./timesliceDb";
 
@@ -42,9 +50,10 @@ export async function saveTimer(
     expectedRevision,
     timer,
   }),
+  activityCommand?: ActivitySessionCommand,
 ) {
   return transactIdempotent(
-    ["timers"],
+    activityCommand ? ["timers", "activitySessions"] : ["timers"],
     { id: mutationId, fingerprint: mutationFingerprint },
     async (workspaceRevision) => {
       const existing = await timeSliceDb.timers.get(timer.id);
@@ -61,6 +70,9 @@ export async function saveTimer(
         revision: workspaceRevision,
         updatedAtMs: Date.now(),
       });
+      if (activityCommand) {
+        await applyActivitySessionCommand(activityCommand, workspaceRevision);
+      }
       return next;
     },
   );
@@ -77,7 +89,31 @@ export async function reconcilePersistedTimer(id: string, nowMs = Date.now()) {
   ) {
     return stored.value;
   }
-  return (await saveTimer(next, stored.value.revision)).value;
+  const activityCommand: ActivitySessionCommand | undefined =
+    stored.value.status === "running" && next.status === "completed"
+      ? {
+          type: "end",
+          sourceTimerId: id,
+          atMs: next.updatedAtMs,
+          reason: "automatic",
+        }
+      : undefined;
+  const mutationId = crypto.randomUUID();
+  return (
+    await saveTimer(
+      next,
+      stored.value.revision,
+      mutationId,
+      JSON.stringify({
+        kind: "timer-reconcile",
+        timerId: id,
+        expectedRevision: stored.value.revision,
+        timer: next,
+        activityCommand,
+      }),
+      activityCommand,
+    )
+  ).value;
 }
 
 export async function reconcileAllTimers(nowMs = Date.now()) {
@@ -134,6 +170,10 @@ export async function transitionTimer(
     nowMs?: number;
     targetDurationMs?: number | null;
     mutationId?: string;
+    recording?: {
+      context?: ActivitySessionContext;
+      endReason?: ActivitySessionEndReason;
+    };
   } = {},
 ) {
   const nowMs = options.nowMs ?? Date.now();
@@ -144,6 +184,7 @@ export async function transitionTimer(
     command,
     nowMs,
     targetDurationMs: options.targetDurationMs,
+    recording: options.recording,
   });
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const existing =
@@ -171,12 +212,37 @@ export async function transitionTimer(
                     options.targetDurationMs ?? existing.targetDurationMs,
                   );
     try {
+      const activityCommand: ActivitySessionCommand | undefined =
+        command === "start" && options.recording?.context
+          ? {
+              type: "start",
+              sourceTimerId: id,
+              atMs: nowMs,
+              context: options.recording.context,
+            }
+          : command !== "checkpoint" && options.recording
+            ? {
+                type: "end",
+                sourceTimerId: id,
+                atMs: nowMs,
+                reason:
+                  options.recording.endReason ||
+                  (command === "pause"
+                    ? "paused"
+                    : command === "complete"
+                      ? "completed"
+                      : command === "reset"
+                        ? "reset"
+                        : "cancelled"),
+              }
+            : undefined;
       return (
         await saveTimer(
           next,
           existing.revision,
           mutationId,
           mutationFingerprint,
+          activityCommand,
         )
       ).value;
     } catch (error) {

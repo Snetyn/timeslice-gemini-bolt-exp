@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { TimerState } from "../domain/timer";
 import type { PersistedSessionRun } from "../domain/sessionSnapshot";
+import type { ActivitySessionRecord } from "../domain/activitySession";
 
 export type VersionedRecord<T> = {
   id: string;
@@ -28,6 +29,7 @@ type TransactionTable = keyof Pick<
   | "timers"
   | "sessionReports"
   | "sessionRuns"
+  | "activitySessions"
   | "compatibility"
   | "meta"
 >;
@@ -50,6 +52,7 @@ export class TimeSliceDatabase extends Dexie {
   timers!: EntityTable<VersionedRecord<TimerState>, "id">;
   sessionReports!: EntityTable<SessionHistoryRecord, "id">;
   sessionRuns!: EntityTable<VersionedRecord<PersistedSessionRun>, "id">;
+  activitySessions!: EntityTable<ActivitySessionRecord, "id">;
   compatibility!: EntityTable<VersionedRecord<string>, "id">;
   meta!: EntityTable<MetaRecord, "id">;
 
@@ -70,6 +73,10 @@ export class TimeSliceDatabase extends Dexie {
     });
     this.version(2).stores({
       sessionRuns: "id, revision, updatedAtMs",
+    });
+    this.version(3).stores({
+      activitySessions:
+        "id, sourceTimerId, status, activityId, startedAtMs, endedAtMs, updatedAtMs, [sourceTimerId+status]",
     });
   }
 }

@@ -14,12 +14,23 @@ import {
   distributeEarlyCompletion,
 } from "./lib/session";
 import { SessionReportModal } from "./components/SessionReportModal";
+import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
 import { timerController } from "./lib/controller";
 import { getTimer, transitionTimer } from "./data/timerRepository";
 import { snapshotTimer } from "./domain/timer";
 import { advanceSessionRun } from "./domain/sessionRun";
+import {
+  adHocActivityId,
+  type ActivitySessionContext,
+  type ActivitySessionEndReason,
+} from "./domain/activitySession";
+import {
+  applyActivitySessionTrace,
+  endActivitySession,
+  switchActivitySession,
+} from "./data/activitySessionRepository";
 import { useElapsedScheduler } from "./hooks/useElapsedScheduler";
 import { elapsedSecondsAt } from "./domain/modeTime";
 import {
@@ -95,6 +106,38 @@ interface Activity {
   startTime?: string;
   endTime?: string;
 }
+
+const sessionRecordingContext = (
+  activity: Activity,
+  kind?: ActivitySessionContext["kind"],
+): ActivitySessionContext => ({
+  activityId: activity.id,
+  activityName: activity.name,
+  activityColor: activity.color,
+  source: "session",
+  kind:
+    kind ||
+    (activity.countUp
+      ? "count-up"
+      : Number(activity.timeRemaining || 0) < 0
+        ? "overtime"
+        : "countdown"),
+});
+
+const dailyRecordingContext = (activity: Activity): ActivitySessionContext => ({
+  activityId: activity.id,
+  activityName: activity.name,
+  activityColor: activity.color,
+  source: "daily",
+  kind: "standard",
+});
+
+const singleRecordingContext = (name: string): ActivitySessionContext => ({
+  activityId: adHocActivityId(name),
+  activityName: name.trim() || "Single activity",
+  source: "single",
+  kind: "count-up",
+});
 
 interface ActivityTemplate {
   id: string;
@@ -7696,6 +7739,10 @@ export default function App() {
   const [storagePersistent, setStoragePersistent] = useState<boolean | null>(
     null,
   );
+  const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
+  const ensuredSessionRecordingRef = useRef("");
+  const ensuredDailyRecordingRef = useRef("");
+  const ensuredSingleRecordingRef = useRef("");
   const requestPersistentStorage = useCallback(async () => {
     if (!navigator.storage?.persist) return;
     try {
@@ -7716,15 +7763,30 @@ export default function App() {
         | "cancel"
         | "reset",
       targetDurationMs?: number | null,
+      recording?: {
+        context?: ActivitySessionContext;
+        endReason?: ActivitySessionEndReason;
+      },
+      nowMs?: number,
     ) => {
       if (!timerController.getSnapshot().isController) return;
-      await transitionTimer(id, transition, { targetDurationMs });
+      await transitionTimer(id, transition, {
+        targetDurationMs,
+        recording,
+        nowMs,
+      });
     },
     [],
   );
   const persistSessionTimer = useCallback(
-    (transition: "start" | "pause" | "reset") =>
-      persistModeTimer("session", transition),
+    (
+      transition: "start" | "pause" | "reset",
+      recording?: {
+        context?: ActivitySessionContext;
+        endReason?: ActivitySessionEndReason;
+      },
+      nowMs?: number,
+    ) => persistModeTimer("session", transition, undefined, recording, nowMs),
     [persistModeTimer],
   );
   // Local date helper for rollover logic
@@ -9205,6 +9267,45 @@ export default function App() {
       return;
 
     const breakDuration = Math.min(duration, flowmodoroState.availableRestTime);
+    const breakStartedAtMs = Date.now();
+    ensuredSessionRecordingRef.current = "";
+    ensuredDailyRecordingRef.current = "";
+    ensuredSingleRecordingRef.current = "";
+    if (
+      timerController.getSnapshot().isController &&
+      isTimerActive &&
+      !isPaused
+    ) {
+      void endActivitySession(
+        "session",
+        "flow-break",
+        breakStartedAtMs,
+      ).catch((error) =>
+        console.error("Failed to pause Session activity recording", error),
+      );
+    }
+    if (timerController.getSnapshot().isController && activeDailyActivity) {
+      void endActivitySession(
+        `daily:${activeDailyActivity}`,
+        "flow-break",
+        breakStartedAtMs,
+      ).catch((error) =>
+        console.error("Failed to pause Daily activity recording", error),
+      );
+    }
+    if (
+      timerController.getSnapshot().isController &&
+      singleActivityState.isActive &&
+      !singleActivityState.isPaused
+    ) {
+      void endActivitySession(
+        "single",
+        "flow-break",
+        breakStartedAtMs,
+      ).catch((error) =>
+        console.error("Failed to pause Single activity recording", error),
+      );
+    }
     flowBreakDrainSourceRef.current = null;
     const nextFlowmodoroState = {
       ...flowmodoroState,
@@ -9278,25 +9379,37 @@ export default function App() {
 
   // Single Activity Mode handlers
   const startSingleActivity = (activityName) => {
+    const now = new Date();
+    ensuredSingleRecordingRef.current = adHocActivityId(activityName);
     setSingleActivityState((prev) => ({
       ...prev,
       isActive: true,
       isPaused: false,
       activityName,
-      startTime: new Date(),
+      startTime: now,
       elapsedSeconds: 0,
     }));
-    void persistModeTimer("single", "start").catch((error) =>
+    void persistModeTimer(
+      "single",
+      "start",
+      undefined,
+      { context: singleRecordingContext(activityName) },
+      now.getTime(),
+    ).catch((error) =>
       console.error("Failed to start Single timer", error),
     );
   };
 
   const toggleSingleActivityPause = () => {
     const resume = Boolean(singleActivityState.isPaused);
+    const now = new Date();
+    ensuredSingleRecordingRef.current = resume
+      ? adHocActivityId(singleActivityState.activityName)
+      : "";
     setSingleActivityState((prev) => {
       if (!prev.isActive) return prev;
       if (prev.isPaused) {
-        return { ...prev, isPaused: false, startTime: new Date() };
+        return { ...prev, isPaused: false, startTime: now };
       }
       return {
         ...prev,
@@ -9309,7 +9422,15 @@ export default function App() {
         startTime: null,
       };
     });
-    void persistModeTimer("single", resume ? "start" : "pause").catch(
+    void persistModeTimer(
+      "single",
+      resume ? "start" : "pause",
+      undefined,
+      resume
+        ? { context: singleRecordingContext(singleActivityState.activityName) }
+        : { endReason: "paused" },
+      now.getTime(),
+    ).catch(
       (error) => console.error("Failed to persist Single pause", error),
     );
   };
@@ -9319,6 +9440,11 @@ export default function App() {
     isChaining = false,
     newActivityName = "",
   ) => {
+    const completedAt = new Date();
+    ensuredSingleRecordingRef.current =
+      isChaining && newActivityName.trim()
+        ? adHocActivityId(newActivityName)
+        : "";
     const completedDuration = elapsedSecondsAt({
       accumulatedSeconds: singleActivityState.elapsedSeconds,
       startedAt: singleActivityState.startTime,
@@ -9328,7 +9454,7 @@ export default function App() {
     const completedActivity = {
       name: singleActivityState.activityName,
       reward: rewardSeconds,
-      completedAt: new Date(),
+      completedAt,
       duration: completedDuration,
     };
 
@@ -9357,7 +9483,7 @@ export default function App() {
           isActive: true,
           isPaused: false,
           activityName: newActivityName.trim(),
-          startTime: new Date(), // Start new activity immediately
+          startTime: completedAt, // Start new activity immediately
           elapsedSeconds: 0,
           chain: newChain,
           currentChainStreak: streak,
@@ -9384,9 +9510,21 @@ export default function App() {
       totalEarnedToday: prev.totalEarnedToday + rewardSeconds,
     }));
     void (async () => {
-      await persistModeTimer("single", "complete");
+      await persistModeTimer(
+        "single",
+        "complete",
+        undefined,
+        { endReason: "completed" },
+        completedAt.getTime(),
+      );
       if (isChaining && newActivityName.trim()) {
-        await persistModeTimer("single", "start");
+        await persistModeTimer(
+          "single",
+          "start",
+          undefined,
+          { context: singleRecordingContext(newActivityName) },
+          completedAt.getTime(),
+        );
       }
     })().catch((error) =>
       console.error("Failed to complete Single timer", error),
@@ -9394,6 +9532,8 @@ export default function App() {
   };
 
   const cancelSingleActivity = (chainResetOnly = false) => {
+    const nowMs = Date.now();
+    ensuredSingleRecordingRef.current = "";
     setSingleActivityState((prev) => ({
       ...prev,
       isActive: false,
@@ -9406,7 +9546,13 @@ export default function App() {
       // If full cancel, reset everything
       ...(chainResetOnly ? {} : { chain: [], currentChainStreak: 0 }),
     }));
-    void persistModeTimer("single", "cancel").catch((error) =>
+    void persistModeTimer(
+      "single",
+      "cancel",
+      undefined,
+      { endReason: "cancelled" },
+      nowMs,
+    ).catch((error) =>
       console.error("Failed to cancel Single timer", error),
     );
   };
@@ -9644,6 +9790,43 @@ export default function App() {
             lastDrainedIndex.current = transition.donorCursor;
             vaultTimeRef.current = transition.vaultSeconds;
             setVaultTime(transition.vaultSeconds);
+            const traceHasBoundary =
+              transition.activitySlices.length > 1 ||
+              transition.completedActivityIds.length > 0 ||
+              transition.currentActivityIndex !==
+                sessionState.currentActivityIndex ||
+              (transition.activitySlices[0]?.offsetSeconds || 0) > 0;
+            if (
+              timerController.getSnapshot().isController &&
+              traceHasBoundary
+            ) {
+              const nextCurrent =
+                transition.activities[transition.currentActivityIndex] || null;
+              if (nextCurrent && !transition.isComplete) {
+                const nextContext = sessionRecordingContext(
+                  nextCurrent as Activity,
+                );
+                ensuredSessionRecordingRef.current = `${nextContext.activityId}:${nextContext.kind}`;
+              } else {
+                ensuredSessionRecordingRef.current = "";
+              }
+              void applyActivitySessionTrace({
+                sourceTimerId: "session",
+                observedAtMs,
+                elapsedSeconds: timeGapSeconds,
+                slices: transition.activitySlices,
+                activities: transition.activities.map((activity) =>
+                  sessionRecordingContext(activity as Activity),
+                ),
+                currentActivity:
+                  nextCurrent && !transition.isComplete
+                    ? sessionRecordingContext(nextCurrent as Activity)
+                    : null,
+                continues: !transition.isComplete,
+              }).catch((error) =>
+                console.error("Failed to restore Session activity trace", error),
+              );
+            }
             void persistSessionRunSnapshot("running", {
               activities: transition.activities as Activity[],
               currentActivityIndex: transition.currentActivityIndex,
@@ -9858,7 +10041,8 @@ export default function App() {
     applyPlannedDurations,
   ]);
 
-  const handleTimerTick = useCallback((elapsedSeconds: number) => {
+  const handleTimerTick = useCallback(
+    (elapsedSeconds: number, observedAtMs = Date.now()) => {
     // Check for daily flowmodoro reset
     const now = new Date();
     if (currentMode === "daily") {
@@ -10050,7 +10234,52 @@ export default function App() {
             (drainStatsRef.current.received[activityId] || 0) + seconds;
         },
       );
+      const traceHasBoundary =
+        transition.activitySlices.length > 1 ||
+        transition.completedActivityIds.length > 0 ||
+        transition.currentActivityIndex !== currentActivityIndex ||
+        (transition.activitySlices[0]?.offsetSeconds || 0) > 0;
+      if (
+        timerController.getSnapshot().isController &&
+        traceHasBoundary
+      ) {
+        const nextCurrent =
+          transition.activities[transition.currentActivityIndex] || null;
+        if (nextCurrent && !transition.isComplete) {
+          const nextContext = sessionRecordingContext(nextCurrent as Activity);
+          ensuredSessionRecordingRef.current = `${nextContext.activityId}:${nextContext.kind}`;
+        } else {
+          ensuredSessionRecordingRef.current = "";
+        }
+        const breakConsumesWholeBatch =
+          activeFlowBreak &&
+          elapsedSeconds <= flowmodoroState.breakTimeRemaining;
+        void applyActivitySessionTrace({
+          sourceTimerId: "session",
+          observedAtMs,
+          elapsedSeconds,
+          slices: transition.activitySlices,
+          activities: transition.activities.map((activity) =>
+            sessionRecordingContext(activity as Activity),
+          ),
+          currentActivity:
+            nextCurrent && !transition.isComplete
+              ? sessionRecordingContext(nextCurrent as Activity)
+              : null,
+          continues:
+            hasRunningSession &&
+            !transition.isComplete &&
+            !breakConsumesWholeBatch,
+        }).catch((error) =>
+          console.error("Failed to persist Session activity trace", error),
+        );
+      }
       if (transition.currentActivityIndex !== currentActivityIndex) {
+        const nextActivity =
+          transition.activities[transition.currentActivityIndex];
+        ensuredSessionRecordingRef.current = nextActivity
+          ? `${nextActivity.id}:${sessionRecordingContext(nextActivity as Activity).kind}`
+          : "";
         setCurrentActivityIndex(transition.currentActivityIndex);
         currentActivityIndexRef.current = transition.currentActivityIndex;
         void persistSessionRunSnapshot("running", {
@@ -10971,8 +11200,9 @@ export default function App() {
 
   const startDailyActivity = (activityId) => {
     console.log("Starting daily activity:", activityId);
+    const now = new Date();
+    ensuredDailyRecordingRef.current = activityId;
     setDailyActivities((prev: any) => {
-      const now = new Date();
       const activities = prev.map((activity: any) => {
         let timeSpentSeconds = Number.isFinite(activity.timeSpentSeconds)
           ? activity.timeSpentSeconds
@@ -11028,15 +11258,33 @@ export default function App() {
     setActiveDailyActivity(activityId);
     void (async () => {
       if (previousActiveId && previousActiveId !== activityId) {
-        await persistModeTimer(`daily:${previousActiveId}`, "pause");
+        await persistModeTimer(
+          `daily:${previousActiveId}`,
+          "pause",
+          undefined,
+          { endReason: "switched" },
+          now.getTime(),
+        );
       }
-      await persistModeTimer(`daily:${activityId}`, "start", dailyTargetMs);
+      await persistModeTimer(
+        `daily:${activityId}`,
+        "start",
+        dailyTargetMs,
+        selectedDaily
+          ? { context: dailyRecordingContext(selectedDaily) }
+          : undefined,
+        now.getTime(),
+      );
     })().catch((error) =>
       console.error("Failed to start Daily timer", error),
     );
   };
 
   const toggleDailyActivityCompletion = (activityId: string) => {
+    const nowMs = Date.now();
+    if (activeDailyActivity === activityId) {
+      ensuredDailyRecordingRef.current = "";
+    }
     setDailyActivities((prev) =>
       prev.map((activity) => {
         if (activity.id !== activityId) return activity;
@@ -11099,6 +11347,11 @@ export default function App() {
     void persistModeTimer(
       `daily:${activityId}`,
       selected?.status === "completed" ? "reset" : "complete",
+      undefined,
+      selected?.status === "completed"
+        ? undefined
+        : { endReason: "completed" },
+      nowMs,
     ).catch((error) =>
       console.error("Failed to persist Daily completion", error),
     );
@@ -11106,6 +11359,8 @@ export default function App() {
 
   const stopDailyActivity = () => {
     console.log("Stopping daily activity");
+    const nowMs = Date.now();
+    ensuredDailyRecordingRef.current = "";
     setDailyActivities((prev) =>
       prev.map((activity) => {
         if (activity.isActive && activity.startedAt) {
@@ -11136,7 +11391,13 @@ export default function App() {
     const stoppedId = activeDailyActivity;
     setActiveDailyActivity(null);
     if (stoppedId) {
-      void persistModeTimer(`daily:${stoppedId}`, "pause").catch((error) =>
+      void persistModeTimer(
+        `daily:${stoppedId}`,
+        "pause",
+        undefined,
+        { endReason: "paused" },
+        nowMs,
+      ).catch((error) =>
         console.error("Failed to pause Daily timer", error),
       );
     }
@@ -11148,9 +11409,15 @@ export default function App() {
       prev.filter((activity) => activity.id !== activityId),
     );
     if (activeDailyActivity === activityId) {
+      ensuredDailyRecordingRef.current = "";
       setActiveDailyActivity(null);
     }
-    void persistModeTimer(`daily:${activityId}`, "cancel").catch((error) =>
+    void persistModeTimer(
+      `daily:${activityId}`,
+      "cancel",
+      undefined,
+      { endReason: "cancelled" },
+    ).catch((error) =>
       console.error("Failed to cancel Daily timer", error),
     );
   };
@@ -12061,10 +12328,19 @@ export default function App() {
 
   const startSession = () => {
     if (Math.abs(totalPercentage - 100) < 0.1 && activities.length > 0) {
+      const nowMs = Date.now();
+      const firstIncompleteIndex = activities.findIndex((a) => !a.isCompleted);
+      const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
+      const startingContext = sessionRecordingContext(activities[newIndex]);
+      ensuredSessionRecordingRef.current = `${startingContext.activityId}:${startingContext.kind}`;
       console.log("Starting session with activities:", activities);
       setIsTimerActive(true);
       setIsPaused(false);
-      void persistSessionTimer("start").catch((error) =>
+      void persistSessionTimer(
+        "start",
+        { context: startingContext },
+        nowMs,
+      ).catch((error) =>
         console.error("Failed to start persisted session timer", error),
       );
       // If fresh start, freeze plan and reset snapshots; if resuming, initialize snapshot to current elapsed
@@ -12117,8 +12393,6 @@ export default function App() {
         });
         sharedElapsedSnapshotRef.current = byShared;
       }
-      const firstIncompleteIndex = activities.findIndex((a) => !a.isCompleted);
-      const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
       console.log(
         "Setting current activity index to:",
         newIndex,
@@ -12142,8 +12416,21 @@ export default function App() {
   };
 
   const pauseResumeTimer = () => {
+    const nowMs = Date.now();
+    if (isPaused && activities[currentActivityIndex]) {
+      const context = sessionRecordingContext(activities[currentActivityIndex]);
+      ensuredSessionRecordingRef.current = `${context.activityId}:${context.kind}`;
+    } else {
+      ensuredSessionRecordingRef.current = "";
+    }
     setIsPaused((prev) => !prev);
-    void persistSessionTimer(isPaused ? "start" : "pause").catch((error) =>
+    void persistSessionTimer(
+      isPaused ? "start" : "pause",
+      isPaused && activities[currentActivityIndex]
+        ? { context: sessionRecordingContext(activities[currentActivityIndex]) }
+        : { endReason: "paused" },
+      nowMs,
+    ).catch((error) =>
       console.error("Failed to persist session pause", error),
     );
     void persistSessionRunSnapshot(isPaused ? "running" : "paused").catch(
@@ -12152,6 +12439,8 @@ export default function App() {
   };
 
   const resetSession = useCallback(() => {
+    const nowMs = Date.now();
+    ensuredSessionRecordingRef.current = "";
     setIsTimerActive(false);
     setIsPaused(false);
     setVaultTime(0);
@@ -12169,7 +12458,11 @@ export default function App() {
       })),
     );
     setCurrentActivityIndex(0);
-    void persistSessionTimer("reset").catch((error) =>
+    void persistSessionTimer(
+      "reset",
+      { endReason: "reset" },
+      nowMs,
+    ).catch((error) =>
       console.error("Failed to reset persisted session timer", error),
     );
     void deleteSessionRun();
@@ -12185,6 +12478,21 @@ export default function App() {
   const switchToActivity = (index) => {
     if (!activities[index].isCompleted) {
       setCurrentActivityIndex(index);
+      currentActivityIndexRef.current = index;
+      const context = sessionRecordingContext(activities[index]);
+      ensuredSessionRecordingRef.current = `${context.activityId}:${context.kind}`;
+      if (
+        timerController.getSnapshot().isController &&
+        isTimerActive &&
+        !isPaused
+      ) {
+        void switchActivitySession(
+          "session",
+          context,
+        ).catch((error) =>
+          console.error("Failed to record Session activity switch", error),
+        );
+      }
     }
   };
 
@@ -12202,10 +12510,30 @@ export default function App() {
     if (pool.length > 0) {
       const randomIndex = pool[Math.floor(Math.random() * pool.length)];
       setCurrentActivityIndex(randomIndex);
+      currentActivityIndexRef.current = randomIndex;
+      const context = sessionRecordingContext(activities[randomIndex]);
+      ensuredSessionRecordingRef.current = `${context.activityId}:${context.kind}`;
+      if (
+        timerController.getSnapshot().isController &&
+        isTimerActive &&
+        !isPaused
+      ) {
+        void switchActivitySession(
+          "session",
+          context,
+        ).catch((error) =>
+          console.error("Failed to record random Session switch", error),
+        );
+      }
     }
-  }, [activities, currentActivityIndex]);
+  }, [activities, currentActivityIndex, isPaused, isTimerActive]);
 
   const handleCompleteActivity = (activityId: string) => {
+    const completedAtMs = Date.now();
+    const completedCurrentActivity =
+      isTimerActive &&
+      !isPaused &&
+      activities[currentActivityIndex]?.id === activityId;
     let timeToVault = 0;
     let completedActivity: Activity | null = null;
     let updatedActivities = activities.map((act) => {
@@ -12299,6 +12627,37 @@ export default function App() {
       } catch (e) {
         console.error("Failed to clear session state:", e);
       }
+      if (
+        timerController.getSnapshot().isController &&
+        completedCurrentActivity
+      ) {
+        void transitionTimer("session", "complete", {
+          nowMs: completedAtMs,
+          recording: { endReason: "completed" },
+        }).catch((error) =>
+          console.error("Failed to record completed Session", error),
+        );
+      }
+      return;
+    }
+
+    if (completedCurrentActivity) {
+      const nextIndex = reordered.findIndex((act) => !act.isCompleted);
+      if (nextIndex !== -1) {
+        setCurrentActivityIndex(nextIndex);
+        currentActivityIndexRef.current = nextIndex;
+        const nextContext = sessionRecordingContext(reordered[nextIndex]);
+        ensuredSessionRecordingRef.current = `${nextContext.activityId}:${nextContext.kind}`;
+        if (timerController.getSnapshot().isController) {
+          void switchActivitySession(
+            "session",
+            nextContext,
+            completedAtMs,
+          ).catch((error) =>
+            console.error("Failed to record next Session activity", error),
+          );
+        }
+      }
       return;
     }
 
@@ -12306,6 +12665,7 @@ export default function App() {
       const nextIndex = reordered.findIndex((act) => !act.isCompleted);
       if (nextIndex !== -1) {
         setCurrentActivityIndex(nextIndex);
+        currentActivityIndexRef.current = nextIndex;
       } else {
         setIsTimerActive(false);
         setSessionPlanFrozen(false);
@@ -12321,12 +12681,18 @@ export default function App() {
 
   // Exit session without resetting progress; preserves remaining times for resume
   const exitSession = () => {
+    const nowMs = Date.now();
+    ensuredSessionRecordingRef.current = "";
     setSessionPlanFrozen(true);
     setIsPaused(false);
     setIsTimerActive(false);
     // Reset vault on exit so it doesn't carry to next session
     setVaultTime(0);
-    void persistSessionTimer("pause").catch((error) =>
+    void persistSessionTimer(
+      "pause",
+      { endReason: "exited" },
+      nowMs,
+    ).catch((error) =>
       console.error("Failed to checkpoint session", error),
     );
     void deleteSessionRun();
@@ -12693,6 +13059,88 @@ export default function App() {
   const displayCurrentActivityIndex = displayActivities.findIndex(
     (activity) => activity.id === currentActivity?.id,
   );
+
+  useEffect(() => {
+    if (
+      !controller.isController ||
+      !isTimerActive ||
+      isPaused ||
+      flowmodoroState.isOnBreak ||
+      !currentActivity
+    ) {
+      ensuredSessionRecordingRef.current = "";
+      return;
+    }
+    const context = sessionRecordingContext(currentActivity);
+    const key = `${context.activityId}:${context.kind}`;
+    if (ensuredSessionRecordingRef.current === key) return;
+    ensuredSessionRecordingRef.current = key;
+    void switchActivitySession("session", context).catch((error) => {
+      ensuredSessionRecordingRef.current = "";
+      console.error("Failed to ensure active Session recording", error);
+    });
+  }, [
+    currentActivity?.id,
+    currentActivity?.countUp,
+    currentActivity?.timeRemaining < 0,
+    flowmodoroState.isOnBreak,
+    isPaused,
+    isTimerActive,
+    controller.isController,
+  ]);
+
+  useEffect(() => {
+    const active = dailyActivities.find(
+      (activity) => activity.id === activeDailyActivity && activity.isActive,
+    );
+    if (!controller.isController || !active || flowmodoroState.isOnBreak) {
+      ensuredDailyRecordingRef.current = "";
+      return;
+    }
+    if (ensuredDailyRecordingRef.current === active.id) return;
+    ensuredDailyRecordingRef.current = active.id;
+    void switchActivitySession(
+      `daily:${active.id}`,
+      dailyRecordingContext(active),
+    ).catch((error) => {
+      ensuredDailyRecordingRef.current = "";
+      console.error("Failed to ensure active Daily recording", error);
+    });
+  }, [
+    activeDailyActivity,
+    controller.isController,
+    dailyActivities,
+    flowmodoroState.isOnBreak,
+  ]);
+
+  useEffect(() => {
+    const name = singleActivityState.activityName?.trim();
+    if (
+      !controller.isController ||
+      !singleActivityState.isActive ||
+      singleActivityState.isPaused ||
+      flowmodoroState.isOnBreak ||
+      !name
+    ) {
+      ensuredSingleRecordingRef.current = "";
+      return;
+    }
+    const key = adHocActivityId(name);
+    if (ensuredSingleRecordingRef.current === key) return;
+    ensuredSingleRecordingRef.current = key;
+    void switchActivitySession("single", singleRecordingContext(name)).catch(
+      (error) => {
+        ensuredSingleRecordingRef.current = "";
+        console.error("Failed to ensure active Single recording", error);
+      },
+    );
+  }, [
+    flowmodoroState.isOnBreak,
+    controller.isController,
+    singleActivityState.activityName,
+    singleActivityState.isActive,
+    singleActivityState.isPaused,
+  ]);
 
   useEffect(() => {
     if (!isTimerActive || currentActivity) return;
@@ -13322,13 +13770,19 @@ export default function App() {
             onClose={() => setSessionReportOpen(false)}
           />
         )}
+        {activityHistoryOpen && (
+          <ActivityHistoryModal
+            onClose={() => setActivityHistoryOpen(false)}
+            readOnly={!controller.isController}
+          />
+        )}
         <Card className="overflow-hidden">
           <CardHeader>
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
               <CardTitle className="text-2xl sm:text-3xl font-bold">
                 TimeSlice
               </CardTitle>
-              <div className="flex items-center gap-2 w-full sm:w-auto">
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 <Button
                   variant="outline"
                   size="sm"
@@ -13337,6 +13791,14 @@ export default function App() {
                 >
                   <Icon name="settings" className="h-4 w-4 mr-2" />
                   Manage Activities
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setActivityHistoryOpen(true)}
+                  className="flex-1 sm:flex-none h-9 text-sm"
+                >
+                  History
                 </Button>
                 {/* Spider Chart button removed */}
                 {/* RPG Stats button removed */}
