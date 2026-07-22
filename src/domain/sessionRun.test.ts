@@ -133,6 +133,30 @@ describe("session run batch transition", () => {
     ]);
   });
 
+  it("characterizes the existing overtime donor tiers and top-first tie break", () => {
+    const result = advanceSessionRun({
+      activities: [
+        task("overtime", 0),
+        task("first", 2),
+        task("second", 2),
+        task("starred", 2, { priority: true }),
+        task("locked", 2, { isLocked: true }),
+      ],
+      currentActivityIndex: 0,
+      elapsedSeconds: 3,
+      overtimeMode: "drain",
+    });
+    expect(result.donatedSecondsById).toEqual({
+      first: 1,
+      second: 1,
+      locked: 1,
+    });
+    expect(result.activities.find((item) => item.id === "starred"))
+      .toMatchObject({ timeRemaining: 2 });
+    expect(result.activities.find((item) => item.id === "locked"))
+      .toMatchObject({ timeRemaining: 1 });
+  });
+
   it("traces postponed overtime without splitting a contiguous slice", () => {
     const result = advanceSessionRun({
       activities: [task("focus", 2)],

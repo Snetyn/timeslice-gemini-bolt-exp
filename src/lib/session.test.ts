@@ -111,4 +111,21 @@ describe("session progress model", () => {
     expect(result.drainedSecondsById).toEqual({ first: 2, second: 3 });
     expect(result.sourceId).toBe("second");
   });
+
+  it("characterizes current Flow donor ordering before protection changes", () => {
+    const result = drainFlowBreakActivities(
+      [
+        { id: "first", timeRemaining: 2 },
+        { id: "second", timeRemaining: 2 },
+        { id: "starred", timeRemaining: 2, priority: true },
+        { id: "locked", timeRemaining: 2, isLocked: true },
+      ],
+      5,
+    );
+    expect(result.drainedSecondsById).toEqual({
+      first: 2,
+      second: 2,
+      locked: 1,
+    });
+  });
 });
