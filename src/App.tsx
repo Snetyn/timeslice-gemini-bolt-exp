@@ -15,6 +15,7 @@ import {
 } from "./lib/session";
 import { SessionReportModal } from "./components/SessionReportModal";
 import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
+import { InsightsSheet } from "./components/InsightsSheet";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
 import { timerController } from "./lib/controller";
@@ -7777,6 +7778,7 @@ export default function App() {
     null,
   );
   const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [recentCanonicalActivities, setRecentCanonicalActivities] = useState([]);
   const ensuredSessionRecordingRef = useRef("");
   const ensuredDailyRecordingRef = useRef("");
@@ -13311,7 +13313,15 @@ export default function App() {
               <CardTitle className="text-lg sm:text-xl">
                 TimeSlice Timer
               </CardTitle>
-              <div className="grid w-full grid-cols-4 gap-1 sm:w-auto sm:flex sm:space-x-2">
+              <div className="grid w-full grid-cols-5 gap-1 sm:w-auto sm:flex sm:space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setInsightsOpen(true)}
+                  className="h-7 min-w-0 px-1 text-[11px] sm:h-8 sm:px-2 sm:text-xs"
+                >
+                  Insights
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -13842,6 +13852,14 @@ export default function App() {
                   className="flex-1 sm:flex-none h-9 text-sm"
                 >
                   History
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setInsightsOpen(true)}
+                  className="flex-1 sm:flex-none h-9 text-sm"
+                >
+                  Insights
                 </Button>
                 {/* Spider Chart button removed */}
                 {/* RPG Stats button removed */}
@@ -17235,6 +17253,14 @@ export default function App() {
       >
         {mainContent}
       </div>
+      <InsightsSheet
+        open={insightsOpen}
+        onClose={() => setInsightsOpen(false)}
+        onManage={() => {
+          setInsightsOpen(false);
+          setCurrentPage("manage-activities");
+        }}
+      />
       {/* Removed ColorPicker - using simple random colors instead */}
       {borrowModalState.isOpen && (
         <BorrowTimeModal
