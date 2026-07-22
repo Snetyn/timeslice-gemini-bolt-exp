@@ -16,6 +16,7 @@ import {
 import { SessionReportModal } from "./components/SessionReportModal";
 import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
 import { InsightsSheet } from "./components/InsightsSheet";
+import { ActivityManager } from "./components/ActivityManager";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
 import { timerController } from "./lib/controller";
@@ -7779,6 +7780,7 @@ export default function App() {
   );
   const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [catalogManagerOpen, setCatalogManagerOpen] = useState(false);
   const [recentCanonicalActivities, setRecentCanonicalActivities] = useState([]);
   const ensuredSessionRecordingRef = useRef("");
   const ensuredDailyRecordingRef = useRef("");
@@ -13839,7 +13841,7 @@ export default function App() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCurrentPage("manage-activities")}
+                  onClick={() => setCatalogManagerOpen(true)}
                   className="flex-1 sm:flex-none h-9 text-sm"
                 >
                   <Icon name="settings" className="h-4 w-4 mr-2" />
@@ -17258,6 +17260,14 @@ export default function App() {
         onClose={() => setInsightsOpen(false)}
         onManage={() => {
           setInsightsOpen(false);
+          setCatalogManagerOpen(true);
+        }}
+      />
+      <ActivityManager
+        open={catalogManagerOpen}
+        onClose={() => setCatalogManagerOpen(false)}
+        onOpenTimerLists={() => {
+          setCatalogManagerOpen(false);
           setCurrentPage("manage-activities");
         }}
       />
