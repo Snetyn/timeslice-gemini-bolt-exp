@@ -134,23 +134,17 @@ export const drainFlowBreakActivities = (
       activity &&
         !activity.isCompleted &&
         !activity.countUp &&
+        !activity.priority &&
         Number.isFinite(activity.timeRemaining) &&
         (activity.timeRemaining || 0) > 0,
     );
-  const tier = (activity: SessionActivityLike) =>
-    activity.priority ? (activity.isLocked ? 3 : 2) : activity.isLocked ? 1 : 0;
-
   while (remaining > 0) {
     let source = next.find((activity) => activity.id === sourceId);
     if (!isEligible(source)) {
       source = next
         .map((activity, index) => ({ activity, index }))
         .filter(({ activity }) => isEligible(activity))
-        .sort(
-          (left, right) =>
-            tier(left.activity) - tier(right.activity) ||
-            left.index - right.index,
-        )[0]?.activity;
+        .sort((left, right) => right.index - left.index)[0]?.activity;
       sourceId = source?.id || null;
     }
     if (!source) break;

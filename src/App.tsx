@@ -17,6 +17,8 @@ import { SessionReportModal } from "./components/SessionReportModal";
 import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
 import { InsightsSheet } from "./components/InsightsSheet";
 import { ActivityManager } from "./components/ActivityManager";
+import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
+import { confirmAllocation } from "./domain/timeAllocation";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
 import { timerController } from "./lib/controller";
@@ -7987,6 +7989,7 @@ export default function App() {
       earlyCompletionPolicy: "vault", // 'vault' | 'target' | 'distribute'
       earlyCompletionTargetId: "",
       redistributionUseVaultFirst: true, // new: take from vault before shrinking activities
+      preferredExtraTimeSource: null, // 'vault' | 'otherActivities' | null
       redistributionProportional: false, // new: use proportional instead of per-second loop
       flowmodoroIcon: "🌟",
       // Daily Mode specific settings
@@ -10410,6 +10413,13 @@ export default function App() {
     onElapsed: handleTimerTick,
     onCheckpoint: checkpointActiveSession,
   });
+  const [extraTimeFunding, setExtraTimeFunding] = useState({
+    isOpen: false,
+    targetActivityId: "",
+    requestedSeconds: 0,
+    source: "vault",
+    remember: false,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -10770,6 +10780,23 @@ export default function App() {
       category: category,
       tags: tags && tags.length ? tags : [],
     };
+
+    if (isTimerActive && presetTime > 0) {
+      newActivity.duration = 0;
+      newActivity.timeRemaining = 0;
+      newActivity.percentage = 0;
+      setActivities((previous) => [...previous, newActivity]);
+      setExtraTimeFunding({
+        isOpen: true,
+        targetActivityId: newActivity.id,
+        requestedSeconds: presetTime,
+        source:
+          settings.preferredExtraTimeSource ||
+          (settings.redistributionUseVaultFirst ? "vault" : "otherActivities"),
+        remember: false,
+      });
+      return;
+    }
 
     setActivities((prev) => {
       const existing = [...prev];
@@ -12758,6 +12785,33 @@ export default function App() {
     setBorrowModalState({ isOpen: false, activityId: "" });
     // Re-normalize planned visuals post manual augmentation
     recalibratePlannedVisuals();
+  };
+
+  const commitAllocationPreview = (preview) => {
+    const current = {
+      activities,
+      vaultSeconds: vaultTime,
+      sessionRevision: Number(sessionState?.lastReconciledAtMs || 0),
+    };
+    const result = confirmAllocation(preview, current);
+    if (!result.committed) {
+      window.alert("The Session changed while this preview was open. Review the refreshed values and try again.");
+      return false;
+    }
+    const nextActivities = result.preview.activities;
+    const nextVault = result.preview.vaultAfterSeconds;
+    setActivities(nextActivities);
+    setVaultTime(nextVault);
+    vaultTimeRef.current = nextVault;
+    if (isTimerActive) {
+      void persistSessionRunSnapshot("running", {
+        activities: nextActivities,
+        vaultSeconds: nextVault,
+        observedAtMs: Date.now(),
+      });
+    }
+    recalibratePlannedVisuals();
+    return true;
   };
 
   // Removed complex color picker system - using simple random colors like quick add works perfectly
@@ -17272,37 +17326,56 @@ export default function App() {
         }}
       />
       {/* Removed ColorPicker - using simple random colors instead */}
-      {borrowModalState.isOpen && (
-        <BorrowTimeModal
-          isOpen={borrowModalState.isOpen}
-          onClose={() => setBorrowModalState({ isOpen: false, activityId: "" })}
-          onBorrow={handleBorrowTime}
-          maxTime={vaultTime}
-          activityName={
-            activities.find((a) => a.id === borrowModalState.activityId)
-              ?.name || ""
+      <TimeAllocationDialog
+        open={borrowModalState.isOpen}
+        title="Borrow from Time Vault"
+        activities={activities}
+        vaultSeconds={vaultTime}
+        sessionRevision={Number(sessionState?.lastReconciledAtMs || 0)}
+        sourceId="vault"
+        targetId={borrowModalState.activityId}
+        onClose={() => setBorrowModalState({ isOpen: false, activityId: "" })}
+        onConfirm={commitAllocationPreview}
+      />
+      <TimeAllocationDialog
+        open={siphonModalState.isOpen}
+        title="Transfer time"
+        activities={activities}
+        vaultSeconds={vaultTime}
+        sessionRevision={Number(sessionState?.lastReconciledAtMs || 0)}
+        sourceId={siphonModalState.sourceActivityId}
+        targetId={siphonModalState.targetIsVault ? "vault" : siphonModalState.targetActivityId}
+        onClose={() => setSiphonModalState({ isOpen: false, sourceActivityId: "", targetActivityId: "", targetIsVault: false })}
+        onConfirm={commitAllocationPreview}
+      />
+      <TimeAllocationDialog
+        open={extraTimeFunding.isOpen}
+        title="Fund activity time"
+        activities={activities}
+        vaultSeconds={vaultTime}
+        sessionRevision={Number(sessionState?.lastReconciledAtMs || 0)}
+        operation="extra"
+        sourceId={extraTimeFunding.source}
+        targetId={extraTimeFunding.targetActivityId}
+        initialSeconds={extraTimeFunding.requestedSeconds}
+        onClose={() => setExtraTimeFunding((previous) => ({ ...previous, isOpen: false }))}
+        fundingChoice={{
+          value: extraTimeFunding.source,
+          onChange: (source) => setExtraTimeFunding((previous) => ({ ...previous, source })),
+          remember: extraTimeFunding.remember,
+          onRememberChange: (remember) => setExtraTimeFunding((previous) => ({ ...previous, remember })),
+        }}
+        onConfirm={(preview) => {
+          const committed = commitAllocationPreview(preview);
+          if (committed && extraTimeFunding.remember) {
+            setSettings((previous) => ({
+              ...previous,
+              preferredExtraTimeSource: extraTimeFunding.source,
+            }));
           }
-        />
-      )}
-      {siphonModalState.isOpen && (
-        <SiphonTimeModal
-          isOpen={siphonModalState.isOpen}
-          onClose={() =>
-            setSiphonModalState({
-              isOpen: false,
-              sourceActivityId: "",
-              targetActivityId: "",
-              targetIsVault: false,
-            })
-          }
-          onSiphon={siphonTime}
-          activities={activities}
-          vaultTime={vaultTime}
-          sourceActivityId={siphonModalState.sourceActivityId}
-          targetActivityId={siphonModalState.targetActivityId}
-          targetIsVault={siphonModalState.targetIsVault}
-        />
-      )}
+          return committed;
+        }}
+      />
       {addActivityModalState.isOpen && (
         <AddActivityModal
           isOpen={addActivityModalState.isOpen}

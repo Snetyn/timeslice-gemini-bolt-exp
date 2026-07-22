@@ -67,9 +67,6 @@ const ensureRemaining = (activity: SessionRunActivity) => ({
       : plannedSeconds(activity),
 });
 
-const drainTier = (activity: SessionRunActivity) =>
-  activity.priority ? (activity.isLocked ? 3 : 2) : activity.isLocked ? 1 : 0;
-
 const nextIncompleteIndex = (
   activities: SessionRunActivity[],
   afterIndex: number,
@@ -211,16 +208,13 @@ export function advanceSessionRun({
             index !== cursor &&
             !activity.isCompleted &&
             !activity.countUp &&
+            !activity.priority &&
             activity.timeRemaining > 0,
         )
-        .sort(
-          (left, right) =>
-            drainTier(left.activity) - drainTier(right.activity) ||
-            left.index - right.index,
-        );
+        .sort((left, right) => right.index - left.index);
       if (donors.length > 0) {
-        nextDonorCursor = (nextDonorCursor + 1) % donors.length;
-        const donor = donors[nextDonorCursor].activity;
+        const donor = donors[0].activity;
+        nextDonorCursor = donors[0].index;
         donor.timeRemaining -= 1;
         donatedSecondsById[donor.id] = (donatedSecondsById[donor.id] || 0) + 1;
         receivedSecondsById[current.id] =

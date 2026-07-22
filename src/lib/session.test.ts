@@ -81,9 +81,9 @@ describe("session progress model", () => {
       3,
     );
     expect(first.activities.map((activity) => activity.timeRemaining)).toEqual([
-      7, 10,
+      10, 7,
     ]);
-    expect(first.sourceId).toBe("first");
+    expect(first.sourceId).toBe("second");
 
     const second = drainFlowBreakActivities(
       first.activities,
@@ -91,9 +91,9 @@ describe("session progress model", () => {
       first.sourceId,
     );
     expect(second.activities.map((activity) => activity.timeRemaining)).toEqual([
-      3, 10,
+      10, 3,
     ]);
-    expect(second.sourceId).toBe("first");
+    expect(second.sourceId).toBe("second");
   });
 
   it("moves to the next eligible Flowmodoro source only after exhaustion", () => {
@@ -112,7 +112,7 @@ describe("session progress model", () => {
     expect(result.sourceId).toBe("second");
   });
 
-  it("characterizes current Flow donor ordering before protection changes", () => {
+  it("protects starred Flow donors and drains bottom-up", () => {
     const result = drainFlowBreakActivities(
       [
         { id: "first", timeRemaining: 2 },
@@ -123,9 +123,9 @@ describe("session progress model", () => {
       5,
     );
     expect(result.drainedSecondsById).toEqual({
-      first: 2,
+      first: 1,
       second: 2,
-      locked: 1,
+      locked: 2,
     });
   });
 });

@@ -103,10 +103,10 @@ describe("session run batch transition", () => {
     });
     expect(result.vaultSeconds).toBe(0);
     expect(result.activities.map((activity) => activity.timeRemaining)).toEqual(
-      [5, 10],
+      [10, 5],
     );
-    expect(result.donatedSecondsById).toEqual({ first: 5 });
-    expect(result.flowDrainSourceId).toBe("first");
+    expect(result.donatedSecondsById).toEqual({ second: 5 });
+    expect(result.flowDrainSourceId).toBe("second");
     expect(result.excludedSeconds).toBe(7);
     expect(result.activitySlices).toEqual([]);
   });
@@ -133,7 +133,7 @@ describe("session run batch transition", () => {
     ]);
   });
 
-  it("characterizes the existing overtime donor tiers and top-first tie break", () => {
+  it("protects starred overtime donors and drains bottom-up", () => {
     const result = advanceSessionRun({
       activities: [
         task("overtime", 0),
@@ -147,14 +147,13 @@ describe("session run batch transition", () => {
       overtimeMode: "drain",
     });
     expect(result.donatedSecondsById).toEqual({
-      first: 1,
       second: 1,
-      locked: 1,
+      locked: 2,
     });
     expect(result.activities.find((item) => item.id === "starred"))
       .toMatchObject({ timeRemaining: 2 });
     expect(result.activities.find((item) => item.id === "locked"))
-      .toMatchObject({ timeRemaining: 1 });
+      .toMatchObject({ timeRemaining: 0 });
   });
 
   it("traces postponed overtime without splitting a contiguous slice", () => {
