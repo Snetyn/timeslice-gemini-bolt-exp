@@ -7882,6 +7882,7 @@ export default function App() {
       showEndTime: true,
       showDualEndTime: false, // Show Active/Session predicted end side-by-side
       showSessionEndReport: true, // Show end-of-session report modal
+      sessionReportView: "summary", // 'summary' | 'tasks'
       showActivityTimer: true,
       showActivityProgress: false,
       activityProgressType: "drain",
@@ -13385,6 +13386,7 @@ export default function App() {
                           <input
                             type="checkbox"
                             className="h-4 w-4 rounded text-slate-600 focus:ring-slate-500"
+                            aria-label={`Complete ${activity.name}`}
                             checked={activity.isCompleted}
                             disabled={activity.isCompleted}
                             onChange={() => handleCompleteActivity(activity.id)}
@@ -13483,6 +13485,13 @@ export default function App() {
             report={lastSessionReport}
             history={sessionHistory}
             onSelectHistory={(report) => setLastSessionReport(report)}
+            view={settings.sessionReportView === "tasks" ? "tasks" : "summary"}
+            onViewChange={(view) =>
+              setSettings((previous) => ({
+                ...previous,
+                sessionReportView: view,
+              }))
+            }
             onClose={() => setSessionReportOpen(false)}
           />
         )}

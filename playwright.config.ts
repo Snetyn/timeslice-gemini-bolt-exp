@@ -1,10 +1,16 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const externalBaseUrl = (
+  globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  }
+).process?.env?.PLAYWRIGHT_BASE_URL;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: externalBaseUrl || "http://127.0.0.1:4173",
     trace: "retain-on-failure",
   },
   projects: [
@@ -17,10 +23,12 @@ export default defineConfig({
       use: { browserName: "chromium", ...devices["iPhone 13"] },
     },
   ],
-  webServer: {
-    command: "npm.cmd run preview",
-    url: "http://127.0.0.1:4173",
-    reuseExistingServer: true,
-    timeout: 30_000,
-  },
+  webServer: externalBaseUrl
+    ? undefined
+    : {
+        command: "npm.cmd run preview",
+        url: "http://127.0.0.1:4173",
+        reuseExistingServer: true,
+        timeout: 30_000,
+      },
 });

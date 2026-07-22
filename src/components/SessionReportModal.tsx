@@ -1,29 +1,12 @@
 import type { CSSProperties } from "react";
+import { SessionTaskWheel } from "./SessionTaskWheel";
+import {
+  normalizeReportView,
+  type SessionReport,
+  type SessionReportView,
+} from "../lib/sessionReport";
 
-export type SessionReportRow = {
-  id: string;
-  name: string;
-  color?: string;
-  planned: number;
-  actual: number;
-  delta: number;
-  overtimeSeconds: number;
-  drainedSeconds: number;
-  receivedOvertime: number;
-};
-
-export type SessionReport = {
-  rows: SessionReportRow[];
-  totals: {
-    planned: number;
-    actual: number;
-    delta: number;
-    pct: number;
-    overtime: number;
-    drained: number;
-    received: number;
-  };
-};
+export type { SessionReport, SessionReportRow } from "../lib/sessionReport";
 
 const minutes = (seconds: number) =>
   `${Math.max(0, Math.round(seconds / 60))}m`;
@@ -33,6 +16,8 @@ export function SessionReportModal({
   onClose,
   history = [],
   onSelectHistory,
+  view = "summary",
+  onViewChange,
 }: {
   report: SessionReport;
   onClose: () => void;
@@ -41,7 +26,10 @@ export function SessionReportModal({
     value: { completedAtMs: number; report: SessionReport };
   }>;
   onSelectHistory?: (report: SessionReport) => void;
+  view?: SessionReportView;
+  onViewChange?: (view: SessionReportView) => void;
 }) {
+  const activeView = normalizeReportView(view);
   const planned = Math.max(0, report.totals.planned);
   const actual = Math.max(0, report.totals.actual);
   const total = Math.max(1, planned + actual);
@@ -58,7 +46,12 @@ export function SessionReportModal({
       aria-modal="true"
       aria-labelledby="session-report-title"
     >
-      <div className="w-full max-w-2xl rounded-t-2xl bg-white p-4 shadow-2xl sm:rounded-2xl sm:p-6">
+      <div
+        className="max-h-[100dvh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-t-2xl bg-white p-4 shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl sm:p-6"
+        style={{
+          paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+        }}
+      >
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -81,43 +74,74 @@ export function SessionReportModal({
           </button>
         </div>
 
-        <div className="mt-5 grid grid-cols-[9rem_1fr] items-center gap-5 rounded-xl bg-slate-50 p-4 sm:grid-cols-[11rem_1fr]">
-          <div
-            className="relative mx-auto h-32 w-32 rounded-full sm:h-40 sm:w-40"
-            style={donutStyle}
-            aria-label={`Planned ${minutes(planned)}, actual ${minutes(actual)}`}
+        <div
+          className="mt-4 grid grid-cols-2 rounded-lg bg-slate-100 p-1"
+          role="tablist"
+          aria-label="Session report visualization"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeView === "summary"}
+            className={`min-h-11 rounded-md px-3 py-2 text-sm font-semibold ${activeView === "summary" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"}`}
+            onClick={() => onViewChange?.("summary")}
           >
-            <div className="absolute inset-4 flex flex-col items-center justify-center rounded-full bg-white text-center sm:inset-5">
-              <span className="text-xs text-slate-500">Actual / plan</span>
-              <strong className="text-xl text-slate-900">
-                {Math.round(report.totals.pct)}%
-              </strong>
-            </div>
-          </div>
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <div className="rounded-lg bg-sky-50 p-2">
-                <span className="block text-xs text-sky-700">Planned</span>
-                <strong>{minutes(planned)}</strong>
-              </div>
-              <div className="rounded-lg bg-violet-50 p-2">
-                <span className="block text-xs text-violet-700">Actual</span>
-                <strong>{minutes(actual)}</strong>
-              </div>
-            </div>
-            <p
-              className={`text-sm font-semibold ${deltaPositive ? "text-emerald-700" : "text-rose-700"}`}
-            >
-              {deltaPositive ? "+" : "−"}
-              {minutes(Math.abs(report.totals.delta))} against plan
-            </p>
-            {report.totals.overtime > 0 && (
-              <p className="text-xs text-amber-700">
-                Overtime: {minutes(report.totals.overtime)}
-              </p>
-            )}
-          </div>
+            Summary
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeView === "tasks"}
+            className={`min-h-11 rounded-md px-3 py-2 text-sm font-semibold ${activeView === "tasks" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"}`}
+            onClick={() => onViewChange?.("tasks")}
+          >
+            Task wheel
+          </button>
         </div>
+
+        {activeView === "summary" ? (
+          <div className="mt-3 grid grid-cols-[9rem_1fr] items-center gap-5 rounded-xl bg-slate-50 p-4 sm:grid-cols-[11rem_1fr]">
+            <div
+              className="relative mx-auto h-32 w-32 rounded-full sm:h-40 sm:w-40"
+              style={donutStyle}
+              aria-label={`Planned ${minutes(planned)}, actual ${minutes(actual)}`}
+            >
+              <div className="absolute inset-4 flex flex-col items-center justify-center rounded-full bg-white text-center sm:inset-5">
+                <span className="text-xs text-slate-500">Actual / plan</span>
+                <strong className="text-xl text-slate-900">
+                  {Math.round(report.totals.pct)}%
+                </strong>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="rounded-lg bg-sky-50 p-2">
+                  <span className="block text-xs text-sky-700">Planned</span>
+                  <strong>{minutes(planned)}</strong>
+                </div>
+                <div className="rounded-lg bg-violet-50 p-2">
+                  <span className="block text-xs text-violet-700">Actual</span>
+                  <strong>{minutes(actual)}</strong>
+                </div>
+              </div>
+              <p
+                className={`text-sm font-semibold ${deltaPositive ? "text-emerald-700" : "text-rose-700"}`}
+              >
+                {deltaPositive ? "+" : "−"}
+                {minutes(Math.abs(report.totals.delta))} against plan
+              </p>
+              {report.totals.overtime > 0 && (
+                <p className="text-xs text-amber-700">
+                  Overtime: {minutes(report.totals.overtime)}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3">
+            <SessionTaskWheel report={report} />
+          </div>
+        )}
 
         <div className="mt-5 max-h-72 space-y-2 overflow-y-auto pr-1">
           {report.rows
