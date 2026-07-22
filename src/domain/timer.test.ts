@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createTimer,
   checkpointTimer,
+  completeTimer,
   elapsedAt,
   pauseTimer,
   reconcileTimer,
@@ -38,5 +39,13 @@ describe("timestamp timer", () => {
     const checkpoint = checkpointTimer(running, 4_000);
     expect(elapsedAt(checkpoint, 4_000)).toBe(3_000);
     expect(elapsedAt(checkpoint, 7_000)).toBe(6_000);
+  });
+
+  it("completes a running timer at an explicit semantic boundary", () => {
+    const running = startTimer(createTimer("daily", 1_000), 1_000);
+    const completed = completeTimer(running, 4_500);
+    expect(completed.status).toBe("completed");
+    expect(completed.accumulatedMs).toBe(3_500);
+    expect(completed.startedAtMs).toBeNull();
   });
 });

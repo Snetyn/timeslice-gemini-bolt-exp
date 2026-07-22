@@ -193,3 +193,16 @@ export const cancelTimer = (
     endAtMs: null,
   });
 };
+
+export const completeTimer = (
+  timer: TimerState,
+  nowMs = Date.now(),
+): TimerState => {
+  const observedAtMs = observeNow(timer, nowMs);
+  return next(timer, observedAtMs, {
+    status: "completed",
+    startedAtMs: null,
+    accumulatedMs: elapsedAt(timer, observedAtMs),
+    endAtMs: observedAtMs,
+  });
+};

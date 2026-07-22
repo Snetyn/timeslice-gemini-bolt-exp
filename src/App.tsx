@@ -11,20 +11,25 @@ import { isNewDay } from "./lib/timing";
 import {
   allocateSessionSeconds,
   buildProgressEntries,
-  drainFlowBreakActivities,
   distributeEarlyCompletion,
 } from "./lib/session";
 import { SessionReportModal } from "./components/SessionReportModal";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
 import { timerController } from "./lib/controller";
+import { getTimer, transitionTimer } from "./data/timerRepository";
+import { snapshotTimer } from "./domain/timer";
+import { advanceSessionRun } from "./domain/sessionRun";
+import { useElapsedScheduler } from "./hooks/useElapsedScheduler";
+import { elapsedSecondsAt } from "./domain/modeTime";
 import {
-  createTimer,
-  pauseTimer,
-  resetTimer,
-  startTimer,
-} from "./domain/timer";
-import { getTimer, saveTimer } from "./data/timerRepository";
+  createSessionRunSnapshot,
+  normalizeSessionRunSnapshot,
+} from "./domain/sessionSnapshot";
+import {
+  deleteSessionRun,
+  saveSessionRun,
+} from "./data/sessionRunRepository";
 
 // Keep the existing component code isolated from browser storage details. This
 // compatibility facade is hydrated from IndexedDB; browser localStorage is
@@ -70,6 +75,7 @@ interface Activity {
   status?: "scheduled" | "active" | "completed" | "overtime";
   isActive?: boolean;
   timeSpent?: number;
+  timeSpentSeconds?: number;
   startedAt?: Date | null;
   subtasks?: Subtask[];
   countUp?: boolean;
@@ -6956,6 +6962,7 @@ const FlowmodoroMode = ({
 const SingleActivityMode = ({
   singleState,
   onStart,
+  onPause,
   onComplete,
   onCancel,
   flowmodoroState,
@@ -6967,40 +6974,32 @@ const SingleActivityMode = ({
   const [currentElapsed, setCurrentElapsed] = useState(0);
   const [totalSessionTime, setTotalSessionTime] = useState(0); // Accumulated time across all chained activities
   const [currentChainLength, setCurrentChainLength] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
+  const isPaused = Boolean(singleState.isPaused);
   const [showNewActivityInput, setShowNewActivityInput] = useState(false);
 
-  // Update elapsed time in real-time
-  useEffect(() => {
-    if (singleState.isActive && singleState.startTime && !isPaused) {
-      const interval = setInterval(() => {
-        const elapsed = Math.floor(
-          (Date.now() - singleState.startTime.getTime()) / 1000,
-        );
-        setCurrentElapsed(elapsed);
-
-        // Calculate total session time including previous activities in current chain
-        const baseTime = singleState.chain.reduce((sum, activity, index) => {
-          // Only count activities from current session (same chain streak)
-          if (
-            index >=
-            singleState.chain.length - singleState.currentChainStreak
-          ) {
-            return sum + activity.duration;
-          }
-          return sum;
-        }, 0);
-        setTotalSessionTime(baseTime + elapsed);
-      }, 100);
-      return () => clearInterval(interval);
-    }
-  }, [
-    singleState.isActive,
-    singleState.startTime,
-    isPaused,
-    singleState.chain,
-    singleState.currentChainStreak,
-  ]);
+  const refreshElapsed = useCallback(() => {
+    const elapsed = elapsedSecondsAt({
+      accumulatedSeconds: singleState.elapsedSeconds,
+      startedAt: singleState.startTime,
+      running: singleState.isActive && !isPaused,
+    });
+    setCurrentElapsed(elapsed);
+    const baseTime = singleState.chain.reduce((sum, activity, index) => {
+      if (
+        index >=
+        singleState.chain.length - singleState.currentChainStreak
+      ) {
+        return sum + activity.duration;
+      }
+      return sum;
+    }, 0);
+    setTotalSessionTime(baseTime + elapsed);
+  }, [singleState, isPaused]);
+  useElapsedScheduler({
+    enabled: singleState.isActive && !isPaused,
+    onElapsed: refreshElapsed,
+  });
+  useEffect(refreshElapsed, [refreshElapsed]);
 
   // Update current chain length
   useEffect(() => {
@@ -7139,7 +7138,7 @@ const SingleActivityMode = ({
   };
 
   const handlePause = () => {
-    setIsPaused(!isPaused);
+    onPause();
   };
 
   const handleComplete = () => {
@@ -7148,13 +7147,11 @@ const SingleActivityMode = ({
       currentChainLength,
     );
     onComplete(reward);
-    setIsPaused(false);
     setTotalSessionTime(0);
   };
 
   const handleCancel = () => {
     onCancel();
-    setIsPaused(false);
     setTotalSessionTime(0);
   };
 
@@ -7166,7 +7163,6 @@ const SingleActivityMode = ({
     ) {
       // Reset chain but keep accumulated flowmodoro time
       onCancel(true); // Pass true to indicate chain reset only
-      setIsPaused(false);
       setTotalSessionTime(0);
     }
   };
@@ -7429,6 +7425,7 @@ const SingleActivityMode = ({
 
               <div className="relative">
                 <div
+                  aria-label="Single activity elapsed time"
                   className={`text-4xl sm:text-6xl md:text-8xl font-mono font-bold transition-all duration-300 ${isPaused ? "text-orange-500" : "text-gray-900"}`}
                   style={{
                     fontVariantNumeric: "tabular-nums",
@@ -7709,19 +7706,27 @@ export default function App() {
       setStoragePersistent(false);
     }
   }, []);
-  const persistSessionTimer = useCallback(
-    async (transition: "start" | "pause" | "reset") => {
+  const persistModeTimer = useCallback(
+    async (
+      id: string,
+      transition:
+        | "start"
+        | "pause"
+        | "checkpoint"
+        | "complete"
+        | "cancel"
+        | "reset",
+      targetDurationMs?: number | null,
+    ) => {
       if (!timerController.getSnapshot().isController) return;
-      const existing = (await getTimer("session")) || createTimer("session");
-      const next =
-        transition === "start"
-          ? startTimer(existing)
-          : transition === "pause"
-            ? pauseTimer(existing)
-            : resetTimer(existing);
-      await saveTimer(next, existing.revision);
+      await transitionTimer(id, transition, { targetDurationMs });
     },
     [],
+  );
+  const persistSessionTimer = useCallback(
+    (transition: "start" | "pause" | "reset") =>
+      persistModeTimer("session", transition),
+    [persistModeTimer],
   );
   // Local date helper for rollover logic
   const getLocalDateStr = (d: Date = new Date()) => {
@@ -7758,50 +7763,11 @@ export default function App() {
     }
     return [] as Activity[];
   });
-
+  const activitiesRef = useRef(activities);
   useEffect(() => {
-    try {
-      const inIframe =
-        typeof window !== "undefined" && window.top !== window.self;
-      const isSecure =
-        typeof window !== "undefined" && Boolean(window.isSecureContext);
-      const canUseSW = "serviceWorker" in navigator && isSecure && !inIframe;
-      const isProd = (import.meta as any)?.env?.PROD === true;
+    activitiesRef.current = activities;
+  }, [activities]);
 
-      if (canUseSW && isProd) {
-        const swUrl = "/service-worker.js";
-        navigator.serviceWorker
-          .register(swUrl)
-          .then((registration) => {
-            console.log(
-              "ServiceWorker registration successful with scope: ",
-              registration.scope,
-            );
-          })
-          .catch((err) => {
-            console.log("ServiceWorker registration failed: ", err);
-          });
-      } else {
-        console.log(
-          "Skipping ServiceWorker (prod only, secure context, not in iframe).",
-          { canUseSW, isProd, inIframe, isSecure },
-        );
-        // In dev or when embedded, proactively unregister any existing SW to avoid stale caches breaking preview
-        if ("serviceWorker" in navigator) {
-          navigator.serviceWorker
-            .getRegistrations?.()
-            .then((regs) => {
-              regs.forEach((reg) => reg.unregister());
-            })
-            .catch(() => {
-              /* noop */
-            });
-        }
-      }
-    } catch (e) {
-      console.log("Skipping ServiceWorker due to environment constraints.", e);
-    }
-  }, []);
 
   const [totalHours, setTotalHours] = useState(() => {
     try {
@@ -7976,6 +7942,9 @@ export default function App() {
           softDeadlineEnabled: activity.softDeadlineEnabled || false,
           softDeadlineTime: activity.softDeadlineTime || "",
           earlyCompleted: !!activity.earlyCompleted,
+          timeSpentSeconds: Number.isFinite(activity.timeSpentSeconds)
+            ? Math.max(0, activity.timeSpentSeconds)
+            : Math.max(0, Number(activity.timeSpent || 0) * 60),
         }));
       }
     } catch (e) {
@@ -8082,6 +8051,8 @@ export default function App() {
         return {
           ...parsed,
           startTime: parsed.startTime ? new Date(parsed.startTime) : null,
+          isPaused: Boolean(parsed.isPaused),
+          elapsedSeconds: Math.max(0, Number(parsed.elapsedSeconds) || 0),
         };
       }
     } catch (e) {
@@ -8095,6 +8066,7 @@ export default function App() {
       activityName: "",
       startTime: null,
       elapsedSeconds: 0,
+      isPaused: false,
       chain: [], // Array of completed activities with timestamps and rewards
       currentChainStreak: 0, // Current consecutive activities completed
     };
@@ -8112,64 +8084,20 @@ export default function App() {
     }
   }, [singleActivityState]);
 
-  // Step 12: Update time spent for active activities
-  useEffect(() => {
-    if (currentMode === "daily" && activeDailyActivity) {
-      const interval = setInterval(() => {
-        setDailyActivities((prev) =>
-          prev.map((activity) => {
-            if (activity.isActive && activity.startedAt) {
-              const timeSpentSeconds = Math.floor(
-                (Date.now() - (activity.startedAt as any).getTime()) / 1000,
-              );
-              const currentSessionMinutes = Math.floor(timeSpentSeconds / 60);
-              const totalTimeSpent = activity.timeSpent + currentSessionMinutes;
-
-              // Check if activity has exceeded its planned duration
-              if (
-                totalTimeSpent >= activity.duration &&
-                activity.status !== "overtime"
-              ) {
-                // Mark as overtime instead of auto-completing
-                return {
-                  ...activity,
-                  status: "overtime",
-                };
-              }
-
-              // Just return activity without updating timeSpent until completion
-              // The display will show totalTimeSpent but we won't save it until done
-              return activity;
-            }
-            return activity;
-          }),
-        );
-      }, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [currentMode, activeDailyActivity]);
-
   // Helper function to get real-time timeSpent for display
   const getRealTimeSpent = (activity) => {
-    if (activity.isActive && activity.startedAt) {
-      const currentSessionSeconds = Math.floor(
-        (Date.now() - (activity.startedAt as any).getTime()) / 1000,
-      );
-      const currentSessionMinutes = Math.floor(currentSessionSeconds / 60);
-      return activity.timeSpent + currentSessionMinutes;
-    }
-    return activity.timeSpent;
+    return Math.floor(getRealTimeSpentInSeconds(activity) / 60);
   };
 
   // Helper function to get real-time timeSpent in seconds for countdown display
   const getRealTimeSpentInSeconds = (activity) => {
-    if (activity.isActive && activity.startedAt) {
-      const currentSessionSeconds = Math.floor(
-        (Date.now() - (activity.startedAt as any).getTime()) / 1000,
-      );
-      return activity.timeSpent * 60 + currentSessionSeconds;
-    }
-    return activity.timeSpent * 60; // Convert minutes to seconds
+    return elapsedSecondsAt({
+      accumulatedSeconds: Number.isFinite(activity.timeSpentSeconds)
+        ? activity.timeSpentSeconds
+        : Math.max(0, Number(activity.timeSpent || 0) * 60),
+      startedAt: activity.startedAt,
+      running: Boolean(activity.isActive && activity.startedAt),
+    });
   };
 
   // Soft Deadline helpers (visual-only)
@@ -8961,17 +8889,15 @@ export default function App() {
     isTemplateActiveToday,
   ]);
 
-  // Update current time every second for Daily Mode and sync time-window activities
+  // Scheduling checks are minute-based; live timer rendering uses the shared scheduler.
   useEffect(() => {
     if (currentMode === "daily") {
-      const interval = setInterval(() => {
+      const syncDailySchedule = () => {
         setCurrentTime(new Date());
-        // Check for time-window activities every minute (when seconds are 0)
-        const now = new Date();
-        if (now.getSeconds() === 0) {
-          syncTimeWindowActivities();
-        }
-      }, 1000);
+        syncTimeWindowActivities();
+      };
+      syncDailySchedule();
+      const interval = setInterval(syncDailySchedule, 60 * 1000);
       return () => clearInterval(interval);
     } else if (currentMode === "session") {
       // For session mode, check time-window activities once when switching to session mode
@@ -9062,6 +8988,53 @@ export default function App() {
       };
     }
   });
+  const flowmodoroStateRef = useRef(flowmodoroState);
+  const currentActivityIndexRef = useRef(currentActivityIndex);
+  const sessionPlanFrozenRef = useRef(sessionPlanFrozen);
+  useEffect(() => {
+    flowmodoroStateRef.current = flowmodoroState;
+  }, [flowmodoroState]);
+  useEffect(() => {
+    currentActivityIndexRef.current = currentActivityIndex;
+  }, [currentActivityIndex]);
+  useEffect(() => {
+    sessionPlanFrozenRef.current = sessionPlanFrozen;
+  }, [sessionPlanFrozen]);
+
+  const persistSessionRunSnapshot = useCallback(
+    (
+      status: "idle" | "running" | "paused",
+      overrides: {
+        activities?: Activity[];
+        currentActivityIndex?: number;
+        vaultSeconds?: number;
+        flowmodoroState?: typeof flowmodoroState;
+        sessionPlanFrozen?: boolean;
+      } = {},
+    ) => {
+      if (!timerController.getSnapshot().isController) return Promise.resolve();
+      const snapshot = createSessionRunSnapshot({
+        status,
+        currentActivityIndex:
+          overrides.currentActivityIndex ?? currentActivityIndexRef.current,
+        lastReconciledAtMs: status === "running" ? Date.now() : null,
+        sessionPlanFrozen:
+          overrides.sessionPlanFrozen ?? sessionPlanFrozenRef.current,
+        initialAllocatedSeconds:
+          initialTotalAllocatedRef.current > 0
+            ? initialTotalAllocatedRef.current
+            : null,
+      });
+      return saveSessionRun({
+        snapshot,
+        activities: overrides.activities ?? activitiesRef.current,
+        vaultSeconds: overrides.vaultSeconds ?? vaultTimeRef.current,
+        flowmodoroState:
+          overrides.flowmodoroState ?? flowmodoroStateRef.current,
+      });
+    },
+    [],
+  );
 
   // Unified helper to award Flowmodoro rest time given elapsed focused work seconds.
   // Handles ratio conversion, fractional accumulation, caps, optional deferred (smooth) catch-up.
@@ -9225,14 +9198,27 @@ export default function App() {
 
     const breakDuration = Math.min(duration, flowmodoroState.availableRestTime);
     flowBreakDrainSourceRef.current = null;
-
-    setFlowmodoroState((prev) => ({
-      ...prev,
+    const nextFlowmodoroState = {
+      ...flowmodoroState,
       isOnBreak: true,
       breakTimeRemaining: breakDuration,
       initialBreakDuration: breakDuration, // Store initial duration for progress calculation
-      availableRestTime: prev.availableRestTime - breakDuration,
-    }));
+      availableRestTime: flowmodoroState.availableRestTime - breakDuration,
+    };
+    setFlowmodoroState(nextFlowmodoroState);
+    if (isTimerActive) {
+      void persistSessionRunSnapshot("running", {
+        flowmodoroState: nextFlowmodoroState,
+      });
+    }
+
+    void persistModeTimer(
+      "flowmodoro:break",
+      "start",
+      breakDuration * 1_000,
+    ).catch((error) =>
+      console.error("Failed to start Flowmodoro break timer", error),
+    );
 
     // Don't stop the main timer - flowmodoro break runs alongside the session
     // The break timer is handled separately in handleTimerTick
@@ -9240,26 +9226,46 @@ export default function App() {
 
   const skipFlowmodoroBreak = () => {
     flowBreakDrainSourceRef.current = null;
-    setFlowmodoroState((prev) => ({
-      ...prev,
+    const nextFlowmodoroState = {
+      ...flowmodoroState,
       isOnBreak: false,
-      availableRestTime: prev.availableRestTime + prev.breakTimeRemaining, // Return unused time
+      availableRestTime:
+        flowmodoroState.availableRestTime +
+        flowmodoroState.breakTimeRemaining,
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
-    }));
+    };
+    setFlowmodoroState(nextFlowmodoroState);
+    if (isTimerActive) {
+      void persistSessionRunSnapshot("running", {
+        flowmodoroState: nextFlowmodoroState,
+      });
+    }
+    void persistModeTimer("flowmodoro:break", "cancel").catch((error) =>
+      console.error("Failed to cancel Flowmodoro break timer", error),
+    );
   };
 
   const resetFlowmodoroState = () => {
     flowBreakDrainSourceRef.current = null;
-    setFlowmodoroState((prev) => ({
-      ...prev,
+    const nextFlowmodoroState = {
+      ...flowmodoroState,
       availableRestTime: 0,
       cycleCount: 0,
       isOnBreak: false,
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
       accumulatedFractionalTime: 0,
-    }));
+    };
+    setFlowmodoroState(nextFlowmodoroState);
+    if (isTimerActive) {
+      void persistSessionRunSnapshot("running", {
+        flowmodoroState: nextFlowmodoroState,
+      });
+    }
+    void persistModeTimer("flowmodoro:break", "reset", 0).catch((error) =>
+      console.error("Failed to reset Flowmodoro break timer", error),
+    );
   };
 
   // Single Activity Mode handlers
@@ -9267,10 +9273,37 @@ export default function App() {
     setSingleActivityState((prev) => ({
       ...prev,
       isActive: true,
+      isPaused: false,
       activityName,
       startTime: new Date(),
       elapsedSeconds: 0,
     }));
+    void persistModeTimer("single", "start").catch((error) =>
+      console.error("Failed to start Single timer", error),
+    );
+  };
+
+  const toggleSingleActivityPause = () => {
+    const resume = Boolean(singleActivityState.isPaused);
+    setSingleActivityState((prev) => {
+      if (!prev.isActive) return prev;
+      if (prev.isPaused) {
+        return { ...prev, isPaused: false, startTime: new Date() };
+      }
+      return {
+        ...prev,
+        isPaused: true,
+        elapsedSeconds: elapsedSecondsAt({
+          accumulatedSeconds: prev.elapsedSeconds,
+          startedAt: prev.startTime,
+          running: true,
+        }),
+        startTime: null,
+      };
+    });
+    void persistModeTimer("single", resume ? "start" : "pause").catch(
+      (error) => console.error("Failed to persist Single pause", error),
+    );
   };
 
   const completeSingleActivity = (
@@ -9278,13 +9311,17 @@ export default function App() {
     isChaining = false,
     newActivityName = "",
   ) => {
+    const completedDuration = elapsedSecondsAt({
+      accumulatedSeconds: singleActivityState.elapsedSeconds,
+      startedAt: singleActivityState.startTime,
+      running:
+        singleActivityState.isActive && !singleActivityState.isPaused,
+    });
     const completedActivity = {
       name: singleActivityState.activityName,
       reward: rewardSeconds,
       completedAt: new Date(),
-      duration: Math.floor(
-        (Date.now() - singleActivityState.startTime.getTime()) / 1000,
-      ),
+      duration: completedDuration,
     };
 
     setSingleActivityState((prev) => {
@@ -9310,6 +9347,7 @@ export default function App() {
         return {
           ...prev,
           isActive: true,
+          isPaused: false,
           activityName: newActivityName.trim(),
           startTime: new Date(), // Start new activity immediately
           elapsedSeconds: 0,
@@ -9322,6 +9360,7 @@ export default function App() {
       return {
         ...prev,
         isActive: false,
+        isPaused: false,
         activityName: "",
         startTime: null,
         elapsedSeconds: 0,
@@ -9336,12 +9375,21 @@ export default function App() {
       availableRestTime: prev.availableRestTime + rewardSeconds,
       totalEarnedToday: prev.totalEarnedToday + rewardSeconds,
     }));
+    void (async () => {
+      await persistModeTimer("single", "complete");
+      if (isChaining && newActivityName.trim()) {
+        await persistModeTimer("single", "start");
+      }
+    })().catch((error) =>
+      console.error("Failed to complete Single timer", error),
+    );
   };
 
   const cancelSingleActivity = (chainResetOnly = false) => {
     setSingleActivityState((prev) => ({
       ...prev,
       isActive: false,
+      isPaused: false,
       activityName: "",
       startTime: null,
       elapsedSeconds: 0,
@@ -9350,6 +9398,9 @@ export default function App() {
       // If full cancel, reset everything
       ...(chainResetOnly ? {} : { chain: [], currentChainStreak: 0 }),
     }));
+    void persistModeTimer("single", "cancel").catch((error) =>
+      console.error("Failed to cancel Single timer", error),
+    );
   };
 
   // --- Start of State Saving Logic ---
@@ -9365,17 +9416,16 @@ export default function App() {
   useEffect(() => {
     if (!hasRestoredSessionStateRef.current) return;
     try {
-      const sessionState = {
-        isTimerActive,
-        isPaused,
+      const sessionState = createSessionRunSnapshot({
+        status: isTimerActive ? (isPaused ? "paused" : "running") : "idle",
         currentActivityIndex,
-        lastActiveTimestamp: isTimerActive && !isPaused ? Date.now() : null,
+        lastReconciledAtMs: isTimerActive && !isPaused ? Date.now() : null,
         sessionPlanFrozen,
         initialAllocatedSeconds:
           initialTotalAllocatedRef.current > 0
             ? initialTotalAllocatedRef.current
             : null,
-      };
+      });
       localStorage.setItem(
         "timeSliceSessionState",
         JSON.stringify(sessionState),
@@ -9384,6 +9434,23 @@ export default function App() {
       console.error("Failed to save session state to localStorage:", e);
     }
   }, [isTimerActive, isPaused, currentActivityIndex, sessionPlanFrozen]);
+
+  useEffect(() => {
+    if (!hasRestoredSessionStateRef.current || !isTimerActive || isPaused)
+      return;
+    void persistModeTimer("session", "checkpoint").catch((error) =>
+      console.error("Failed to checkpoint Session transition", error),
+    );
+    void persistSessionRunSnapshot("running").catch((error) =>
+      console.error("Failed to persist Session run transition", error),
+    );
+  }, [
+    currentActivityIndex,
+    isPaused,
+    isTimerActive,
+    persistModeTimer,
+    persistSessionRunSnapshot,
+  ]);
 
   // The compatibility UI still keeps activity objects in React while it is
   // being incrementally moved to the domain store. Checkpointing on pagehide
@@ -9394,18 +9461,20 @@ export default function App() {
       if (!isTimerActive || isPaused) return;
       localStorage.setItem(
         "timeSliceSessionState",
-        JSON.stringify({
-          isTimerActive,
-          isPaused,
-          currentActivityIndex,
-          lastActiveTimestamp: Date.now(),
-          sessionPlanFrozen,
-          initialAllocatedSeconds:
-            initialTotalAllocatedRef.current > 0
-              ? initialTotalAllocatedRef.current
-              : null,
-        }),
+        JSON.stringify(
+          createSessionRunSnapshot({
+            status: "running",
+            currentActivityIndex,
+            lastReconciledAtMs: Date.now(),
+            sessionPlanFrozen,
+            initialAllocatedSeconds:
+              initialTotalAllocatedRef.current > 0
+                ? initialTotalAllocatedRef.current
+                : null,
+          }),
+        ),
       );
+      void persistSessionRunSnapshot("running");
       void flushAppStorage();
     };
     const checkpointWhenHidden = () => {
@@ -9417,7 +9486,13 @@ export default function App() {
       window.removeEventListener("pagehide", checkpointSessionSnapshot);
       document.removeEventListener("visibilitychange", checkpointWhenHidden);
     };
-  }, [isTimerActive, isPaused, currentActivityIndex, sessionPlanFrozen]);
+  }, [
+    isTimerActive,
+    isPaused,
+    currentActivityIndex,
+    sessionPlanFrozen,
+    persistSessionRunSnapshot,
+  ]);
 
   // Save flowmodoro state to localStorage
   useEffect(() => {
@@ -9539,7 +9614,8 @@ export default function App() {
     try {
       const saved = localStorage.getItem("timeSliceSessionState");
       if (saved) {
-        const sessionState = JSON.parse(saved);
+        const sessionState = normalizeSessionRunSnapshot(JSON.parse(saved));
+        if (!sessionState) throw new Error("Invalid Session checkpoint");
 
         if (
           typeof sessionState.initialAllocatedSeconds === "number" &&
@@ -9553,7 +9629,7 @@ export default function App() {
         if (
           sessionState.isTimerActive &&
           !sessionState.isPaused &&
-          sessionState.lastActiveTimestamp
+          sessionState.lastReconciledAtMs
         ) {
           // Populate baseline allocated seconds if missing
           try {
@@ -9563,106 +9639,62 @@ export default function App() {
             );
             if (baseline > 0) initialTotalAllocatedRef.current = baseline;
           } catch {}
-          const timeGapMs = Date.now() - sessionState.lastActiveTimestamp;
-          const timeGapSeconds = Math.floor(timeGapMs / 1000);
+          const timeGapMs = Date.now() - sessionState.lastReconciledAtMs;
+          const timeGapSeconds = Math.max(0, Math.floor(timeGapMs / 1000));
 
-          // Only process time gap if it's reasonable (less than 24 hours)
-          if (timeGapSeconds > 0 && timeGapSeconds < 86400) {
+          if (timeGapSeconds > 0) {
             console.log(
               `Resuming session after ${Math.floor(timeGapSeconds / 60)}m ${timeGapSeconds % 60}s gap`,
             );
 
-            // Apply the time gap to activities
-            setActivities((prev) => {
-              let remainingGapSeconds = timeGapSeconds;
-              let newActivities = [...prev];
-              let currentIndex = sessionState.currentActivityIndex || 0;
-              const completedSharedIds: string[] = [];
-
-              while (
-                remainingGapSeconds > 0 &&
-                currentIndex < newActivities.length
-              ) {
-                const current = newActivities[currentIndex];
-
-                if (!current || current.isCompleted) {
-                  currentIndex++;
-                  continue;
-                }
-
-                // Ensure numeric timeRemaining baseline
-                if (
-                  typeof current.timeRemaining !== "number" ||
-                  !Number.isFinite(current.timeRemaining)
-                ) {
-                  // Reconstruct planned seconds for countdown activities; for count-up default to 0 elapsed
-                  if (current.countUp) current.timeRemaining = 0;
-                  else {
-                    const plannedSec = getAllocatedSeconds(current);
-                    current.timeRemaining = plannedSec; // remaining time starts at planned
-                  }
-                }
-
-                if (current.countUp) {
-                  // For count-up activities, add all remaining gap time to elapsed (timeRemaining stores elapsed)
-                  current.timeRemaining += remainingGapSeconds;
-                  remainingGapSeconds = 0;
-                } else {
-                  // For regular countdown activities, subtract from remaining
-                  const currentRemaining = Math.max(0, current.timeRemaining);
-                  const timeToSubtract = Math.min(
-                    remainingGapSeconds,
-                    currentRemaining,
-                  );
-                  current.timeRemaining = currentRemaining - timeToSubtract;
-                  remainingGapSeconds -= timeToSubtract;
-
-                  if (current.timeRemaining <= 0) {
-                    // Mark completion and capture elapsed including full planned duration (no overtime for gap resume)
-                    const plannedSec = getAllocatedSeconds(current);
-                    const elapsedSec = plannedSec; // gap completion implies full planned consumed
-                    current.completedElapsedSeconds = Math.max(
-                      current.completedElapsedSeconds || 0,
-                      elapsedSec,
-                    );
-                    current.isCompleted = true;
-                    if (current.sharedId)
-                      completedSharedIds.push(current.sharedId);
-                    currentIndex++;
-                  }
-                }
-              }
-
-              // Update current activity index
-              if (currentIndex !== sessionState.currentActivityIndex) {
-                setTimeout(() => setCurrentActivityIndex(currentIndex), 0);
-              }
-
-              // If all activities are completed, stop the timer
-              const allCompleted = newActivities.every((a) => a.isCompleted);
-              if (allCompleted) {
-                setTimeout(() => setIsTimerActive(false), 0);
-              }
-
-              // Flush shared progress for any activities completed due to gap (ensure daily sync catches up)
-              if (completedSharedIds.length > 0) {
-                setTimeout(() => {
-                  const processed: Record<string, boolean> = {};
-                  completedSharedIds.forEach((id) => {
-                    if (processed[id]) return;
-                    processed[id] = true;
-                    const act = newActivities.find((a) => a.sharedId === id);
-                    if (act) {
-                      try {
-                        syncSharedProgress(act, true);
-                      } catch {}
-                    }
-                  });
-                }, 0);
-              }
-
-              return newActivities;
+            const activeFlowBreak =
+              settings.flowmodoroEnabled &&
+              flowmodoroState.isOnBreak &&
+              flowmodoroState.breakTimeRemaining > 0;
+            const transition = advanceSessionRun({
+              activities: activitiesRef.current,
+              currentActivityIndex: sessionState.currentActivityIndex || 0,
+              elapsedSeconds: timeGapSeconds,
+              overtimeMode: settings.overtimeType,
+              flowBreakMode: activeFlowBreak
+                ? settings.flowmodoroMode === "postpone"
+                  ? "postpone"
+                  : "drain"
+                : "none",
+              flowBreakRemainingSeconds: activeFlowBreak
+                ? flowmodoroState.breakTimeRemaining
+                : 0,
+              vaultSeconds: vaultTimeRef.current,
+              flowDrainSourceId: flowBreakDrainSourceRef.current,
+              donorCursor: lastDrainedIndex.current,
             });
+            activitiesRef.current = transition.activities as Activity[];
+            setActivities(transition.activities as Activity[]);
+            setCurrentActivityIndex(transition.currentActivityIndex);
+            flowBreakDrainSourceRef.current = transition.flowDrainSourceId;
+            lastDrainedIndex.current = transition.donorCursor;
+            vaultTimeRef.current = transition.vaultSeconds;
+            setVaultTime(transition.vaultSeconds);
+            void persistSessionRunSnapshot("running", {
+              activities: transition.activities as Activity[],
+              currentActivityIndex: transition.currentActivityIndex,
+              vaultSeconds: transition.vaultSeconds,
+              sessionPlanFrozen: true,
+            });
+            Object.entries(transition.donatedSecondsById).forEach(
+              ([activityId, seconds]) => {
+                drainStatsRef.current.donated[activityId] =
+                  (drainStatsRef.current.donated[activityId] || 0) + seconds;
+              },
+            );
+            Object.entries(transition.receivedSecondsById).forEach(
+              ([activityId, seconds]) => {
+                drainStatsRef.current.received[activityId] =
+                  (drainStatsRef.current.received[activityId] || 0) + seconds;
+              },
+            );
+            if (transition.isComplete) setIsTimerActive(false);
+
           }
         }
       }
@@ -9723,9 +9755,6 @@ export default function App() {
 
   // --- End of State Saving Logic ---
 
-  const lastTickTimestampRef = useRef(0);
-  // Carry millisecond remainder between ticks to prevent ETA drift
-  const tickRemainderMsRef = useRef(0);
   // Track total elapsed seconds per sharedId to sync only additive deltas to daily
   const sharedElapsedSnapshotRef = useRef<Record<string, number>>({});
   const lastDrainedIndex = useRef(-1);
@@ -9735,17 +9764,6 @@ export default function App() {
     received: Record<string, number>;
   }>({ donated: {}, received: {} });
 
-  // Helper to record a donor drain event of 1 second from donorId into receiverId (overtime for receiver)
-  const recordDrain = (donorId: string | null, receiverId: string | null) => {
-    if (donorId) {
-      const donated = drainStatsRef.current.donated;
-      donated[donorId] = (donated[donorId] || 0) + 1;
-    }
-    if (receiverId) {
-      const received = drainStatsRef.current.received;
-      received[receiverId] = (received[receiverId] || 0) + 1;
-    }
-  };
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // Stable baseline for overall progress (sum of allocated seconds at session start)
   const initialTotalAllocatedRef = useRef<number>(0);
@@ -9870,9 +9888,34 @@ export default function App() {
     applyPlannedDurations,
   ]);
 
-  const handleTimerTick = useCallback(() => {
+  const handleTimerTick = useCallback((elapsedSeconds: number) => {
     // Check for daily flowmodoro reset
     const now = new Date();
+    if (currentMode === "daily") {
+      setCurrentTime(now);
+      setDailyActivities((previous) => {
+        let changed = false;
+        const next = previous.map((activity) => {
+          if (!activity.isActive || !activity.startedAt) return activity;
+          const elapsed = elapsedSecondsAt({
+            accumulatedSeconds: Number.isFinite(activity.timeSpentSeconds)
+              ? activity.timeSpentSeconds
+              : Math.max(0, Number(activity.timeSpent || 0) * 60),
+            startedAt: activity.startedAt,
+            running: true,
+          });
+          if (
+            elapsed >= Number(activity.duration || 0) * 60 &&
+            activity.status !== "overtime"
+          ) {
+            changed = true;
+            return { ...activity, status: "overtime" };
+          }
+          return activity;
+        });
+        return changed ? next : previous;
+      });
+    }
     const shouldReset = checkIfShouldReset(
       now,
       new Date(flowmodoroState.lastResetDate),
@@ -9888,17 +9931,6 @@ export default function App() {
         lastResetDate: now.toDateString(),
       }));
     }
-
-    // Calculate elapsed time with smoothing to avoid 2-second jumps from minor drift
-    const nowMs = Date.now();
-    const last = lastTickTimestampRef.current || nowMs;
-    let diffMs = nowMs - last;
-    // Accumulate remainder to prevent cumulative slip in ETA
-    diffMs += tickRemainderMsRef.current || 0;
-    const elapsedSeconds = Math.floor(diffMs / 1000);
-    tickRemainderMsRef.current = diffMs - elapsedSeconds * 1000;
-    // Anchor to wall clock to avoid anchoring drift
-    lastTickTimestampRef.current = nowMs;
 
     if (elapsedSeconds <= 0) return;
 
@@ -9951,6 +9983,21 @@ export default function App() {
       flowmodoroState.isOnBreak &&
       flowmodoroState.breakTimeRemaining > 0
     ) {
+      if (elapsedSeconds >= flowmodoroState.breakTimeRemaining) {
+        void persistModeTimer("flowmodoro:break", "complete").catch((error) =>
+          console.error("Failed to complete Flowmodoro break timer", error),
+        );
+        if (isTimerActive) {
+          void persistSessionRunSnapshot("running", {
+            flowmodoroState: {
+              ...flowmodoroState,
+              isOnBreak: false,
+              breakTimeRemaining: 0,
+              initialBreakDuration: 0,
+            },
+          });
+        }
+      }
       setFlowmodoroState((prev) => {
         const newBreakTimeRemaining = Math.max(
           0,
@@ -9983,180 +10030,81 @@ export default function App() {
       !flowmodoroState.isOnBreak &&
       ((isTimerActive && !isPaused) || hasActiveDailyWork)
     ) {
-      // Persist the same wall-clock anchor used for the tick so visibility
-      // recovery awards only the genuinely missed interval.
-      try {
-        localStorage.setItem("flowLastWorkTs", String(nowMs));
-      } catch {}
       awardFlowmodoroWork(elapsedSeconds);
     }
 
-    // If we're on a Flowmodoro break in 'postpone' mode, pause activity draining entirely
-    const pauseForFlowBreak =
+    const hasRunningSession = isTimerActive && !isPaused;
+    const activeFlowBreak =
       settings.flowmodoroEnabled &&
-      settings.flowmodoroMode === "postpone" &&
       flowmodoroState.isOnBreak &&
       flowmodoroState.breakTimeRemaining > 0;
+    if (hasRunningSession || activeFlowBreak) {
+      const flowBreakMode = activeFlowBreak
+        ? settings.flowmodoroMode === "postpone"
+          ? "postpone"
+          : "drain"
+        : "none";
+      const transition = advanceSessionRun({
+        activities: activitiesRef.current,
+        currentActivityIndex,
+        elapsedSeconds: hasRunningSession
+          ? elapsedSeconds
+          : Math.min(elapsedSeconds, flowmodoroState.breakTimeRemaining),
+        overtimeMode: settings.overtimeType,
+        flowBreakMode,
+        flowBreakRemainingSeconds: activeFlowBreak
+          ? flowmodoroState.breakTimeRemaining
+          : 0,
+        vaultSeconds: vaultTimeRef.current,
+        flowDrainSourceId: flowBreakDrainSourceRef.current,
+        donorCursor: lastDrainedIndex.current,
+      });
 
-    const flowBreakDrainActive =
-      settings.flowmodoroEnabled &&
-      settings.flowmodoroMode === "drain" &&
-      flowmodoroState.isOnBreak &&
-      flowmodoroState.breakTimeRemaining > 0;
-    const elapsedBreakSeconds =
-      pauseForFlowBreak || flowBreakDrainActive
-        ? Math.min(elapsedSeconds, flowmodoroState.breakTimeRemaining)
-        : 0;
-    const normalSessionSeconds = elapsedSeconds - elapsedBreakSeconds;
-    let flowActivityDrainSeconds = 0;
-
-    if (flowBreakDrainActive && elapsedBreakSeconds > 0) {
-      const availableVaultSeconds = Math.max(0, vaultTimeRef.current);
-      const vaultDrainSeconds = Math.min(
-        availableVaultSeconds,
-        elapsedBreakSeconds,
+      activitiesRef.current = transition.activities as Activity[];
+      setActivities(transition.activities as Activity[]);
+      flowBreakDrainSourceRef.current = transition.flowDrainSourceId;
+      lastDrainedIndex.current = transition.donorCursor;
+      if (transition.vaultSeconds !== vaultTimeRef.current) {
+        vaultTimeRef.current = transition.vaultSeconds;
+        setVaultTime(transition.vaultSeconds);
+      }
+      Object.entries(transition.donatedSecondsById).forEach(
+        ([activityId, seconds]) => {
+          drainStatsRef.current.donated[activityId] =
+            (drainStatsRef.current.donated[activityId] || 0) + seconds;
+        },
       );
-      if (vaultDrainSeconds > 0) {
-        const nextVaultSeconds = availableVaultSeconds - vaultDrainSeconds;
-        vaultTimeRef.current = nextVaultSeconds;
-        setVaultTime(nextVaultSeconds);
+      Object.entries(transition.receivedSecondsById).forEach(
+        ([activityId, seconds]) => {
+          drainStatsRef.current.received[activityId] =
+            (drainStatsRef.current.received[activityId] || 0) + seconds;
+        },
+      );
+      if (transition.currentActivityIndex !== currentActivityIndex) {
+        setCurrentActivityIndex(transition.currentActivityIndex);
+        void persistSessionRunSnapshot("running", {
+          activities: transition.activities as Activity[],
+          currentActivityIndex: transition.currentActivityIndex,
+          vaultSeconds: transition.vaultSeconds,
+        }).catch((error) =>
+          console.error("Failed to persist automatic Session switch", error),
+        );
       }
-      flowActivityDrainSeconds = elapsedBreakSeconds - vaultDrainSeconds;
-    } else {
-      flowBreakDrainSourceRef.current = null;
+      if (hasRunningSession && transition.isComplete) {
+        setIsTimerActive(false);
+        localStorage.removeItem("timeSliceSessionState");
+        void deleteSessionRun();
+        void persistModeTimer("session", "complete").catch((error) =>
+          console.error("Failed to complete Session timer", error),
+        );
+      }
     }
-
-    setActivities((prev) => {
-      if (elapsedSeconds <= 0) return prev;
-
-      let newActivities = prev;
-      if (flowActivityDrainSeconds > 0) {
-        const result = drainFlowBreakActivities(
-          newActivities,
-          flowActivityDrainSeconds,
-          flowBreakDrainSourceRef.current,
-        );
-        newActivities = result.activities as Activity[];
-        flowBreakDrainSourceRef.current = result.sourceId;
-        Object.entries(result.drainedSecondsById).forEach(
-          ([activityId, drainedSeconds]) => {
-            const donated = drainStatsRef.current.donated;
-            donated[activityId] =
-              (donated[activityId] || 0) + drainedSeconds;
-          },
-        );
-      }
-
-      if (normalSessionSeconds <= 0) return newActivities;
-
-      newActivities = newActivities.map((activity) => ({ ...activity }));
-      let secondsToProcess = normalSessionSeconds;
-
-      while (secondsToProcess > 0) {
-        const current = newActivities[currentActivityIndex];
-        if (!current) break;
-
-        if (current.countUp) {
-          // For count-up activities, we add time instead of subtracting
-          current.timeRemaining += secondsToProcess;
-          secondsToProcess = 0; // Count-up activities don't "complete" in the traditional sense
-        } else {
-          if (current.timeRemaining > 0) {
-            const timeToTake = Math.min(
-              secondsToProcess,
-              current.timeRemaining,
-            );
-            current.timeRemaining -= timeToTake;
-            secondsToProcess -= timeToTake;
-          }
-
-          if (current.timeRemaining <= 0) {
-            if (settings.overtimeType === "drain") {
-              // Donor ordering: not locked & not priority -> locked & not priority -> priority (not locked) -> priority & locked
-              const donorPools: ((typeof newActivities)[number] & {
-                originalIndex: number;
-              })[][] = [[], [], [], []];
-              newActivities.forEach((act, index) => {
-                if (index === currentActivityIndex) return;
-                if (act.isCompleted || act.countUp) return;
-                if (
-                  typeof act.timeRemaining !== "number" ||
-                  act.timeRemaining <= 0
-                )
-                  return;
-                const priority = !!act.priority;
-                const locked = !!act.isLocked;
-                const clone = { ...act, originalIndex: index } as any;
-                if (!locked && !priority) donorPools[0].push(clone);
-                else if (locked && !priority) donorPools[1].push(clone);
-                else if (!locked && priority) donorPools[2].push(clone);
-                else donorPools[3].push(clone);
-              });
-              const donors = donorPools.find((pool) => pool.length > 0) || [];
-              if (donors.length > 0) {
-                const donorIndex = (lastDrainedIndex.current =
-                  (lastDrainedIndex.current + 1) % donors.length);
-                const donorToDrain = donors[donorIndex];
-                newActivities[donorToDrain.originalIndex].timeRemaining -= 1;
-                recordDrain(
-                  newActivities[donorToDrain.originalIndex].id,
-                  current.id,
-                );
-              }
-              current.timeRemaining -= 1;
-              secondsToProcess -= 1;
-            } else if (settings.overtimeType === "postpone") {
-              current.timeRemaining -= secondsToProcess;
-              secondsToProcess = 0;
-            } else {
-              // 'none'
-              if (!current.isCompleted) {
-                // Preserve elapsed when auto-completing
-                const plannedSec = !current.countUp
-                  ? Math.max(0, Math.round(Number(current.duration || 0) * 60))
-                  : 0;
-                let elapsedSec = 0;
-                if (current.countUp) {
-                  elapsedSec = Math.max(0, current.timeRemaining || 0);
-                } else {
-                  const tr =
-                    typeof current.timeRemaining === "number"
-                      ? current.timeRemaining
-                      : plannedSec;
-                  if (tr >= 0) {
-                    elapsedSec = Math.max(0, plannedSec - tr);
-                  } else {
-                    // include overtime on completion
-                    elapsedSec = plannedSec + Math.abs(tr);
-                  }
-                }
-                current.completedElapsedSeconds = Math.round(elapsedSec);
-                current.isCompleted = true;
-
-                const nextIndex = newActivities.findIndex(
-                  (act) => !act.isCompleted,
-                );
-                if (nextIndex !== -1) {
-                  setCurrentActivityIndex(nextIndex);
-                } else {
-                  setIsTimerActive(false);
-                  // Clear session state when session ends naturally
-                  try {
-                    localStorage.removeItem("timeSliceSessionState");
-                  } catch (e) {
-                    console.error("Failed to clear session state:", e);
-                  }
-                }
-              }
-              secondsToProcess = 0; // Stop processing after completion
-            }
-          }
-        }
-      }
-      return newActivities;
-    });
   }, [
     currentActivityIndex,
+    currentMode,
+    dailyActivities,
+    isPaused,
+    isTimerActive,
     settings.overtimeType,
     settings.flowmodoroEnabled,
     settings.flowmodoroMode,
@@ -10165,7 +10113,10 @@ export default function App() {
     flowmodoroState.isOnBreak,
     flowmodoroState.breakTimeRemaining,
     flowmodoroState.lastResetDate,
+    awardFlowmodoroWork,
     checkIfShouldReset,
+    persistModeTimer,
+    persistSessionRunSnapshot,
   ]);
 
   // Sync shared progress when session activities change during active timer
@@ -10193,288 +10144,136 @@ export default function App() {
     });
   }, [activities, syncSharedProgress]);
 
-  // Main timer loop - runs for session mode OR when daily activities are active OR during flowmodoro break
-  useEffect(() => {
-    // Consider both boolean isActive and status flags for daily activity activeness
-    const hasActiveDailyActivity =
-      currentMode === "daily" &&
-      dailyActivities.some(
-        (activity) =>
-          activity.isActive ||
-          activity.status === "active" ||
-          activity.status === "overtime",
-      );
-    const hasActiveFlowmodoroBreak =
-      flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
-    const shouldRunTimer =
+  const hasActiveDailyTimer =
+    currentMode === "daily" &&
+    dailyActivities.some(
+      (activity) =>
+        activity.isActive ||
+        activity.status === "active" ||
+        activity.status === "overtime",
+    );
+  const hasActiveFlowmodoroBreak =
+    flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+  useElapsedScheduler({
+    enabled:
       (isTimerActive && !isPaused) ||
-      hasActiveDailyActivity ||
-      hasActiveFlowmodoroBreak;
+      currentMode === "daily" ||
+      hasActiveDailyTimer ||
+      hasActiveFlowmodoroBreak,
+    onElapsed: handleTimerTick,
+  });
 
-    if (shouldRunTimer) {
-      // Preserve the monotonic anchor across harmless rerenders. Resetting it
-      // here can create competing interval/visibility deltas for count-up.
-      if (!lastTickTimestampRef.current)
-        lastTickTimestampRef.current = Date.now();
-      const interval = setInterval(handleTimerTick, 1000);
-      return () => clearInterval(interval);
-    }
-    lastTickTimestampRef.current = 0;
-  }, [
-    isTimerActive,
-    isPaused,
-    handleTimerTick,
-    currentMode,
-    dailyActivities,
-    flowmodoroState.isOnBreak,
-    flowmodoroState.breakTimeRemaining,
-    currentActivityIndex,
-    settings.overtimeType,
-    settings.flowmodoroEnabled,
-    settings.flowmodoroRatio,
-  ]);
-
-  // Handle returning to the tab
   useEffect(() => {
-    // The timer's existing batched tick already consumes the elapsed interval
-    // from its anchor. Running a second, hand-written visibility replay here
-    // used to credit that same interval twice (especially Flowmodoro).
-    const reconcileVisibility = () => {
-      if (document.visibilityState === "visible") handleTimerTick();
-    };
-    document.addEventListener("visibilitychange", reconcileVisibility);
-    return () =>
-      document.removeEventListener("visibilitychange", reconcileVisibility);
-
-    /* Legacy visibility replay retained below temporarily for source-history
-       context; it is unreachable and no longer registers a listener. */
-    const handleVisibilityChange = () => {
-      // Consider both boolean isActive and status flags for daily activity activeness
-      const hasActiveDailyActivity =
-        currentMode === "daily" &&
-        dailyActivities.some(
-          (activity) =>
-            activity.isActive ||
-            activity.status === "active" ||
-            activity.status === "overtime",
-        );
-      const hasActiveFlowmodoroBreak =
-        flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
-      const shouldHandleTick =
-        (isTimerActive && !isPaused) ||
-        hasActiveDailyActivity ||
-        hasActiveFlowmodoroBreak;
-
-      if (document.visibilityState === "visible" && shouldHandleTick) {
-        // Reconcile Flowmodoro off-screen timing (track last active timestamp regardless of catch-up preference)
-        let offscreenSeconds = 0;
-        try {
-          const storedTs = Number(localStorage.getItem("flowLastWorkTs")) || 0;
-          const nowTs = Date.now();
-          offscreenSeconds =
-            storedTs > 0 && nowTs > storedTs
-              ? Math.min(7200, Math.floor((nowTs - storedTs) / 1000))
-              : 0;
-          localStorage.setItem("flowLastWorkTs", String(nowTs));
-        } catch {}
-        // On resume, compute wall-clock delta since last tick and process catch-up seconds
-        const now = Date.now();
-        const last = lastTickTimestampRef.current || now;
-        let deltaMs = now - last + (tickRemainderMsRef.current || 0);
-        const deltaSec = Math.floor(deltaMs / 1000);
-        if (deltaSec > 0 && deltaSec < 86400) {
-          // Temporarily apply catch-up by advancing anchor and running the same logic deltaSec times in batch
-          lastTickTimestampRef.current = now;
-          tickRemainderMsRef.current = deltaMs - deltaSec * 1000;
-          // Process catch-up by simulating a batched tick that can advance across activities
-          let postCursorIndex = currentActivityIndex;
-          setActivities((prev) => {
-            let newActivities = [...prev];
-            let secondsToProcess = deltaSec;
-            let cursorIndex = currentActivityIndex;
-            // Skip draining during postpone-mode flow break
-            const pauseForFlowBreak =
-              settings.flowmodoroEnabled &&
-              settings.flowmodoroMode === "postpone" &&
-              flowmodoroState.isOnBreak &&
-              flowmodoroState.breakTimeRemaining > 0;
-            if (pauseForFlowBreak) return newActivities;
-
-            let safety = 0;
-            while (secondsToProcess > 0 && safety < 100000) {
-              safety++;
-              const current = newActivities[cursorIndex];
-              if (!current) break;
-              if (current.countUp) {
-                current.timeRemaining =
-                  (current.timeRemaining || 0) + secondsToProcess;
-                secondsToProcess = 0;
-              } else {
-                if ((current.timeRemaining || 0) > 0) {
-                  const timeToTake = Math.min(
-                    secondsToProcess,
-                    current.timeRemaining,
-                  );
-                  current.timeRemaining -= timeToTake;
-                  secondsToProcess -= timeToTake;
-                }
-                if ((current.timeRemaining || 0) <= 0) {
-                  if (settings.overtimeType === "drain") {
-                    // Donor ordering: not locked & not priority -> locked & not priority -> priority (not locked) -> priority & locked
-                    const donorPools: ((typeof newActivities)[number] & {
-                      originalIndex: number;
-                    })[][] = [[], [], [], []];
-                    newActivities.forEach((act, index) => {
-                      if (index === cursorIndex) return;
-                      if (act.isCompleted || act.countUp) return;
-                      if (
-                        typeof act.timeRemaining !== "number" ||
-                        act.timeRemaining <= 0
-                      )
-                        return;
-                      const priority = !!act.priority;
-                      const locked = !!act.isLocked;
-                      const clone = { ...act, originalIndex: index } as any;
-                      if (!locked && !priority) donorPools[0].push(clone);
-                      else if (locked && !priority) donorPools[1].push(clone);
-                      else if (!locked && priority) donorPools[2].push(clone);
-                      else donorPools[3].push(clone);
-                    });
-                    const donors =
-                      donorPools.find((pool) => pool.length > 0) || [];
-                    if (donors.length > 0) {
-                      const donorIndex = (lastDrainedIndex.current =
-                        (lastDrainedIndex.current + 1) % donors.length);
-                      const donorToDrain = donors[donorIndex];
-                      newActivities[donorToDrain.originalIndex].timeRemaining =
-                        (newActivities[donorToDrain.originalIndex]
-                          .timeRemaining || 0) - 1;
-                      recordDrain(
-                        newActivities[donorToDrain.originalIndex].id,
-                        current.id,
-                      );
-                    }
-                    current.timeRemaining = (current.timeRemaining || 0) - 1;
-                    secondsToProcess -= 1;
-                  } else if (settings.overtimeType === "postpone") {
-                    current.timeRemaining =
-                      (current.timeRemaining || 0) - secondsToProcess;
-                    secondsToProcess = 0;
-                  } else {
-                    // 'none' -> complete and advance
-                    if (!current.isCompleted) {
-                      const plannedSec = !current.countUp
-                        ? Math.max(
-                            0,
-                            Math.round(Number(current.duration || 0) * 60),
-                          )
-                        : 0;
-                      let elapsedSec = 0;
-                      const tr2 =
-                        typeof current.timeRemaining === "number"
-                          ? current.timeRemaining
-                          : plannedSec;
-                      if (tr2 >= 0) {
-                        elapsedSec = Math.max(0, plannedSec - tr2);
-                      } else {
-                        elapsedSec = plannedSec + Math.abs(tr2);
-                      }
-                      current.completedElapsedSeconds = Math.round(elapsedSec);
-                      current.isCompleted = true;
-                    }
-                    const nextIndex = newActivities.findIndex(
-                      (act) => !act.isCompleted,
-                    );
-                    if (nextIndex !== -1) {
-                      cursorIndex = nextIndex;
-                      postCursorIndex = nextIndex;
-                    } else {
-                      setIsTimerActive(false);
-                      try {
-                        localStorage.removeItem("timeSliceSessionState");
-                      } catch {}
-                      secondsToProcess = 0;
-                    }
-                  }
-                }
-              }
-
-              // Flowmodoro break drain across all non-starred in drain mode (catch-up path)
-              // Single-source Flowmodoro drain is handled in main tick; catch-up intentionally avoids multi-drain.
-              if (secondsToProcess > 0 && safety >= 100000) {
-                console.warn(
-                  "Visibility catch-up loop aborted (safety cap reached)",
-                );
-                secondsToProcess = 0;
-              }
-            }
-            return newActivities;
-          });
-          // Reflect the potentially advanced cursor after batch catch-up
-          if (
-            typeof postCursorIndex === "number" &&
-            postCursorIndex !== currentActivityIndex
-          ) {
-            setCurrentActivityIndex(postCursorIndex);
-          }
-          // Apply Flowmodoro adjustments for the elapsed off-screen time
-          if (deltaSec > 0) {
-            const flowCatchupSeconds =
-              offscreenSeconds > 0
-                ? Math.max(offscreenSeconds, deltaSec)
-                : deltaSec;
-            if (
-              flowCatchupSeconds > 0 &&
-              settings.flowmodoroEnabled &&
-              settings.flowmodoroAutoCatchup &&
-              !flowmodoroState.isOnBreak
-            ) {
-              awardFlowmodoroWork(flowCatchupSeconds, {
-                deferLargeCatchup: true,
-              });
-            }
-            if (
-              flowmodoroState.isOnBreak &&
-              flowmodoroState.breakTimeRemaining > 0
-            ) {
-              setFlowmodoroState((prev) => {
-                if (!prev.isOnBreak) return prev;
-                const remaining = Math.max(
-                  0,
-                  (prev.breakTimeRemaining || 0) - deltaSec,
-                );
-                if (remaining <= 0) {
-                  return {
-                    ...prev,
-                    isOnBreak: false,
-                    breakTimeRemaining: 0,
-                    initialBreakDuration: 0,
-                  };
-                }
-                return { ...prev, breakTimeRemaining: remaining };
-              });
-            }
-          }
-        } else {
-          // Nothing meaningful to catch up; just reset anchor
-          lastTickTimestampRef.current = now;
+    let cancelled = false;
+    void (async () => {
+      const persisted = await getTimer("flowmodoro:break");
+      if (cancelled) return;
+      if (!persisted) {
+        if (flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
+          await persistModeTimer(
+            "flowmodoro:break",
+            "start",
+            flowmodoroState.breakTimeRemaining * 1_000,
+          );
         }
+        return;
       }
+      const snapshot = snapshotTimer(persisted);
+      setFlowmodoroState((previous) => {
+        if (!previous.isOnBreak) return previous;
+        const remaining = Math.max(
+          0,
+          Math.ceil((snapshot.remainingMs || 0) / 1_000),
+        );
+        return {
+          ...previous,
+          isOnBreak: remaining > 0,
+          breakTimeRemaining: remaining,
+          initialBreakDuration:
+            remaining > 0 ? previous.initialBreakDuration : 0,
+        };
+      });
+    })().catch((error) =>
+      console.error("Failed to restore Flowmodoro break timer", error),
+    );
+    return () => {
+      cancelled = true;
     };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () =>
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [
-    isTimerActive,
-    isPaused,
-    handleTimerTick,
-    currentMode,
-    dailyActivities,
-    flowmodoroState.isOnBreak,
-    flowmodoroState.breakTimeRemaining,
-    settings.flowmodoroEnabled,
-    settings.flowmodoroAutoCatchup,
-  ]);
+    // Hydrate once from the timestamp record. Later changes are local semantic
+    // transitions and cross-window updates are handled by controller ownership.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(
+    () =>
+      appStorage.subscribeExternal((keys) => {
+        if (timerController.getSnapshot().isController) return;
+        const read = (key: string) => {
+          const value = appStorage.getItem(key);
+          return value === null ? undefined : JSON.parse(value);
+        };
+        try {
+          if (keys.includes("timeSliceActivities")) {
+            const next = read("timeSliceActivities");
+            if (Array.isArray(next)) {
+              activitiesRef.current = next;
+              setActivities(next);
+            }
+          }
+          if (keys.includes("timeSliceSettings")) {
+            const next = read("timeSliceSettings");
+            if (next && typeof next === "object") {
+              setSettings((previous) => ({ ...previous, ...next }));
+            }
+          }
+          if (keys.includes("timeSliceDailyActivities")) {
+            const next = read("timeSliceDailyActivities");
+            if (Array.isArray(next)) {
+              setDailyActivities(
+                next.map((activity) => ({
+                  ...activity,
+                  startedAt: activity.startedAt
+                    ? new Date(activity.startedAt)
+                    : null,
+                })),
+              );
+            }
+          }
+          if (keys.includes("timeSliceActiveDailyActivity")) {
+            setActiveDailyActivity(
+              read("timeSliceActiveDailyActivity") ?? null,
+            );
+          }
+          if (keys.includes("timeSliceSingleActivityState")) {
+            const next = read("timeSliceSingleActivityState");
+            if (next && typeof next === "object") {
+              setSingleActivityState({
+                ...next,
+                startTime: next.startTime ? new Date(next.startTime) : null,
+              });
+            }
+          }
+          if (keys.includes("timeSliceFlowmodoro")) {
+            const next = read("timeSliceFlowmodoro");
+            if (next && typeof next === "object") setFlowmodoroState(next);
+          }
+          if (keys.includes("timeSliceSessionState")) {
+            const next = read("timeSliceSessionState");
+            if (next && typeof next === "object") {
+              setIsTimerActive(Boolean(next.isTimerActive));
+              setIsPaused(Boolean(next.isPaused));
+              setCurrentActivityIndex(
+                Math.max(0, Number(next.currentActivityIndex) || 0),
+              );
+              setSessionPlanFrozen(Boolean(next.sessionPlanFrozen));
+            }
+          }
+        } catch (error) {
+          console.error("Failed to apply synchronized TimeSlice state", error);
+        }
+      }),
+    [],
+  );
 
   // Screen Wake Lock
   useEffect(() => {
@@ -11201,17 +11000,35 @@ export default function App() {
   const startDailyActivity = (activityId) => {
     console.log("Starting daily activity:", activityId);
     setDailyActivities((prev: any) => {
-      const activities = prev.map((activity: any) => ({
-        ...activity,
-        isActive: activity.id === activityId,
-        status:
-          activity.id === activityId
-            ? "active"
-            : activity.status === "active"
-              ? "scheduled"
-              : activity.status,
-        startedAt: activity.id === activityId ? new Date() : activity.startedAt,
-      }));
+      const now = new Date();
+      const activities = prev.map((activity: any) => {
+        let timeSpentSeconds = Number.isFinite(activity.timeSpentSeconds)
+          ? activity.timeSpentSeconds
+          : Math.max(0, Number(activity.timeSpent || 0) * 60);
+        if (
+          activity.id !== activityId &&
+          activity.isActive &&
+          activity.startedAt
+        ) {
+          timeSpentSeconds += Math.max(
+            0,
+            Math.floor((now.getTime() - new Date(activity.startedAt).getTime()) / 1_000),
+          );
+        }
+        return {
+          ...activity,
+          isActive: activity.id === activityId,
+          status:
+            activity.id === activityId
+              ? "active"
+              : activity.status === "active"
+                ? "scheduled"
+                : activity.status,
+          startedAt: activity.id === activityId ? now : null,
+          timeSpent: Math.floor(timeSpentSeconds / 60),
+          timeSpentSeconds,
+        };
+      });
 
       // Move the selected activity to the front
       const selectedIndex = activities.findIndex((a) => a.id === activityId);
@@ -11222,7 +11039,29 @@ export default function App() {
 
       return activities;
     });
+    const previousActiveId = activeDailyActivity;
+    const selectedDaily = dailyActivities.find(
+      (activity) => activity.id === activityId,
+    );
+    const dailyTargetMs = selectedDaily
+      ? Math.max(
+          0,
+          Number(selectedDaily.duration || 0) * 60 * 1_000 -
+            (Number.isFinite(selectedDaily.timeSpentSeconds)
+              ? selectedDaily.timeSpentSeconds
+              : Number(selectedDaily.timeSpent || 0) * 60) *
+              1_000,
+        )
+      : null;
     setActiveDailyActivity(activityId);
+    void (async () => {
+      if (previousActiveId && previousActiveId !== activityId) {
+        await persistModeTimer(`daily:${previousActiveId}`, "pause");
+      }
+      await persistModeTimer(`daily:${activityId}`, "start", dailyTargetMs);
+    })().catch((error) =>
+      console.error("Failed to start Daily timer", error),
+    );
   };
 
   const toggleDailyActivityCompletion = (activityId: string) => {
@@ -11230,12 +11069,14 @@ export default function App() {
       prev.map((activity) => {
         if (activity.id !== activityId) return activity;
         // Stop active timer and fold elapsed into timeSpent
-        let timeSpent = activity.timeSpent || 0;
+        let timeSpentSeconds = Number.isFinite(activity.timeSpentSeconds)
+          ? activity.timeSpentSeconds
+          : Math.max(0, Number(activity.timeSpent || 0) * 60);
         if (activity.isActive && activity.startedAt) {
           const currentSessionSeconds = Math.floor(
             (Date.now() - (activity.startedAt as any).getTime()) / 1000,
           );
-          timeSpent += Math.floor(currentSessionSeconds / 60);
+          timeSpentSeconds += Math.max(0, currentSessionSeconds);
         }
         if (activity.status === "completed") {
           // Uncomplete -> scheduled, clear earlyCompleted and reset subtasks
@@ -11259,13 +11100,15 @@ export default function App() {
           return updated;
         }
         // Complete -> set completed; if finished early, flag it
-        const early = timeSpent < (activity.duration || 0);
+        const timeSpent = Math.floor(timeSpentSeconds / 60);
+        const early = timeSpentSeconds < (activity.duration || 0) * 60;
         const updatedCompleted = {
           ...activity,
           status: "completed",
           isActive: false,
           startedAt: null,
           timeSpent,
+          timeSpentSeconds,
           earlyCompleted: early,
           subtasks: (activity.subtasks || []).map((subtask) => ({
             ...subtask,
@@ -11280,6 +11123,13 @@ export default function App() {
         return updatedCompleted;
       }),
     );
+    const selected = dailyActivities.find((activity) => activity.id === activityId);
+    void persistModeTimer(
+      `daily:${activityId}`,
+      selected?.status === "completed" ? "reset" : "complete",
+    ).catch((error) =>
+      console.error("Failed to persist Daily completion", error),
+    );
   };
 
   const stopDailyActivity = () => {
@@ -11290,13 +11140,17 @@ export default function App() {
           const currentSessionSeconds = Math.floor(
             (Date.now() - (activity.startedAt as any).getTime()) / 1000,
           );
-          const currentSessionMinutes = Math.floor(currentSessionSeconds / 60);
-          const finalTimeSpent = activity.timeSpent + currentSessionMinutes;
+          const finalTimeSpentSeconds =
+            (Number.isFinite(activity.timeSpentSeconds)
+              ? activity.timeSpentSeconds
+              : Math.max(0, Number(activity.timeSpent || 0) * 60)) +
+            Math.max(0, currentSessionSeconds);
           return {
             ...activity,
             isActive: false,
             status: "scheduled",
-            timeSpent: finalTimeSpent,
+            timeSpent: Math.floor(finalTimeSpentSeconds / 60),
+            timeSpentSeconds: finalTimeSpentSeconds,
             startedAt: null,
           };
         }
@@ -11307,7 +11161,13 @@ export default function App() {
         };
       }),
     );
+    const stoppedId = activeDailyActivity;
     setActiveDailyActivity(null);
+    if (stoppedId) {
+      void persistModeTimer(`daily:${stoppedId}`, "pause").catch((error) =>
+        console.error("Failed to pause Daily timer", error),
+      );
+    }
   };
 
   const removeDailyActivity = (activityId) => {
@@ -11318,6 +11178,9 @@ export default function App() {
     if (activeDailyActivity === activityId) {
       setActiveDailyActivity(null);
     }
+    void persistModeTimer(`daily:${activityId}`, "cancel").catch((error) =>
+      console.error("Failed to cancel Daily timer", error),
+    );
   };
 
   // Subtask management functions
@@ -12175,27 +12038,6 @@ export default function App() {
     });
   }, []);
 
-  // --- Flowmodoro off-screen accrual support ---
-  const lastWorkTsRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (
-      isTimerActive &&
-      !isPaused &&
-      settings.flowmodoroEnabled &&
-      !flowmodoroState.isOnBreak
-    ) {
-      lastWorkTsRef.current = Date.now();
-      try {
-        localStorage.setItem("flowLastWorkTs", String(lastWorkTsRef.current));
-      } catch {}
-    }
-  }, [
-    isTimerActive,
-    isPaused,
-    settings.flowmodoroEnabled,
-    flowmodoroState.isOnBreak,
-  ]);
-
   const updateActivityName = (id, name) => {
     // Allow empty string during editing, only default when saving/blur
     console.log("Updating activity name:", id, "to:", name);
@@ -12312,6 +12154,13 @@ export default function App() {
         activities[newIndex],
       );
       setCurrentActivityIndex(newIndex);
+      void persistSessionRunSnapshot("running", {
+        activities,
+        currentActivityIndex: newIndex,
+        sessionPlanFrozen: true,
+      }).catch((error) =>
+        console.error("Failed to persist Session start snapshot", error),
+      );
     } else {
       console.error("Cannot start session - invalid state:", {
         totalPercentage,
@@ -12324,6 +12173,9 @@ export default function App() {
     setIsPaused((prev) => !prev);
     void persistSessionTimer(isPaused ? "start" : "pause").catch((error) =>
       console.error("Failed to persist session pause", error),
+    );
+    void persistSessionRunSnapshot(isPaused ? "running" : "paused").catch(
+      (error) => console.error("Failed to persist Session pause snapshot", error),
     );
   };
 
@@ -12348,6 +12200,7 @@ export default function App() {
     void persistSessionTimer("reset").catch((error) =>
       console.error("Failed to reset persisted session timer", error),
     );
+    void deleteSessionRun();
 
     // Clear session state from localStorage
     try {
@@ -12504,6 +12357,7 @@ export default function App() {
     void persistSessionTimer("pause").catch((error) =>
       console.error("Failed to checkpoint session", error),
     );
+    void deleteSessionRun();
   };
 
   const handleBorrowTime = (amountInSeconds) => {
@@ -13096,7 +12950,10 @@ export default function App() {
                 </h2>
               </div>
               {settings.showActivityTimer && (
-                <div className="text-4xl sm:text-5xl font-mono font-bold text-slate-800">
+                <div
+                  aria-label="Current activity time"
+                  className="text-4xl sm:text-5xl font-mono font-bold text-slate-800"
+                >
                   {currentActivity?.isCompleted
                     ? "COMPLETED"
                     : formatTime(currentActivity?.timeRemaining || 0)}
@@ -13494,247 +13351,6 @@ export default function App() {
             }
             onClose={() => setSessionReportOpen(false)}
           />
-        )}
-        {false && sessionReportOpen && lastSessionReport && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2">
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-4 sm:p-5">
-              <div className="flex items-center justify-between mb-2">
-                <div>
-                  <h3 className="text-lg font-bold">Session Report</h3>
-                  <div className="text-xs text-slate-500">
-                    Planned vs Actual (minutes) • Priority first
-                  </div>
-                </div>
-                <button
-                  className="text-slate-600 hover:text-slate-900"
-                  onClick={() => setSessionReportOpen(false)}
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="max-h-72 overflow-auto border rounded">
-                <div className="grid grid-cols-16 gap-2 p-2 text-[11px] font-semibold bg-slate-50">
-                  <div className="col-span-4">Activity</div>
-                  <div className="col-span-2 text-right">Planned</div>
-                  <div className="col-span-1 text-right">(%)</div>
-                  <div className="col-span-2 text-right">Actual</div>
-                  <div className="col-span-1 text-right">(%)</div>
-                  <div
-                    className="col-span-1 text-right"
-                    title="Overtime seconds (capped)"
-                  >
-                    OT(s)
-                  </div>
-                  <div
-                    className="col-span-1 text-right"
-                    title="Approx drained seconds inferred"
-                  >
-                    Drn(s)
-                  </div>
-                  <div
-                    className="col-span-1 text-right"
-                    title="Donor-derived overtime received"
-                  >
-                    Recv(s)
-                  </div>
-                  <div className="col-span-2 text-right">Δ</div>
-                </div>
-                {lastSessionReport.rows
-                  .slice()
-                  .sort((a, b) => {
-                    const A = activities.find((x) => x.id === a.id)?.priority
-                      ? 1
-                      : 0;
-                    const B = activities.find((x) => x.id === b.id)?.priority
-                      ? 1
-                      : 0;
-                    return B - A; // priority first
-                  })
-                  .map((r) => {
-                    const plannedMin = Math.round(r.planned / 60);
-                    const actualMin = Math.round(r.actual / 60);
-                    const deltaMin = Math.round((r.actual - r.planned) / 60);
-                    const safePlanned = Math.max(0, plannedMin);
-                    const safeActual = Math.max(0, actualMin);
-                    const totalPlannedMin = Math.max(
-                      1,
-                      Math.round(lastSessionReport.totals.planned / 60),
-                    );
-                    const totalActualMin = Math.max(
-                      1,
-                      Math.round(lastSessionReport.totals.actual / 60),
-                    );
-                    const plannedPct = Math.round(
-                      (safePlanned / totalPlannedMin) * 100,
-                    );
-                    const actualPct = Math.round(
-                      (safeActual / totalActualMin) * 100,
-                    );
-                    const cap = Math.max(safePlanned, safeActual, 1);
-                    const barPct = Math.min(
-                      100,
-                      Math.round((Math.abs(deltaMin) / cap) * 100),
-                    );
-                    const isPositive = deltaMin >= 0;
-                    return (
-                      <div
-                        key={r.id}
-                        className={`grid grid-cols-16 gap-2 items-center p-2 text-[11px] border-t ${activities.find((x) => x.id === r.id)?.priority ? "bg-amber-50" : ""}`}
-                      >
-                        <div className="col-span-4 min-w-0">
-                          <div className="truncate font-medium" title={r.name}>
-                            {activities.find((x) => x.id === r.id)?.priority
-                              ? "★ "
-                              : ""}
-                            {r.name}
-                          </div>
-                          {settings.showTagChips &&
-                            (() => {
-                              const act = activities.find((x) => x.id === r.id);
-                              const tags = act?.tags || [];
-                              if (!tags.length) return null;
-                              return (
-                                <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                                  {tags.map((t, idx) => {
-                                    const tagObj = rpgTags?.find(
-                                      (rt) => rt.id === t,
-                                    );
-                                    if (tagObj) {
-                                      return (
-                                        <span
-                                          key={idx}
-                                          className={`rounded-full border ${settings.compactTagChips ? "px-1 py-0 text-[10px] leading-none" : "px-1.5 py-0.5 text-[11px] leading-tight"}`}
-                                          style={{
-                                            backgroundColor: tagObj.color,
-                                            color: "#fff",
-                                            borderColor: "rgba(0,0,0,0.1)",
-                                          }}
-                                          title={
-                                            tagObj.description
-                                              ? `${tagObj.name} — ${tagObj.description}`
-                                              : tagObj.name
-                                          }
-                                        >
-                                          {tagObj.name}
-                                        </span>
-                                      );
-                                    }
-                                    return (
-                                      <span
-                                        key={idx}
-                                        className={`rounded-full bg-slate-100 text-slate-700 border border-slate-200 ${settings.compactTagChips ? "px-1 py-0 text-[10px] leading-none" : "px-1.5 py-0.5 text-[11px] leading-tight"}`}
-                                      >
-                                        #{String(t).toLowerCase()}
-                                      </span>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })()}
-                        </div>
-                        <div className="col-span-2 text-right tabular-nums">
-                          {safePlanned}
-                        </div>
-                        <div className="col-span-1 text-right tabular-nums text-slate-500">
-                          {plannedPct}%
-                        </div>
-                        <div className="col-span-2 text-right tabular-nums">
-                          {safeActual}
-                        </div>
-                        <div className="col-span-1 text-right tabular-nums text-slate-500">
-                          {actualPct}%
-                        </div>
-                        <div
-                          className="col-span-1 text-right tabular-nums text-purple-600"
-                          title="Overtime (s)"
-                        >
-                          {r.overtimeSeconds || 0}
-                        </div>
-                        <div
-                          className="col-span-1 text-right tabular-nums text-amber-600"
-                          title="Donated away (s)"
-                        >
-                          {r.drainedSeconds || 0}
-                        </div>
-                        <div
-                          className="col-span-1 text-right tabular-nums text-indigo-600"
-                          title="Received overtime (s)"
-                        >
-                          {r.receivedOvertime || 0}
-                        </div>
-                        <div className="col-span-2">
-                          <div className="flex items-center justify-end gap-2">
-                            <div
-                              className={`text-right tabular-nums ${isPositive ? "text-emerald-600" : "text-red-600"}`}
-                            >
-                              {deltaMin}
-                            </div>
-                            <div className="relative h-2 w-20 bg-slate-100 rounded overflow-hidden">
-                              <div
-                                className={`h-full ${isPositive ? "bg-emerald-400" : "bg-red-400"}`}
-                                style={{ width: `${barPct}%` }}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-
-              <div className="mt-3 grid grid-cols-16 items-start text-sm border-t pt-2">
-                <div className="col-span-4 font-semibold">Totals</div>
-                <div className="col-span-2 text-right tabular-nums font-semibold">
-                  {Math.round(lastSessionReport.totals.planned / 60)}
-                </div>
-                <div className="col-span-1 text-right tabular-nums text-slate-500 font-semibold">
-                  100%
-                </div>
-                <div className="col-span-2 text-right tabular-nums font-semibold">
-                  {Math.round(lastSessionReport.totals.actual / 60)}
-                </div>
-                <div className="col-span-1 text-right tabular-nums text-slate-500 font-semibold">
-                  100%
-                </div>
-                <div
-                  className="col-span-1 text-right tabular-nums text-purple-700"
-                  title="Total overtime seconds"
-                >
-                  {lastSessionReport.totals.overtime}
-                </div>
-                <div
-                  className="col-span-1 text-right tabular-nums text-amber-700"
-                  title="Total donated seconds"
-                >
-                  {lastSessionReport.totals.drained}
-                </div>
-                <div
-                  className="col-span-1 text-right tabular-nums text-indigo-700"
-                  title="Total received overtime seconds"
-                >
-                  {lastSessionReport.totals.received}
-                </div>
-                <div className="col-span-2 flex flex-col items-end text-right">
-                  <div
-                    className={`tabular-nums ${lastSessionReport.totals.delta >= 0 ? "text-emerald-700" : "text-red-700"}`}
-                  >
-                    Δ: {Math.round(lastSessionReport.totals.delta / 60)}m (
-                    {Math.round(lastSessionReport.totals.pct)}%)
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setSessionReportOpen(false)}
-                >
-                  Close
-                </Button>
-              </div>
-            </div>
-          </div>
         )}
         <Card className="overflow-hidden">
           <CardHeader>
@@ -16582,6 +16198,7 @@ export default function App() {
                 <SingleActivityMode
                   singleState={singleActivityState}
                   onStart={startSingleActivity}
+                  onPause={toggleSingleActivityPause}
                   onComplete={completeSingleActivity}
                   onCancel={cancelSingleActivity}
                   flowmodoroState={flowmodoroState}

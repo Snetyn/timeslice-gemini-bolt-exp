@@ -1,6 +1,12 @@
 import {
+  cancelTimer,
   checkpointTimer,
+  completeTimer,
+  createTimer,
+  pauseTimer,
   reconcileTimer,
+  resetTimer,
+  startTimer,
   type TimerState,
 } from "../domain/timer";
 import {
@@ -103,3 +109,52 @@ export async function saveSessionReport(
 
 export const listSessionReports = () =>
   timeSliceDb.sessionReports.orderBy("updatedAtMs").reverse().toArray();
+
+export type TimerCommand =
+  "start" | "pause" | "checkpoint" | "complete" | "cancel" | "reset";
+
+/**
+ * Applies one semantic timer command with bounded conflict retries. No timer
+ * command is issued by the display scheduler, so IndexedDB is never written
+ * merely because another second appeared on screen.
+ */
+export async function transitionTimer(
+  id: string,
+  command: TimerCommand,
+  options: { nowMs?: number; targetDurationMs?: number | null } = {},
+) {
+  const nowMs = options.nowMs ?? Date.now();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const existing =
+      (await getTimer(id)) ||
+      createTimer(id, nowMs, options.targetDurationMs ?? null);
+    const next =
+      command === "start"
+        ? startTimer(
+            options.targetDurationMs === undefined
+              ? existing
+              : resetTimer(existing, nowMs, options.targetDurationMs),
+            nowMs,
+          )
+        : command === "pause"
+          ? pauseTimer(existing, nowMs)
+          : command === "checkpoint"
+            ? checkpointTimer(existing, nowMs)
+            : command === "complete"
+              ? completeTimer(existing, nowMs)
+              : command === "cancel"
+                ? cancelTimer(existing, nowMs)
+                : resetTimer(
+                    existing,
+                    nowMs,
+                    options.targetDurationMs ?? existing.targetDurationMs,
+                  );
+    try {
+      return (await saveTimer(next, existing.revision)).value;
+    } catch (error) {
+      if (!(error instanceof RevisionConflictError) || attempt === 2)
+        throw error;
+    }
+  }
+  throw new RevisionConflictError();
+}

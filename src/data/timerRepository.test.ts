@@ -4,6 +4,7 @@ import {
   RevisionConflictError,
   reconcilePersistedTimer,
   saveTimer,
+  transitionTimer,
 } from "./timerRepository";
 import { timeSliceDb } from "./timesliceDb";
 
@@ -36,5 +37,14 @@ describe("timer repository", () => {
     expect((await timeSliceDb.timers.get("single"))?.value.updatedAtMs).toBe(
       running.updatedAtMs,
     );
+  });
+
+  it("persists semantic commands while preserving elapsed timestamps", async () => {
+    await transitionTimer("daily:focus", "start", { nowMs: 1_000 });
+    const paused = await transitionTimer("daily:focus", "pause", {
+      nowMs: 6_000,
+    });
+    expect(paused.status).toBe("paused");
+    expect(paused.accumulatedMs).toBe(5_000);
   });
 });

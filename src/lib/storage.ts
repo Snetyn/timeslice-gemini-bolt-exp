@@ -8,6 +8,7 @@ import {
   type VersionedRecord,
 } from "../data/timesliceDb";
 import { timerController } from "./controller";
+import { normalizeSessionRunSnapshot } from "../domain/sessionSnapshot";
 
 export const STORAGE_KEY = "timeslice.state.v2";
 
@@ -40,6 +41,7 @@ let flushPromise: Promise<void> | null = null;
 let flushTimer: number | undefined;
 const changed = new Set<string>();
 const listeners = new Set<() => void>();
+const externalListeners = new Set<(keys: string[]) => void>();
 const channel =
   typeof BroadcastChannel === "undefined"
     ? null
@@ -61,6 +63,7 @@ channel?.addEventListener(
       else delete cache[key];
     });
     emit();
+    externalListeners.forEach((listener) => listener(event.data.keys || []));
   },
 );
 
@@ -69,6 +72,17 @@ export async function hydrateAppStorage() {
   await timeSliceDb.open();
   await migrateLegacyStorage();
   cache = await loadCompatibilityValues();
+  const sessionRun = await timeSliceDb.sessionRuns.get("current");
+  const snapshot = normalizeSessionRunSnapshot(sessionRun?.value.snapshot);
+  if (sessionRun && snapshot && snapshot.status !== "idle") {
+    cache.timeSliceActivities = JSON.stringify(sessionRun.value.activities);
+    cache.timeSliceSessionState = JSON.stringify(snapshot);
+    if (sessionRun.value.flowmodoroState !== undefined) {
+      cache.timeSliceFlowmodoro = JSON.stringify(
+        sessionRun.value.flowmodoroState,
+      );
+    }
+  }
   hydrated = true;
 }
 
@@ -156,6 +170,13 @@ export const appStorage = {
   subscribe(listener: () => void) {
     listeners.add(listener);
     return () => listeners.delete(listener);
+  },
+
+  subscribeExternal(listener: (keys: string[]) => void) {
+    externalListeners.add(listener);
+    return () => {
+      externalListeners.delete(listener);
+    };
   },
 
   get hydrated() {

@@ -4,6 +4,7 @@ import "./index.css";
 import App from "./App.tsx";
 import { hydrateAppStorage } from "./lib/storage";
 import { timerController } from "./lib/controller";
+import { PwaUpdatePrompt } from "./components/PwaUpdatePrompt";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -19,6 +20,7 @@ async function boot() {
     root.render(
       <StrictMode>
         <App />
+        <PwaUpdatePrompt />
       </StrictMode>,
     );
   } catch (error) {

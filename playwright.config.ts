@@ -19,8 +19,28 @@ export default defineConfig({
       use: { browserName: "chromium", ...devices["Desktop Chrome"] },
     },
     {
-      name: "mobile",
-      use: { browserName: "chromium", ...devices["iPhone 13"] },
+      name: "android-360",
+      use: {
+        browserName: "chromium",
+        viewport: { width: 360, height: 800 },
+        deviceScaleFactor: 2,
+        hasTouch: true,
+        isMobile: true,
+        userAgent:
+          "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36",
+      },
+    },
+    {
+      name: "android-412",
+      use: {
+        browserName: "chromium",
+        viewport: { width: 412, height: 915 },
+        deviceScaleFactor: 2.625,
+        hasTouch: true,
+        isMobile: true,
+        userAgent:
+          "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36",
+      },
     },
   ],
   webServer: externalBaseUrl
