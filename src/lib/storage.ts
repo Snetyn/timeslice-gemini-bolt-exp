@@ -9,6 +9,7 @@ import {
 } from "../data/timesliceDb";
 import { timerController } from "./controller";
 import { normalizePersistedSessionRun } from "../domain/sessionSnapshot";
+import { migrateActivityCatalog } from "../data/migrateActivityCatalog";
 
 export const STORAGE_KEY = "timeslice.state.v2";
 
@@ -71,6 +72,7 @@ export async function hydrateAppStorage() {
   if (hydrated) return;
   await timeSliceDb.open();
   await migrateLegacyStorage();
+  await migrateActivityCatalog();
   cache = await loadCompatibilityValues();
   const sessionRunRecord = await timeSliceDb.sessionRuns.get("current");
   const sessionRun = normalizePersistedSessionRun(sessionRunRecord?.value);

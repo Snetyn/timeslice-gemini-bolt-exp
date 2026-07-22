@@ -2,6 +2,15 @@ import Dexie, { type EntityTable } from "dexie";
 import type { TimerState } from "../domain/timer";
 import type { PersistedSessionRun } from "../domain/sessionSnapshot";
 import type { ActivitySessionRecord } from "../domain/activitySession";
+import type {
+  ActivityDefinitionRecord,
+  ActivityFolderRecord,
+  LifeAreaRecord,
+} from "../domain/activityCatalog";
+import type {
+  DecisionMomentumRecord,
+  DecisionOpportunityRecord,
+} from "../domain/decisionMomentum";
 
 export type VersionedRecord<T> = {
   id: string;
@@ -30,6 +39,11 @@ type TransactionTable = keyof Pick<
   | "sessionReports"
   | "sessionRuns"
   | "activitySessions"
+  | "lifeAreas"
+  | "activityFolders"
+  | "activityDefinitions"
+  | "decisionOpportunities"
+  | "decisionMomentum"
   | "compatibility"
   | "meta"
 >;
@@ -53,6 +67,11 @@ export class TimeSliceDatabase extends Dexie {
   sessionReports!: EntityTable<SessionHistoryRecord, "id">;
   sessionRuns!: EntityTable<VersionedRecord<PersistedSessionRun>, "id">;
   activitySessions!: EntityTable<ActivitySessionRecord, "id">;
+  lifeAreas!: EntityTable<LifeAreaRecord, "id">;
+  activityFolders!: EntityTable<ActivityFolderRecord, "id">;
+  activityDefinitions!: EntityTable<ActivityDefinitionRecord, "id">;
+  decisionOpportunities!: EntityTable<DecisionOpportunityRecord, "id">;
+  decisionMomentum!: EntityTable<DecisionMomentumRecord, "id">;
   compatibility!: EntityTable<VersionedRecord<string>, "id">;
   meta!: EntityTable<MetaRecord, "id">;
 
@@ -77,6 +96,15 @@ export class TimeSliceDatabase extends Dexie {
     this.version(3).stores({
       activitySessions:
         "id, sourceTimerId, status, activityId, startedAtMs, endedAtMs, updatedAtMs, [sourceTimerId+status]",
+    });
+    this.version(4).stores({
+      lifeAreas: "id, normalizedName, archivedAtMs, order, updatedAtMs",
+      activityFolders: "id, parentId, archivedAtMs, order, updatedAtMs",
+      activityDefinitions:
+        "id, normalizedName, lifeAreaId, folderId, archivedAtMs, order, updatedAtMs, *sourceKeys",
+      decisionOpportunities: "id, status, reason, createdAtMs, updatedAtMs",
+      decisionMomentum:
+        "id, &decisionOpportunityId, activityDefinitionId, lifeAreaId, confirmedAtMs, updatedAtMs",
     });
   }
 }

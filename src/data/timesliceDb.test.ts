@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TimeSliceDatabase } from "./timesliceDb";
 
 describe("TimeSlice database upgrades", () => {
-  it("adds the activity ledger without rewriting version-2 records", async () => {
+  it("adds the catalog tables without rewriting earlier records", async () => {
     const name = `timeslice-upgrade-${crypto.randomUUID()}`;
     const legacy = new Dexie(name);
     legacy.version(1).stores({
@@ -33,12 +33,21 @@ describe("TimeSlice database upgrades", () => {
 
     const upgraded = new TimeSliceDatabase(name);
     await upgraded.open();
-    expect(upgraded.verno).toBe(3);
+    expect(upgraded.verno).toBe(4);
     expect((await upgraded.compatibility.get("timeSliceSettings"))?.value).toBe(
       '{"keep":true}',
     );
     expect(upgraded.tables.map((table) => table.name)).toContain(
       "activitySessions",
+    );
+    expect(upgraded.tables.map((table) => table.name)).toEqual(
+      expect.arrayContaining([
+        "lifeAreas",
+        "activityFolders",
+        "activityDefinitions",
+        "decisionOpportunities",
+        "decisionMomentum",
+      ]),
     );
     upgraded.close();
     await Dexie.delete(name);

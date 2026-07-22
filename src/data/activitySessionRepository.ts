@@ -70,6 +70,7 @@ const createRunningSession = (
   endedAtMs: null,
   durationMs: 0,
   corrections: [],
+  classificationCorrections: [],
   revision,
   createdAtMs: startedAtMs,
   updatedAtMs: startedAtMs,

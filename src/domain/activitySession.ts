@@ -19,6 +19,23 @@ export type ActivitySessionContext = {
   activityColor?: string;
   source: ActivitySessionSource;
   kind: ActivitySessionKind;
+  activityDefinitionId?: string;
+  lifeAreaId?: string;
+  lifeAreaName?: string;
+  lifeAreaColor?: string;
+  classificationSource?: "recorded" | "legacy-adoption" | "corrected";
+  classifiedAtMs?: number;
+};
+
+export type ActivityClassificationAudit = {
+  correctedAtMs: number;
+  previousActivityDefinitionId?: string;
+  previousLifeAreaId?: string;
+  previousLifeAreaName?: string;
+  nextActivityDefinitionId?: string;
+  nextLifeAreaId?: string;
+  nextLifeAreaName?: string;
+  reason: "legacy-adoption" | "correction";
 };
 
 export type ActivitySessionCorrection = {
@@ -39,6 +56,7 @@ export type ActivitySessionRecord = ActivitySessionContext & {
   endReason?: ActivitySessionEndReason;
   deletedAtMs?: number;
   corrections: ActivitySessionCorrection[];
+  classificationCorrections: ActivityClassificationAudit[];
   revision: number;
   createdAtMs: number;
   updatedAtMs: number;
@@ -87,6 +105,32 @@ export function normalizeActivitySessionContext(
         : undefined,
     source,
     kind,
+    activityDefinitionId:
+      typeof value.activityDefinitionId === "string" && value.activityDefinitionId.trim()
+        ? value.activityDefinitionId
+        : undefined,
+    lifeAreaId:
+      typeof value.lifeAreaId === "string" && value.lifeAreaId.trim()
+        ? value.lifeAreaId
+        : undefined,
+    lifeAreaName:
+      typeof value.lifeAreaName === "string" && value.lifeAreaName.trim()
+        ? value.lifeAreaName
+        : undefined,
+    lifeAreaColor:
+      typeof value.lifeAreaColor === "string" && value.lifeAreaColor.trim()
+        ? value.lifeAreaColor
+        : undefined,
+    classificationSource:
+      value.classificationSource === "legacy-adoption" || value.classificationSource === "corrected"
+        ? value.classificationSource
+        : value.classificationSource === "recorded"
+          ? "recorded"
+          : undefined,
+    classifiedAtMs:
+      value.classifiedAtMs === undefined
+        ? undefined
+        : finiteInteger(value.classifiedAtMs),
   };
 }
 
@@ -119,6 +163,24 @@ export function normalizeActivitySessionRecord(
         previousDurationMs: finiteInteger(correction.previousDurationMs),
       }))
     : [];
+  const classificationCorrections = Array.isArray(value.classificationCorrections)
+    ? value.classificationCorrections.filter(isRecord).map((correction) => ({
+        correctedAtMs: finiteInteger(correction.correctedAtMs),
+        previousActivityDefinitionId:
+          typeof correction.previousActivityDefinitionId === "string" ? correction.previousActivityDefinitionId : undefined,
+        previousLifeAreaId:
+          typeof correction.previousLifeAreaId === "string" ? correction.previousLifeAreaId : undefined,
+        previousLifeAreaName:
+          typeof correction.previousLifeAreaName === "string" ? correction.previousLifeAreaName : undefined,
+        nextActivityDefinitionId:
+          typeof correction.nextActivityDefinitionId === "string" ? correction.nextActivityDefinitionId : undefined,
+        nextLifeAreaId:
+          typeof correction.nextLifeAreaId === "string" ? correction.nextLifeAreaId : undefined,
+        nextLifeAreaName:
+          typeof correction.nextLifeAreaName === "string" ? correction.nextLifeAreaName : undefined,
+        reason: correction.reason === "legacy-adoption" ? "legacy-adoption" as const : "correction" as const,
+      }))
+    : [];
 
   return {
     ...context,
@@ -143,6 +205,7 @@ export function normalizeActivitySessionRecord(
         ? undefined
         : finiteInteger(value.deletedAtMs),
     corrections,
+    classificationCorrections,
     revision: finiteInteger(value.revision),
     createdAtMs: finiteInteger(value.createdAtMs, startedAtMs),
     updatedAtMs: finiteInteger(value.updatedAtMs, startedAtMs),
