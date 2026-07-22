@@ -24,4 +24,9 @@ describe("appStorage", () => {
       '["legacy"]',
     );
   });
+
+  it("keeps the Phase 0 database schema at version 2", async () => {
+    await hydrateAppStorage();
+    expect(timeSliceDb.verno).toBe(2);
+  });
 });

@@ -132,6 +132,12 @@ export const checkpointTimer = (
   const observedAtMs = observeNow(timer, nowMs);
   if (timer.status !== "running")
     return { ...timer, lastObservedAtMs: observedAtMs };
+  if (
+    timer.startedAtMs === observedAtMs &&
+    timer.lastObservedAtMs === observedAtMs
+  ) {
+    return timer;
+  }
   const accumulatedMs = elapsedAt(timer, observedAtMs);
   return next(timer, observedAtMs, {
     startedAtMs: observedAtMs,

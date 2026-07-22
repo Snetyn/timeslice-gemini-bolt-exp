@@ -16,6 +16,29 @@ export type SessionHistoryRecord = VersionedRecord<{
   report: unknown;
 }>;
 
+type TransactionTable = keyof Pick<
+  TimeSliceDatabase,
+  | "settings"
+  | "sessionActivities"
+  | "dailyActivities"
+  | "tags"
+  | "templates"
+  | "categories"
+  | "counters"
+  | "timers"
+  | "sessionReports"
+  | "sessionRuns"
+  | "compatibility"
+  | "meta"
+>;
+
+export class MutationIdConflictError extends Error {
+  constructor() {
+    super("This mutation ID has already been used for a different command.");
+    this.name = "MutationIdConflictError";
+  }
+}
+
 export class TimeSliceDatabase extends Dexie {
   settings!: EntityTable<VersionedRecord<unknown>, "id">;
   sessionActivities!: EntityTable<VersionedRecord<unknown>, "id">;
@@ -63,23 +86,7 @@ export const readWorkspaceRevision = async (db = timeSliceDb) =>
  * are atomic even when Web Locks are unavailable.
  */
 export async function transact<T>(
-  tables: Array<
-    keyof Pick<
-      TimeSliceDatabase,
-      | "settings"
-      | "sessionActivities"
-      | "dailyActivities"
-      | "tags"
-      | "templates"
-      | "categories"
-      | "counters"
-      | "timers"
-      | "sessionReports"
-      | "sessionRuns"
-      | "compatibility"
-      | "meta"
-    >
-  >,
+  tables: TransactionTable[],
   mutate: (revision: number) => Promise<T>,
   db = timeSliceDb,
 ): Promise<{ value: T; revision: number }> {
@@ -104,6 +111,71 @@ export async function transact<T>(
         updatedAtMs: Date.now(),
       });
       return { value, revision };
+    },
+  );
+}
+
+type StoredMutation<T> = {
+  fingerprint: string;
+  result: T;
+};
+
+/**
+ * Runs a mutation once. Replaying the same ID and fingerprint returns the
+ * original result without touching either the workspace or entity revision.
+ */
+export async function transactIdempotent<T>(
+  tables: TransactionTable[],
+  mutation: { id: string; fingerprint: string },
+  mutate: (revision: number) => Promise<T>,
+  db = timeSliceDb,
+): Promise<{ value: T; revision: number; replayed: boolean }> {
+  const transaction = db.transaction.bind(db) as unknown as (
+    mode: "rw",
+    ...args: Array<unknown>
+  ) => Promise<{ value: T; revision: number; replayed: boolean }>;
+  return transaction(
+    "rw",
+    ...tables.map((table) => db[table]),
+    db.meta,
+    async () => {
+      const mutationRecordId = `mutation:${mutation.id}`;
+      const existing = await db.meta.get(mutationRecordId);
+      if (existing) {
+        const stored = existing.value as Partial<StoredMutation<T>>;
+        if (
+          stored.fingerprint !== mutation.fingerprint ||
+          !("result" in stored)
+        ) {
+          throw new MutationIdConflictError();
+        }
+        return {
+          value: stored.result as T,
+          revision: existing.revision,
+          replayed: true,
+        };
+      }
+
+      const current =
+        ((await db.meta.get(WORKSPACE_REVISION_ID))?.value as
+          | number
+          | undefined) || 0;
+      const revision = current + 1;
+      const value = await mutate(revision);
+      const updatedAtMs = Date.now();
+      await db.meta.put({
+        id: mutationRecordId,
+        value: { fingerprint: mutation.fingerprint, result: value },
+        revision,
+        updatedAtMs,
+      });
+      await db.meta.put({
+        id: WORKSPACE_REVISION_ID,
+        value: revision,
+        revision,
+        updatedAtMs,
+      });
+      return { value, revision, replayed: false };
     },
   );
 }

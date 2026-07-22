@@ -26,6 +26,23 @@ const timerRevision = (page: Page, id: string) =>
     id,
   );
 
+const timerState = (page: Page, id: string) =>
+  page.evaluate(
+    (timerId) =>
+      new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
+        const request = indexedDB.open("timeslice");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const transaction = db.transaction("timers", "readonly");
+          const get = transaction.objectStore("timers").get(timerId);
+          get.onerror = () => reject(get.error);
+          get.onsuccess = () => resolve(get.result?.value);
+        };
+      }),
+    id,
+  );
+
 test("a running Session catches up once across an Android reload", async ({
   page,
 }) => {
@@ -120,6 +137,32 @@ test("Single pause survives reload and ordinary ticks do not write IndexedDB", a
   expect(
     await displayedSeconds(page.getByLabel("Single activity elapsed time")),
   ).toBeGreaterThan(pausedAt);
+});
+
+test("Daily switches ownership instead of running two activities", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Daily", exact: true }).click();
+
+  await page.getByText("Work", { exact: true }).last().click();
+  await expect
+    .poll(async () => (await timerState(page, "daily:work-1"))?.status)
+    .toBe("running");
+
+  await page.getByText("Exercise", { exact: true }).last().click();
+  await expect
+    .poll(async () => (await timerState(page, "daily:work-1"))?.status)
+    .toBe("paused");
+  await expect
+    .poll(async () => (await timerState(page, "daily:exercise-1"))?.status)
+    .toBe("running");
+
+  await page.reload();
+  expect((await timerState(page, "daily:work-1"))?.status).toBe("paused");
+  expect((await timerState(page, "daily:exercise-1"))?.status).toBe(
+    "running",
+  );
 });
 
 test("a view-only window receives live Session state and can take control", async ({

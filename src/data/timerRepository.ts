@@ -12,8 +12,12 @@ import {
 import {
   timeSliceDb,
   transact,
+  transactIdempotent,
+  MutationIdConflictError,
   type SessionHistoryRecord,
 } from "./timesliceDb";
+
+export { MutationIdConflictError } from "./timesliceDb";
 
 export class RevisionConflictError extends Error {
   constructor() {
@@ -32,30 +36,34 @@ export async function saveTimer(
   timer: TimerState,
   expectedRevision = timer.revision - 1,
   mutationId: string = crypto.randomUUID(),
+  mutationFingerprint = JSON.stringify({
+    kind: "timer-save",
+    timerId: timer.id,
+    expectedRevision,
+    timer,
+  }),
 ) {
-  return transact(["timers"], async (workspaceRevision) => {
-    const existing = await timeSliceDb.timers.get(timer.id);
-    if (existing && existing.value.revision !== expectedRevision) {
-      throw new RevisionConflictError();
-    }
-    const next = {
-      ...timer,
-      revision: Math.max(timer.revision, expectedRevision + 1),
-    };
-    await timeSliceDb.timers.put({
-      id: timer.id,
-      value: next,
-      revision: workspaceRevision,
-      updatedAtMs: Date.now(),
-    });
-    await timeSliceDb.meta.put({
-      id: `mutation:${mutationId}`,
-      value: { timerId: timer.id, revision: next.revision },
-      revision: workspaceRevision,
-      updatedAtMs: Date.now(),
-    });
-    return next;
-  });
+  return transactIdempotent(
+    ["timers"],
+    { id: mutationId, fingerprint: mutationFingerprint },
+    async (workspaceRevision) => {
+      const existing = await timeSliceDb.timers.get(timer.id);
+      if (existing && existing.value.revision !== expectedRevision) {
+        throw new RevisionConflictError();
+      }
+      const next = {
+        ...timer,
+        revision: Math.max(timer.revision, expectedRevision + 1),
+      };
+      await timeSliceDb.timers.put({
+        id: timer.id,
+        value: next,
+        revision: workspaceRevision,
+        updatedAtMs: Date.now(),
+      });
+      return next;
+    },
+  );
 }
 
 /** Reconciliation only writes when a real state transition occurred. */
@@ -85,6 +93,7 @@ export async function checkpointPersistedTimers(nowMs = Date.now()) {
     timers.map(async ({ value }) => {
       if (value.status !== "running") return value;
       const next = checkpointTimer(value, nowMs);
+      if (next.revision === value.revision) return value;
       return (await saveTimer(next, value.revision)).value;
     }),
   );
@@ -121,9 +130,21 @@ export type TimerCommand =
 export async function transitionTimer(
   id: string,
   command: TimerCommand,
-  options: { nowMs?: number; targetDurationMs?: number | null } = {},
+  options: {
+    nowMs?: number;
+    targetDurationMs?: number | null;
+    mutationId?: string;
+  } = {},
 ) {
   const nowMs = options.nowMs ?? Date.now();
+  const mutationId = options.mutationId ?? crypto.randomUUID();
+  const mutationFingerprint = JSON.stringify({
+    kind: "timer-command",
+    timerId: id,
+    command,
+    nowMs,
+    targetDurationMs: options.targetDurationMs,
+  });
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const existing =
       (await getTimer(id)) ||
@@ -150,8 +171,16 @@ export async function transitionTimer(
                     options.targetDurationMs ?? existing.targetDurationMs,
                   );
     try {
-      return (await saveTimer(next, existing.revision)).value;
+      return (
+        await saveTimer(
+          next,
+          existing.revision,
+          mutationId,
+          mutationFingerprint,
+        )
+      ).value;
     } catch (error) {
+      if (error instanceof MutationIdConflictError) throw error;
       if (!(error instanceof RevisionConflictError) || attempt === 2)
         throw error;
     }

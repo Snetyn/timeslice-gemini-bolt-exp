@@ -1,21 +1,30 @@
-import type { PersistedSessionRun } from "../domain/sessionSnapshot";
+import {
+  normalizePersistedSessionRun,
+  type PersistedSessionRun,
+} from "../domain/sessionSnapshot";
 import { timeSliceDb, transact } from "./timesliceDb";
 
 const CURRENT_SESSION_RUN_ID = "current";
 
-export const getSessionRun = async () =>
-  (await timeSliceDb.sessionRuns.get(CURRENT_SESSION_RUN_ID))?.value;
+export const getSessionRun = async () => {
+  const value = (await timeSliceDb.sessionRuns.get(CURRENT_SESSION_RUN_ID))
+    ?.value;
+  return normalizePersistedSessionRun(value) || undefined;
+};
 
-export const saveSessionRun = async (value: PersistedSessionRun) =>
-  transact(["sessionRuns"], async (revision) => {
+export const saveSessionRun = async (value: unknown) => {
+  const normalized = normalizePersistedSessionRun(value);
+  if (!normalized) throw new TypeError("Invalid persisted Session run");
+  return transact(["sessionRuns"], async (revision) => {
     await timeSliceDb.sessionRuns.put({
       id: CURRENT_SESSION_RUN_ID,
-      value,
+      value: normalized,
       revision,
       updatedAtMs: Date.now(),
     });
-    return value;
+    return normalized satisfies PersistedSessionRun;
   });
+};
 
 export const deleteSessionRun = async () =>
   transact(["sessionRuns"], async () => {

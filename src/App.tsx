@@ -6,7 +6,7 @@ import React, {
   useCallback,
   useSyncExternalStore,
 } from "react";
-import { appStorage, flushAppStorage } from "./lib/storage";
+import { appStorage } from "./lib/storage";
 import { isNewDay } from "./lib/timing";
 import {
   allocateSessionSeconds,
@@ -7688,7 +7688,6 @@ const SingleActivityMode = ({
 
 // --- Main Application Component ---
 export default function App() {
-  useTimerLifecycle();
   const controller = useSyncExternalStore(
     timerController.subscribe,
     timerController.getSnapshot,
@@ -9010,6 +9009,7 @@ export default function App() {
         vaultSeconds?: number;
         flowmodoroState?: typeof flowmodoroState;
         sessionPlanFrozen?: boolean;
+        observedAtMs?: number;
       } = {},
     ) => {
       if (!timerController.getSnapshot().isController) return Promise.resolve();
@@ -9017,7 +9017,8 @@ export default function App() {
         status,
         currentActivityIndex:
           overrides.currentActivityIndex ?? currentActivityIndexRef.current,
-        lastReconciledAtMs: status === "running" ? Date.now() : null,
+        lastReconciledAtMs:
+          status === "running" ? (overrides.observedAtMs ?? Date.now()) : null,
         sessionPlanFrozen:
           overrides.sessionPlanFrozen ?? sessionPlanFrozenRef.current,
         initialAllocatedSeconds:
@@ -9034,6 +9035,13 @@ export default function App() {
       });
     },
     [],
+  );
+
+  const checkpointActiveSession = useCallback(
+    (observedAtMs: number) => {
+      if (!isTimerActive || isPaused) return;
+      return persistSessionRunSnapshot("running", { observedAtMs });
+    }, [isPaused, isTimerActive, persistSessionRunSnapshot],
   );
 
   // Unified helper to award Flowmodoro rest time given elapsed focused work seconds.
@@ -9452,48 +9460,6 @@ export default function App() {
     persistSessionRunSnapshot,
   ]);
 
-  // The compatibility UI still keeps activity objects in React while it is
-  // being incrementally moved to the domain store. Checkpointing on pagehide
-  // makes that snapshot and the timestamp timer share one anchor, avoiding a
-  // stale start timestamp being replayed after an Android/PWA resume.
-  useEffect(() => {
-    const checkpointSessionSnapshot = () => {
-      if (!isTimerActive || isPaused) return;
-      localStorage.setItem(
-        "timeSliceSessionState",
-        JSON.stringify(
-          createSessionRunSnapshot({
-            status: "running",
-            currentActivityIndex,
-            lastReconciledAtMs: Date.now(),
-            sessionPlanFrozen,
-            initialAllocatedSeconds:
-              initialTotalAllocatedRef.current > 0
-                ? initialTotalAllocatedRef.current
-                : null,
-          }),
-        ),
-      );
-      void persistSessionRunSnapshot("running");
-      void flushAppStorage();
-    };
-    const checkpointWhenHidden = () => {
-      if (document.visibilityState === "hidden") checkpointSessionSnapshot();
-    };
-    window.addEventListener("pagehide", checkpointSessionSnapshot);
-    document.addEventListener("visibilitychange", checkpointWhenHidden);
-    return () => {
-      window.removeEventListener("pagehide", checkpointSessionSnapshot);
-      document.removeEventListener("visibilitychange", checkpointWhenHidden);
-    };
-  }, [
-    isTimerActive,
-    isPaused,
-    currentActivityIndex,
-    sessionPlanFrozen,
-    persistSessionRunSnapshot,
-  ]);
-
   // Save flowmodoro state to localStorage
   useEffect(() => {
     try {
@@ -9612,6 +9578,7 @@ export default function App() {
   // Restore session state and handle time gap on app load
   useEffect(() => {
     try {
+      const observedAtMs = Date.now();
       const saved = localStorage.getItem("timeSliceSessionState");
       if (saved) {
         const sessionState = normalizeSessionRunSnapshot(JSON.parse(saved));
@@ -9639,7 +9606,8 @@ export default function App() {
             );
             if (baseline > 0) initialTotalAllocatedRef.current = baseline;
           } catch {}
-          const timeGapMs = Date.now() - sessionState.lastReconciledAtMs;
+          const timeGapMs =
+            observedAtMs - sessionState.lastReconciledAtMs;
           const timeGapSeconds = Math.max(0, Math.floor(timeGapMs / 1000));
 
           if (timeGapSeconds > 0) {
@@ -9671,6 +9639,7 @@ export default function App() {
             activitiesRef.current = transition.activities as Activity[];
             setActivities(transition.activities as Activity[]);
             setCurrentActivityIndex(transition.currentActivityIndex);
+            currentActivityIndexRef.current = transition.currentActivityIndex;
             flowBreakDrainSourceRef.current = transition.flowDrainSourceId;
             lastDrainedIndex.current = transition.donorCursor;
             vaultTimeRef.current = transition.vaultSeconds;
@@ -9680,6 +9649,7 @@ export default function App() {
               currentActivityIndex: transition.currentActivityIndex,
               vaultSeconds: transition.vaultSeconds,
               sessionPlanFrozen: true,
+              observedAtMs,
             });
             Object.entries(transition.donatedSecondsById).forEach(
               ([activityId, seconds]) => {
@@ -10082,6 +10052,7 @@ export default function App() {
       );
       if (transition.currentActivityIndex !== currentActivityIndex) {
         setCurrentActivityIndex(transition.currentActivityIndex);
+        currentActivityIndexRef.current = transition.currentActivityIndex;
         void persistSessionRunSnapshot("running", {
           activities: transition.activities as Activity[],
           currentActivityIndex: transition.currentActivityIndex,
@@ -10154,13 +10125,14 @@ export default function App() {
     );
   const hasActiveFlowmodoroBreak =
     flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
-  useElapsedScheduler({
+  useTimerLifecycle({
     enabled:
       (isTimerActive && !isPaused) ||
       currentMode === "daily" ||
       hasActiveDailyTimer ||
       hasActiveFlowmodoroBreak,
     onElapsed: handleTimerTick,
+    onCheckpoint: checkpointActiveSession,
   });
 
   useEffect(() => {
@@ -12722,24 +12694,22 @@ export default function App() {
     (activity) => activity.id === currentActivity?.id,
   );
 
-  // If no current activity exists, this indicates a serious state issue
-  if (isTimerActive && !currentActivity) {
-    console.error(
-      "Timer is active but no current activity found. Activities:",
-      activities,
-      "currentActivityIndex:",
-      currentActivityIndex,
-    );
-    // Reset to first incomplete activity or first activity
+  useEffect(() => {
+    if (!isTimerActive || currentActivity) return;
     const firstIncompleteIndex = activities.findIndex((a) => !a.isCompleted);
     if (firstIncompleteIndex !== -1) {
       setCurrentActivityIndex(firstIncompleteIndex);
+      currentActivityIndexRef.current = firstIncompleteIndex;
     } else if (activities.length > 0) {
       setCurrentActivityIndex(0);
+      currentActivityIndexRef.current = 0;
     } else {
-      // No activities at all - this should never happen
       setIsTimerActive(false);
     }
+  }, [activities, currentActivity, isTimerActive]);
+
+  // Recovery is scheduled above rather than mutating React state in render.
+  if (isTimerActive && !currentActivity) {
     return <div className="text-center text-red-500">Loading...</div>;
   }
 

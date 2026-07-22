@@ -41,6 +41,12 @@ describe("timestamp timer", () => {
     expect(elapsedAt(checkpoint, 7_000)).toBe(6_000);
   });
 
+  it("does not create another checkpoint at the same observed timestamp", () => {
+    const running = startTimer(createTimer("session", 1_000), 1_000);
+    const checkpoint = checkpointTimer(running, 4_000);
+    expect(checkpointTimer(checkpoint, 4_000)).toBe(checkpoint);
+  });
+
   it("completes a running timer at an explicit semantic boundary", () => {
     const running = startTimer(createTimer("daily", 1_000), 1_000);
     const completed = completeTimer(running, 4_500);

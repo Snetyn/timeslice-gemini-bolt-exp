@@ -8,7 +8,7 @@ import {
   type VersionedRecord,
 } from "../data/timesliceDb";
 import { timerController } from "./controller";
-import { normalizeSessionRunSnapshot } from "../domain/sessionSnapshot";
+import { normalizePersistedSessionRun } from "../domain/sessionSnapshot";
 
 export const STORAGE_KEY = "timeslice.state.v2";
 
@@ -72,14 +72,15 @@ export async function hydrateAppStorage() {
   await timeSliceDb.open();
   await migrateLegacyStorage();
   cache = await loadCompatibilityValues();
-  const sessionRun = await timeSliceDb.sessionRuns.get("current");
-  const snapshot = normalizeSessionRunSnapshot(sessionRun?.value.snapshot);
+  const sessionRunRecord = await timeSliceDb.sessionRuns.get("current");
+  const sessionRun = normalizePersistedSessionRun(sessionRunRecord?.value);
+  const snapshot = sessionRun?.snapshot;
   if (sessionRun && snapshot && snapshot.status !== "idle") {
-    cache.timeSliceActivities = JSON.stringify(sessionRun.value.activities);
+    cache.timeSliceActivities = JSON.stringify(sessionRun.activities);
     cache.timeSliceSessionState = JSON.stringify(snapshot);
-    if (sessionRun.value.flowmodoroState !== undefined) {
+    if (sessionRun.flowmodoroState !== undefined) {
       cache.timeSliceFlowmodoro = JSON.stringify(
-        sessionRun.value.flowmodoroState,
+        sessionRun.flowmodoroState,
       );
     }
   }

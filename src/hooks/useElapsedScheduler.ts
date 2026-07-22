@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { advanceClock, createClockAnchor } from "../domain/clock";
 
 type ElapsedSchedulerOptions = {
@@ -7,10 +7,15 @@ type ElapsedSchedulerOptions = {
   intervalMs?: number;
 };
 
+export type ElapsedSample = {
+  elapsedSeconds: number;
+  observedAtMs: number;
+};
+
 /**
- * One scheduler for live rendering and every browser/PWA lifecycle boundary.
- * Its callback receives a whole-second batch exactly once for each wall-clock
- * period; rerenders never recreate its anchor.
+ * Monotonic display scheduler. Browser lifecycle sampling is owned by
+ * `useTimerLifecycle`, which calls the returned sampler before reconciling or
+ * checkpointing durable state.
  */
 export function useElapsedScheduler({
   enabled,
@@ -19,41 +24,41 @@ export function useElapsedScheduler({
 }: ElapsedSchedulerOptions) {
   const callbackRef = useRef(onElapsed);
   const anchorRef = useRef(createClockAnchor());
+  const enabledRef = useRef(enabled);
 
   useEffect(() => {
     callbackRef.current = onElapsed;
   }, [onElapsed]);
 
   useEffect(() => {
+    enabledRef.current = enabled;
+    anchorRef.current = createClockAnchor();
+  }, [enabled]);
+
+  const sampleAt = useCallback((nowMs = Date.now()): ElapsedSample => {
+    if (!enabledRef.current) {
+      return { elapsedSeconds: 0, observedAtMs: Math.max(0, nowMs) };
+    }
+    const batch = advanceClock(anchorRef.current, nowMs);
+    anchorRef.current = batch.anchor;
+    if (batch.elapsedSeconds > 0) {
+      callbackRef.current(batch.elapsedSeconds, batch.anchor.observedAtMs);
+    }
+    return {
+      elapsedSeconds: batch.elapsedSeconds,
+      observedAtMs: batch.anchor.observedAtMs,
+    };
+  }, []);
+
+  useEffect(() => {
     if (!enabled) {
-      anchorRef.current = createClockAnchor();
       return;
     }
-
-    anchorRef.current = createClockAnchor();
-    const sample = () => {
-      const batch = advanceClock(anchorRef.current);
-      anchorRef.current = batch.anchor;
-      if (batch.elapsedSeconds > 0) {
-        callbackRef.current(batch.elapsedSeconds, batch.anchor.observedAtMs);
-      }
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") sample();
-    };
-    const onBoundary = () => sample();
-
-    const interval = window.setInterval(sample, intervalMs);
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pageshow", onBoundary);
-    window.addEventListener("pagehide", onBoundary, { capture: true });
-    window.addEventListener("focus", onBoundary);
+    const interval = window.setInterval(() => sampleAt(), intervalMs);
     return () => {
       window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pageshow", onBoundary);
-      window.removeEventListener("pagehide", onBoundary, { capture: true });
-      window.removeEventListener("focus", onBoundary);
     };
-  }, [enabled, intervalMs]);
+  }, [enabled, intervalMs, sampleAt]);
+
+  return sampleAt;
 }

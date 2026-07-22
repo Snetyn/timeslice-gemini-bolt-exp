@@ -24,13 +24,74 @@ describe("Session run repository", () => {
     });
     await saveSessionRun({
       snapshot,
-      activities: [{ id: "focus", timeRemaining: 55 }],
+      activities: [
+        {
+          id: "focus",
+          name: "Focus",
+          color: "#2563eb",
+          duration: 1,
+          timeRemaining: 55,
+        },
+      ],
       vaultSeconds: 3,
     });
     expect(await getSessionRun()).toEqual({
       snapshot,
-      activities: [{ id: "focus", timeRemaining: 55 }],
+      activities: [
+        expect.objectContaining({
+          id: "focus",
+          name: "Focus",
+          duration: 1,
+          timeRemaining: 55,
+        }),
+      ],
       vaultSeconds: 3,
+    });
+  });
+
+  it("filters invalid activities and normalizes unsafe timer values", async () => {
+    const snapshot = createSessionRunSnapshot({
+      status: "paused",
+      currentActivityIndex: 0,
+      sessionPlanFrozen: true,
+    });
+    await saveSessionRun({
+      snapshot,
+      activities: [
+        null,
+        { id: "", name: "Blank", duration: 1 },
+        {
+          id: "safe",
+          name: "Safe",
+          duration: Number.NaN,
+          timeRemaining: Number.POSITIVE_INFINITY,
+          countUp: true,
+          tags: ["one", 2],
+        },
+      ],
+      vaultSeconds: -20,
+      flowmodoroState: {
+        availableRestTime: Number.NaN,
+        breakTimeRemaining: -4,
+        isOnBreak: true,
+      },
+    });
+
+    expect(await getSessionRun()).toMatchObject({
+      activities: [
+        {
+          id: "safe",
+          duration: 0,
+          timeRemaining: 0,
+          tags: ["one"],
+        },
+      ],
+      vaultSeconds: 0,
+      flowmodoroState: {
+        availableRestTime: 0,
+        breakTimeRemaining: 0,
+        isOnBreak: false,
+      },
     });
   });
 

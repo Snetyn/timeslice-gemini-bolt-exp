@@ -34,6 +34,22 @@ export type SessionAdvanceResult = {
   donatedSecondsById: Record<string, number>;
   receivedSecondsById: Record<string, number>;
   completedActivityIds: string[];
+  activitySlices: SessionActivitySlice[];
+  excludedSeconds: number;
+};
+
+export type SessionActivitySliceKind = "countdown" | "count-up" | "overtime";
+
+/**
+ * Ordered focused-work trace within one elapsed batch. `offsetSeconds` is
+ * measured from the beginning of the batch, including any leading
+ * Flowmodoro break time that was deliberately excluded from focused work.
+ */
+export type SessionActivitySlice = {
+  activityId: string;
+  offsetSeconds: number;
+  durationSeconds: number;
+  kind: SessionActivitySliceKind;
 };
 
 const safeSeconds = (value: number | undefined) =>
@@ -95,6 +111,33 @@ export function advanceSessionRun({
   const donatedSecondsById: Record<string, number> = {};
   const receivedSecondsById: Record<string, number> = {};
   const completedActivityIds: string[] = [];
+  const activitySlices: SessionActivitySlice[] = [];
+  let batchOffsetSeconds = 0;
+
+  const appendActivitySlice = (
+    activityId: string,
+    durationSeconds: number,
+    kind: SessionActivitySliceKind,
+  ) => {
+    const duration = safeSeconds(durationSeconds);
+    if (duration <= 0) return;
+    const previous = activitySlices.at(-1);
+    if (
+      previous?.activityId === activityId &&
+      previous.kind === kind &&
+      previous.offsetSeconds + previous.durationSeconds === batchOffsetSeconds
+    ) {
+      previous.durationSeconds += duration;
+    } else {
+      activitySlices.push({
+        activityId,
+        offsetSeconds: batchOffsetSeconds,
+        durationSeconds: duration,
+        kind,
+      });
+    }
+    batchOffsetSeconds += duration;
+  };
 
   const breakSeconds = Math.min(
     remainingBatch,
@@ -102,6 +145,7 @@ export function advanceSessionRun({
   );
   if (flowBreakMode === "postpone") {
     remainingBatch -= breakSeconds;
+    batchOffsetSeconds += breakSeconds;
     nextFlowSource = null;
   } else if (flowBreakMode === "drain" && breakSeconds > 0) {
     const vaultDrain = Math.min(nextVault, breakSeconds);
@@ -120,6 +164,7 @@ export function advanceSessionRun({
       });
     }
     remainingBatch -= breakSeconds;
+    batchOffsetSeconds += breakSeconds;
   } else {
     nextFlowSource = null;
   }
@@ -138,6 +183,7 @@ export function advanceSessionRun({
     if (current.countUp) {
       current.timeRemaining =
         safeSeconds(current.timeRemaining) + remainingBatch;
+      appendActivitySlice(current.id, remainingBatch, "count-up");
       remainingBatch = 0;
       break;
     }
@@ -146,11 +192,13 @@ export function advanceSessionRun({
       const consumed = Math.min(remainingBatch, current.timeRemaining);
       current.timeRemaining -= consumed;
       remainingBatch -= consumed;
+      appendActivitySlice(current.id, consumed, "countdown");
       if (remainingBatch === 0) break;
     }
 
     if (overtimeMode === "postpone") {
       current.timeRemaining -= remainingBatch;
+      appendActivitySlice(current.id, remainingBatch, "overtime");
       remainingBatch = 0;
       break;
     }
@@ -180,6 +228,7 @@ export function advanceSessionRun({
       }
       current.timeRemaining -= 1;
       remainingBatch -= 1;
+      appendActivitySlice(current.id, 1, "overtime");
       continue;
     }
 
@@ -210,5 +259,7 @@ export function advanceSessionRun({
     donatedSecondsById,
     receivedSecondsById,
     completedActivityIds,
+    activitySlices,
+    excludedSeconds: breakSeconds,
   };
 }

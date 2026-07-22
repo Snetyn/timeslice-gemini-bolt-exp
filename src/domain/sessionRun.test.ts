@@ -27,6 +27,20 @@ describe("session run batch transition", () => {
     ]);
     expect(result.currentActivityIndex).toBe(1);
     expect(result.completedActivityIds).toEqual(["first"]);
+    expect(result.activitySlices).toEqual([
+      {
+        activityId: "first",
+        offsetSeconds: 0,
+        durationSeconds: 2,
+        kind: "countdown",
+      },
+      {
+        activityId: "second",
+        offsetSeconds: 2,
+        durationSeconds: 3,
+        kind: "countdown",
+      },
+    ]);
   });
 
   it("keeps a count-up stable at zero and applies a later batch once", () => {
@@ -37,6 +51,7 @@ describe("session run batch transition", () => {
       overtimeMode: "none",
     });
     expect(zero.activities[0].timeRemaining).toBe(0);
+    expect(zero.activitySlices).toEqual([]);
 
     const advanced = advanceSessionRun({
       activities: zero.activities,
@@ -45,6 +60,14 @@ describe("session run batch transition", () => {
       overtimeMode: "none",
     });
     expect(advanced.activities[0].timeRemaining).toBe(42);
+    expect(advanced.activitySlices).toEqual([
+      {
+        activityId: "up",
+        offsetSeconds: 0,
+        durationSeconds: 42,
+        kind: "count-up",
+      },
+    ]);
   });
 
   it("postpones Session work for exactly the Flowmodoro break batch", () => {
@@ -57,6 +80,15 @@ describe("session run batch transition", () => {
       flowBreakRemainingSeconds: 5,
     });
     expect(result.activities[0].timeRemaining).toBe(17);
+    expect(result.excludedSeconds).toBe(5);
+    expect(result.activitySlices).toEqual([
+      {
+        activityId: "focus",
+        offsetSeconds: 5,
+        durationSeconds: 3,
+        kind: "countdown",
+      },
+    ]);
   });
 
   it("drains Vault first and then only one eligible Flow source", () => {
@@ -75,6 +107,8 @@ describe("session run batch transition", () => {
     );
     expect(result.donatedSecondsById).toEqual({ first: 5 });
     expect(result.flowDrainSourceId).toBe("first");
+    expect(result.excludedSeconds).toBe(7);
+    expect(result.activitySlices).toEqual([]);
   });
 
   it("records deterministic overtime drain transfers", () => {
@@ -89,6 +123,38 @@ describe("session run batch transition", () => {
     );
     expect(result.donatedSecondsById).toEqual({ donor: 3 });
     expect(result.receivedSecondsById).toEqual({ overtime: 3 });
+    expect(result.activitySlices).toEqual([
+      {
+        activityId: "overtime",
+        offsetSeconds: 0,
+        durationSeconds: 3,
+        kind: "overtime",
+      },
+    ]);
+  });
+
+  it("traces postponed overtime without splitting a contiguous slice", () => {
+    const result = advanceSessionRun({
+      activities: [task("focus", 2)],
+      currentActivityIndex: 0,
+      elapsedSeconds: 5,
+      overtimeMode: "postpone",
+    });
+    expect(result.activities[0].timeRemaining).toBe(-3);
+    expect(result.activitySlices).toEqual([
+      {
+        activityId: "focus",
+        offsetSeconds: 0,
+        durationSeconds: 2,
+        kind: "countdown",
+      },
+      {
+        activityId: "focus",
+        offsetSeconds: 2,
+        durationSeconds: 3,
+        kind: "overtime",
+      },
+    ]);
   });
 
   it("sanitizes invalid remaining values before advancing", () => {
