@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyActivitySessionTrace,
+  correctActivitySessionClassification,
   correctActivitySession,
+  endActivitySession,
   listActivitySessions,
   setActivitySessionDeleted,
   switchActivitySession,
 } from "./activitySessionRepository";
+import {
+  createActivityDefinition,
+  createLifeArea,
+  updateActivityDefinition,
+} from "./activityCatalogRepository";
 import { reconcilePersistedTimer, transitionTimer } from "./timerRepository";
 import { readWorkspaceRevision, timeSliceDb } from "./timesliceDb";
 
@@ -62,6 +69,96 @@ describe("activity session repository", () => {
 
     expect(await listActivitySessions()).toHaveLength(1);
     expect(await readWorkspaceRevision()).toBe(revision);
+  });
+
+  it("resolves a stable source and snapshots canonical area metadata atomically", async () => {
+    const area = (await createLifeArea({ name: "Work", color: "#7c3aed" })).value;
+    const definition = (
+      await createActivityDefinition({
+        name: "Deep work",
+        color: "#2563eb",
+        lifeAreaId: area.id,
+        sourceKeys: ["session:stable"],
+      })
+    ).value;
+    await transitionTimer("session", "start", {
+      nowMs: 1_000,
+      mutationId: "canonical-start",
+      recording: {
+        context: { ...focus, activityId: "stable", sourceKey: "session:stable" },
+      },
+    });
+    await transitionTimer("session", "complete", {
+      nowMs: 2_000,
+      recording: { endReason: "completed" },
+    });
+    const first = (await listActivitySessions())[0];
+    expect(first).toMatchObject({
+      activityDefinitionId: definition.id,
+      activityName: "Deep work",
+      lifeAreaId: area.id,
+      lifeAreaName: "Work",
+      lifeAreaColor: "#7c3aed",
+      classificationSource: "recorded",
+    });
+
+    await updateActivityDefinition(
+      definition.id,
+      { name: "Renamed future work" },
+      definition.revision,
+    );
+    expect((await timeSliceDb.activitySessions.get(first.id))?.activityName).toBe(
+      "Deep work",
+    );
+  });
+
+  it("creates one definition per exact source identity, never per visible name", async () => {
+    await switchActivitySession(
+      "daily:one",
+      { ...focus, source: "daily", kind: "standard", sourceKey: "daily:one" },
+      1_000,
+    );
+    await endActivitySession("daily:one", "completed", 2_000);
+    await switchActivitySession(
+      "daily:two",
+      { ...focus, source: "daily", kind: "standard", sourceKey: "daily:two" },
+      3_000,
+    );
+    expect(await timeSliceDb.activityDefinitions.count()).toBe(2);
+    expect(
+      (await timeSliceDb.activityDefinitions.toArray()).map((item) => item.sourceKeys),
+    ).toEqual(expect.arrayContaining([["daily:one"], ["daily:two"]]));
+  });
+
+  it("audits an explicit historical classification correction", async () => {
+    const firstArea = (await createLifeArea({ name: "One", color: "#111111" })).value;
+    const secondArea = (await createLifeArea({ name: "Two", color: "#222222" })).value;
+    const firstDefinition = (
+      await createActivityDefinition({ name: "Focus", lifeAreaId: firstArea.id })
+    ).value;
+    const secondDefinition = (
+      await createActivityDefinition({ name: "Focus", lifeAreaId: secondArea.id })
+    ).value;
+    await switchActivitySession(
+      "single",
+      { ...focus, source: "single", kind: "standard", activityDefinitionId: firstDefinition.id },
+      1_000,
+    );
+    await endActivitySession("single", "completed", 2_000);
+    const record = (await listActivitySessions())[0];
+    const corrected = (
+      await correctActivitySessionClassification(
+        record.id,
+        secondDefinition.id,
+        record.revision,
+      )
+    ).value;
+    expect(corrected.lifeAreaName).toBe("Two");
+    expect(corrected.classificationCorrections[0]).toMatchObject({
+      previousActivityDefinitionId: firstDefinition.id,
+      nextActivityDefinitionId: secondDefinition.id,
+      reason: "correction",
+    });
   });
 
   it("closes a recorded countdown when lifecycle reconciliation completes it", async () => {

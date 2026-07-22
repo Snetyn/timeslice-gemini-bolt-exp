@@ -387,6 +387,45 @@ export async function findDefinitionBySourceKey(sourceKey: string) {
   return candidates.map(normalizeActivityDefinition).find(Boolean) || null;
 }
 
+export async function listRecentActivityDefinitions(limit = 6) {
+  const sessions = await timeSliceDb.activitySessions
+    .orderBy("startedAtMs")
+    .reverse()
+    .toArray();
+  const folders = await timeSliceDb.activityFolders.toArray();
+  const archivedFolderIds = new Set(
+    folders
+      .filter((folder) => {
+        let cursor: ActivityFolderRecord | undefined = folder;
+        const visited = new Set<string>();
+        while (cursor) {
+          if (visited.has(cursor.id) || cursor.archivedAtMs !== undefined) return true;
+          visited.add(cursor.id);
+          cursor = cursor.parentId
+            ? folders.find((candidate) => candidate.id === cursor?.parentId)
+            : undefined;
+        }
+        return false;
+      })
+      .map((folder) => folder.id),
+  );
+  const result: ActivityDefinitionRecord[] = [];
+  const seen = new Set<string>();
+  for (const session of sessions) {
+    if (!session.activityDefinitionId || seen.has(session.activityDefinitionId)) continue;
+    const definition = await timeSliceDb.activityDefinitions.get(session.activityDefinitionId);
+    if (
+      !definition ||
+      definition.archivedAtMs !== undefined ||
+      (definition.folderId && archivedFolderIds.has(definition.folderId))
+    ) continue;
+    seen.add(definition.id);
+    result.push(definition);
+    if (result.length >= Math.max(0, Math.floor(limit))) break;
+  }
+  return result;
+}
+
 export type LegacyHistoryCandidate = {
   key: string;
   activityId: string;

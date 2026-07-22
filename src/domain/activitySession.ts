@@ -17,6 +17,7 @@ export type ActivitySessionContext = {
   activityId: string;
   activityName: string;
   activityColor?: string;
+  sourceKey?: string;
   source: ActivitySessionSource;
   kind: ActivitySessionKind;
   activityDefinitionId?: string;
@@ -102,6 +103,10 @@ export function normalizeActivitySessionContext(
     activityColor:
       typeof value.activityColor === "string" && value.activityColor.trim()
         ? value.activityColor
+        : undefined,
+    sourceKey:
+      typeof value.sourceKey === "string" && value.sourceKey.trim()
+        ? value.sourceKey.trim()
         : undefined,
     source,
     kind,

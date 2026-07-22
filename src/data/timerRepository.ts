@@ -53,7 +53,9 @@ export async function saveTimer(
   activityCommand?: ActivitySessionCommand,
 ) {
   return transactIdempotent(
-    activityCommand ? ["timers", "activitySessions"] : ["timers"],
+    activityCommand
+      ? ["timers", "activitySessions", "activityDefinitions", "lifeAreas"]
+      : ["timers"],
     { id: mutationId, fingerprint: mutationFingerprint },
     async (workspaceRevision) => {
       const existing = await timeSliceDb.timers.get(timer.id);

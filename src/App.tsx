@@ -41,6 +41,7 @@ import {
   deleteSessionRun,
   saveSessionRun,
 } from "./data/sessionRunRepository";
+import { listRecentActivityDefinitions } from "./data/activityCatalogRepository";
 
 // Keep the existing component code isolated from browser storage details. This
 // compatibility facade is hydrated from IndexedDB; browser localStorage is
@@ -81,6 +82,7 @@ interface Activity {
   tags?: string[];
   templateId?: string;
   sharedId?: string; // For linking session and daily activities
+  activityDefinitionId?: string;
   showOnBar?: boolean; // Visual inclusion toggle for session progress bars
   // Daily activity specific properties
   status?: "scheduled" | "active" | "completed" | "overtime";
@@ -114,6 +116,10 @@ const sessionRecordingContext = (
   activityId: activity.id,
   activityName: activity.name,
   activityColor: activity.color,
+  activityDefinitionId: activity.activityDefinitionId,
+  sourceKey: activity.sharedId
+    ? `shared:${activity.sharedId}`
+    : `session:${activity.id}`,
   source: "session",
   kind:
     kind ||
@@ -128,13 +134,22 @@ const dailyRecordingContext = (activity: Activity): ActivitySessionContext => ({
   activityId: activity.id,
   activityName: activity.name,
   activityColor: activity.color,
+  activityDefinitionId: activity.activityDefinitionId,
+  sourceKey: activity.sharedId
+    ? `shared:${activity.sharedId}`
+    : `daily:${activity.id}`,
   source: "daily",
   kind: "standard",
 });
 
-const singleRecordingContext = (name: string): ActivitySessionContext => ({
+const singleRecordingContext = (
+  name: string,
+  activityDefinitionId?: string,
+): ActivitySessionContext => ({
   activityId: adHocActivityId(name),
   activityName: name.trim() || "Single activity",
+  activityDefinitionId,
+  sourceKey: `single:${adHocActivityId(name)}`,
   source: "single",
   kind: "count-up",
 });
@@ -7011,6 +7026,7 @@ const SingleActivityMode = ({
   flowmodoroState,
   formatTime,
   settings,
+  recentActivities = [],
 }) => {
   const [activityName, setActivityName] = useState("");
   const [newActivityName, setNewActivityName] = useState("");
@@ -7436,6 +7452,27 @@ const SingleActivityMode = ({
                 Start Activity
               </Button>
             </div>
+            {recentActivities.length > 0 && (
+              <div className="mt-3" aria-label="Recent activities">
+                <div className="mb-1 text-xs font-medium text-gray-500">Recent</div>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {recentActivities.map((activity) => (
+                    <button
+                      key={activity.id}
+                      type="button"
+                      onClick={() => onStart(activity.name, activity.id)}
+                      className="min-h-11 shrink-0 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                    >
+                      <span
+                        className="mr-2 inline-block h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: activity.color }}
+                      />
+                      {activity.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -7740,6 +7777,7 @@ export default function App() {
     null,
   );
   const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
+  const [recentCanonicalActivities, setRecentCanonicalActivities] = useState([]);
   const ensuredSessionRecordingRef = useRef("");
   const ensuredDailyRecordingRef = useRef("");
   const ensuredSingleRecordingRef = useRef("");
@@ -7987,6 +8025,11 @@ export default function App() {
 
   // Mode state - 'session', 'daily', 'single', or 'flowmodoro'
   const [currentMode, setCurrentMode] = useState("session");
+  useEffect(() => {
+    void listRecentActivityDefinitions()
+      .then(setRecentCanonicalActivities)
+      .catch((error) => console.error("Failed to load recent activities", error));
+  }, [activityHistoryOpen, currentMode]);
 
   // Daily Mode State (Step 1: Basic daily activities) - Load from localStorage
   const [dailyActivities, setDailyActivities] = useState(() => {
@@ -9378,7 +9421,7 @@ export default function App() {
   };
 
   // Single Activity Mode handlers
-  const startSingleActivity = (activityName) => {
+  const startSingleActivity = (activityName, activityDefinitionId) => {
     const now = new Date();
     ensuredSingleRecordingRef.current = adHocActivityId(activityName);
     setSingleActivityState((prev) => ({
@@ -9393,7 +9436,7 @@ export default function App() {
       "single",
       "start",
       undefined,
-      { context: singleRecordingContext(activityName) },
+      { context: singleRecordingContext(activityName, activityDefinitionId) },
       now.getTime(),
     ).catch((error) =>
       console.error("Failed to start Single timer", error),
@@ -16636,6 +16679,7 @@ export default function App() {
                   flowmodoroState={flowmodoroState}
                   formatTime={formatTime}
                   settings={settings}
+                  recentActivities={recentCanonicalActivities}
                 />
               ) : currentMode === "flowmodoro" ? (
                 // Standalone Flowmodoro Mode Content

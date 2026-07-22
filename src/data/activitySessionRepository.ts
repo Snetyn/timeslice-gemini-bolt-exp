@@ -7,6 +7,10 @@ import {
   type ActivitySessionRecord,
 } from "../domain/activitySession";
 import { timeSliceDb, transactIdempotent } from "./timesliceDb";
+import {
+  normalizeSearchName,
+  type ActivityDefinitionRecord,
+} from "../domain/activityCatalog";
 
 const LEDGER_EPOCH_ID = "activity-session-ledger-started-at";
 
@@ -54,6 +58,64 @@ const ensureLedgerEpoch = async (atMs: number, revision: number) => {
   });
   return epoch;
 };
+
+const canonicalDefinitionId = (sourceKey: string) =>
+  `recorded:${encodeURIComponent(sourceKey)}`;
+
+/** Resolves and snapshots canonical metadata inside the recording transaction. */
+async function resolveRecordingContext(
+  input: ActivitySessionContext,
+  revision: number,
+  atMs: number,
+): Promise<ActivitySessionContext> {
+  const context = normalizeActivitySessionContext(input);
+  if (!context) throw new TypeError("Invalid activity recording context");
+  let definition = context.activityDefinitionId
+    ? await timeSliceDb.activityDefinitions.get(context.activityDefinitionId)
+    : undefined;
+  if (!definition && context.sourceKey) {
+    definition = (
+      await timeSliceDb.activityDefinitions
+        .where("sourceKeys")
+        .equals(context.sourceKey)
+        .toArray()
+    )[0];
+  }
+  if (!definition && context.sourceKey) {
+    definition = {
+      id: canonicalDefinitionId(context.sourceKey),
+      name: context.activityName,
+      normalizedName: normalizeSearchName(context.activityName),
+      aliases: [],
+      sourceKeys: [context.sourceKey],
+      color: context.activityColor || "#3b82f6",
+      lifeAreaId: null,
+      folderId: null,
+      order: await timeSliceDb.activityDefinitions.count(),
+      protected: false,
+      decisionType: "normal",
+      revision,
+      createdAtMs: atMs,
+      updatedAtMs: atMs,
+    } satisfies ActivityDefinitionRecord;
+    await timeSliceDb.activityDefinitions.put(definition);
+  }
+  if (!definition) return context;
+  const area = definition.lifeAreaId
+    ? await timeSliceDb.lifeAreas.get(definition.lifeAreaId)
+    : undefined;
+  return {
+    ...context,
+    activityDefinitionId: definition.id,
+    activityName: definition.name,
+    activityColor: definition.color,
+    lifeAreaId: area?.id,
+    lifeAreaName: area?.name,
+    lifeAreaColor: area?.color,
+    classificationSource: "recorded",
+    classifiedAtMs: atMs,
+  };
+}
 
 const createRunningSession = (
   sourceTimerId: string,
@@ -120,8 +182,11 @@ export async function applyActivitySessionCommand(
     return completed.filter(Boolean);
   }
 
-  const context = normalizeActivitySessionContext(command.context);
-  if (!context) throw new TypeError("Invalid activity recording context");
+  const context = await resolveRecordingContext(
+    command.context,
+    revision,
+    atOrAfterEpoch,
+  );
   const matching = active.find(
     (session) =>
       session.activityId === context.activityId &&
@@ -158,7 +223,7 @@ export async function switchActivitySession(
     atMs: safeTimestamp(atMs),
   };
   return transactIdempotent(
-    ["activitySessions"],
+    ["activitySessions", "activityDefinitions", "lifeAreas"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
     (revision) => applyActivitySessionCommand(command, revision),
   );
@@ -177,7 +242,7 @@ export async function endActivitySession(
     atMs: safeTimestamp(atMs),
   };
   return transactIdempotent(
-    ["activitySessions"],
+    ["activitySessions", "activityDefinitions", "lifeAreas"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
     (revision) => applyActivitySessionCommand(command, revision),
   );
@@ -203,7 +268,7 @@ export async function applyActivitySessionTrace(
 ) {
   const fingerprint = JSON.stringify(input);
   return transactIdempotent(
-    ["activitySessions"],
+    ["activitySessions", "activityDefinitions", "lifeAreas"],
     { id: mutationId, fingerprint },
     async (revision) => {
       const observedAtMs = safeTimestamp(input.observedAtMs);
@@ -243,10 +308,10 @@ export async function applyActivitySessionTrace(
         const slice = slices[index];
         const metadata = activityById.get(slice.activityId);
         if (!metadata) continue;
-        const context: ActivitySessionContext = {
+        const context = await resolveRecordingContext({
           ...metadata,
           kind: slice.kind,
-        };
+        }, revision, Math.max(epoch, slice.startMs));
         const startMs = Math.max(epoch, slice.startMs);
         const endMs = Math.max(startMs, slice.endMs);
         const sameActive =
@@ -291,8 +356,11 @@ export async function applyActivitySessionTrace(
         }
       }
 
-      const current = input.currentActivity
+      const normalizedCurrent = input.currentActivity
         ? normalizeActivitySessionContext(input.currentActivity)
+        : null;
+      const current = normalizedCurrent
+        ? await resolveRecordingContext(normalizedCurrent, revision, observedAtMs)
         : null;
       if (input.continues && current) {
         const matchesCurrent =
@@ -396,6 +464,59 @@ export async function correctActivitySession(
       };
       await timeSliceDb.activitySessions.put(corrected);
       return corrected;
+    },
+  );
+}
+
+export async function correctActivitySessionClassification(
+  id: string,
+  activityDefinitionId: string | null,
+  expectedRevision: number,
+  mutationId: string = crypto.randomUUID(),
+) {
+  const fingerprint = JSON.stringify({ id, activityDefinitionId, expectedRevision });
+  return transactIdempotent(
+    ["activitySessions", "activityDefinitions", "lifeAreas"],
+    { id: mutationId, fingerprint },
+    async (revision) => {
+      const existing = await timeSliceDb.activitySessions.get(id);
+      if (!existing || existing.revision !== expectedRevision)
+        throw new ActivitySessionRevisionConflictError();
+      const definition = activityDefinitionId
+        ? await timeSliceDb.activityDefinitions.get(activityDefinitionId)
+        : undefined;
+      if (activityDefinitionId && !definition)
+        throw new TypeError("Activity not found.");
+      const area = definition?.lifeAreaId
+        ? await timeSliceDb.lifeAreas.get(definition.lifeAreaId)
+        : undefined;
+      const correctedAtMs = Date.now();
+      const updated: ActivitySessionRecord = {
+        ...existing,
+        activityDefinitionId: definition?.id,
+        lifeAreaId: area?.id,
+        lifeAreaName: area?.name,
+        lifeAreaColor: area?.color,
+        classificationSource: "corrected",
+        classifiedAtMs: correctedAtMs,
+        classificationCorrections: [
+          ...(existing.classificationCorrections || []),
+          {
+            correctedAtMs,
+            previousActivityDefinitionId: existing.activityDefinitionId,
+            previousLifeAreaId: existing.lifeAreaId,
+            previousLifeAreaName: existing.lifeAreaName,
+            nextActivityDefinitionId: definition?.id,
+            nextLifeAreaId: area?.id,
+            nextLifeAreaName: area?.name,
+            reason: "correction",
+          },
+        ],
+        revision,
+        updatedAtMs: correctedAtMs,
+      };
+      await timeSliceDb.activitySessions.put(updated);
+      return updated;
     },
   );
 }
