@@ -19,6 +19,9 @@ import { InsightsSheet } from "./components/InsightsSheet";
 import { ActivityManager } from "./components/ActivityManager";
 import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
 import { confirmAllocation } from "./domain/timeAllocation";
+import { predictedScheduleSeconds } from "./domain/sessionSchedule";
+import { displayActivityColor } from "./domain/activityColor";
+import { resolveVaultPredictionMode } from "./domain/workspaceSettings";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
 import { timerController } from "./lib/controller";
@@ -8012,10 +8015,18 @@ export default function App() {
       dailyShowElapsedDayOverlay: true,
       // Time window filtering control
       enableTimeWindowFiltering: true,
+      vaultPredictionMode: "independent",
+      colorIntensity: "standard",
     };
     try {
       const saved = localStorage.getItem("timeSliceSettings");
-      return saved ? { ...defaultValue, ...JSON.parse(saved) } : defaultValue;
+      if (!saved) return defaultValue;
+      const parsed = JSON.parse(saved);
+      return {
+        ...defaultValue,
+        ...parsed,
+        vaultPredictionMode: resolveVaultPredictionMode(parsed),
+      };
     } catch (e) {
       return defaultValue;
     }
@@ -12920,11 +12931,11 @@ export default function App() {
     // - Ignore completed activities
     // - Ignore count-up activities (they represent elapsed, not remaining)
     // - Do NOT include vault time (banked time isn't a commitment)
-    return activities.reduce((sum, activity) => {
-      if (activity.isCompleted) return sum;
-      if (activity.countUp) return sum;
-      return sum + Math.max(0, activity.timeRemaining || 0);
-    }, 0);
+    return predictedScheduleSeconds(
+      activities,
+      vaultTime,
+      settings.vaultPredictionMode === "independent" ? "independent" : "linked",
+    );
   };
 
   const getOverallProgress = () => {
@@ -13154,9 +13165,15 @@ export default function App() {
     Math.min(currentActivityIndex, activities.length - 1),
   );
   const currentActivity = activities[validCurrentActivityIndex] || null;
-  const displayActivities = activities.filter(
-    (activity) => activity.showOnBar !== false,
-  );
+  const displayActivities = activities
+    .filter((activity) => activity.showOnBar !== false)
+    .map((activity) => ({
+      ...activity,
+      color: displayActivityColor(
+        activity.color,
+        settings.colorIntensity === "vivid" ? "vivid" : "standard",
+      ),
+    }));
   const displayCurrentActivityIndex = displayActivities.findIndex(
     (activity) => activity.id === currentActivity?.id,
   );
@@ -13432,7 +13449,14 @@ export default function App() {
                   style={settings.progressBarStyle}
                   totalProgress={getOverallProgress()}
                   activityProgress={activityProgress}
-                  activityColor={currentActivity?.color}
+                  activityColor={
+                    currentActivity
+                      ? displayActivityColor(
+                          currentActivity.color,
+                          settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                        )
+                      : undefined
+                  }
                   totalSessionMinutes={totalSessionMinutes}
                   currentActivityIndex={displayCurrentActivityIndex}
                   showAllocationRing={settings.showCircularAllocation}
@@ -13451,7 +13475,14 @@ export default function App() {
                   activities={displayActivities}
                   style={settings.progressBarStyle}
                   overallProgress={getOverallProgress()}
-                  currentActivityColor={currentActivity?.color}
+                  currentActivityColor={
+                    currentActivity
+                      ? displayActivityColor(
+                          currentActivity.color,
+                          settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                        )
+                      : undefined
+                  }
                   totalSessionMinutes={totalSessionMinutes}
                   currentActivityIndex={displayCurrentActivityIndex}
                   showDrainOverlay={settings.showDrainOverlay}
@@ -13470,7 +13501,14 @@ export default function App() {
               <div className="flex items-center justify-center space-x-2">
                 <div
                   className="w-4 h-4 sm:w-5 sm:h-5 rounded-full"
-                  style={{ backgroundColor: currentActivity?.color }}
+                  style={{
+                    backgroundColor: currentActivity
+                      ? displayActivityColor(
+                          currentActivity.color,
+                          settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                        )
+                      : undefined,
+                  }}
                 />
                 <h2 className="text-xl sm:text-2xl font-bold">
                   {currentActivity?.name}
@@ -13758,7 +13796,10 @@ export default function App() {
                             style={{
                               // Always show actual drain level here to reflect real progress per activity
                               width: `${activity.isCompleted ? 100 : displayProgress}%`,
-                              backgroundColor: activity.color,
+                              backgroundColor: displayActivityColor(
+                                activity.color,
+                                settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                              ),
                               opacity:
                                 index === currentActivityIndex ? 0.25 : 0.18,
                               transition:
@@ -13777,7 +13818,12 @@ export default function App() {
                           />
                           <div
                             className="w-3 h-3 rounded-full"
-                            style={{ backgroundColor: activity.color }}
+                            style={{
+                              backgroundColor: displayActivityColor(
+                                activity.color,
+                                settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                              ),
+                            }}
                           />
                           <span
                             className={`font-semibold text-sm ${activity.priority ? "text-amber-700" : ""}`}
@@ -13941,6 +13987,44 @@ export default function App() {
                   <CardTitle className="text-lg">Timer Settings</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                    <Label htmlFor="vault-prediction-mode">Time Vault and Predicted End</Label>
+                    <select
+                      id="vault-prediction-mode"
+                      value={settings.vaultPredictionMode || "linked"}
+                      onChange={(event) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          vaultPredictionMode: event.target.value,
+                        }))
+                      }
+                      className="mt-2 min-h-11 w-full rounded-lg border border-blue-200 bg-white px-3 text-sm"
+                    >
+                      <option value="linked">Linked · task allocation controls the end</option>
+                      <option value="independent">Independent · preserve task + Vault schedule (recommended)</option>
+                    </select>
+                    <p className="mt-2 text-xs text-slate-600">
+                      Independent keeps Predicted End stable when time moves between a task and the Vault. It never rewrites allocations or history.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-violet-100 bg-violet-50 p-3">
+                    <Label htmlFor="color-intensity">Color intensity</Label>
+                    <select
+                      id="color-intensity"
+                      value={settings.colorIntensity || "standard"}
+                      onChange={(event) =>
+                        setSettings((previous) => ({
+                          ...previous,
+                          colorIntensity: event.target.value,
+                        }))
+                      }
+                      className="mt-2 min-h-11 w-full rounded-lg border border-violet-200 bg-white px-3 text-sm"
+                    >
+                      <option value="standard">Standard</option>
+                      <option value="vivid">Vivid</option>
+                    </select>
+                    <p className="mt-2 text-xs text-slate-600">Vivid adjusts display saturation only. Stored activity colors are unchanged.</p>
+                  </div>
                   {navigator.storage?.persist && (
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3">
                       <div>
