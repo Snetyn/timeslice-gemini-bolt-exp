@@ -3,9 +3,10 @@ import { normalizeActivitySessionRecord } from "../domain/activitySession";
 import { timeSliceDb } from "./timesliceDb";
 
 export async function readInsightsSource() {
-  const [rawSessions, areas] = await Promise.all([
+  const [rawSessions, areas, momentum] = await Promise.all([
     timeSliceDb.activitySessions.toArray(),
     timeSliceDb.lifeAreas.toArray(),
+    timeSliceDb.decisionMomentum.toArray(),
   ]);
   return {
     sessions: rawSessions
@@ -14,6 +15,7 @@ export async function readInsightsSource() {
     archivedAreaIds: new Set(
       areas.filter((area) => area.archivedAtMs !== undefined).map((area) => area.id),
     ),
+    momentum,
   };
 }
 

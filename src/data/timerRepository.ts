@@ -24,6 +24,10 @@ import type {
   ActivitySessionContext,
   ActivitySessionEndReason,
 } from "../domain/activitySession";
+import {
+  applyMomentumCommand,
+  type MomentumCommand,
+} from "./decisionMomentumRepository";
 
 export { MutationIdConflictError } from "./timesliceDb";
 
@@ -51,10 +55,18 @@ export async function saveTimer(
     timer,
   }),
   activityCommand?: ActivitySessionCommand,
+  momentumCommand?: MomentumCommand,
 ) {
   return transactIdempotent(
-    activityCommand
-      ? ["timers", "activitySessions", "activityDefinitions", "lifeAreas"]
+    activityCommand || momentumCommand
+      ? [
+          "timers",
+          "activitySessions",
+          "activityDefinitions",
+          "lifeAreas",
+          "decisionOpportunities",
+          "decisionMomentum",
+        ]
       : ["timers"],
     { id: mutationId, fingerprint: mutationFingerprint },
     async (workspaceRevision) => {
@@ -74,6 +86,9 @@ export async function saveTimer(
       });
       if (activityCommand) {
         await applyActivitySessionCommand(activityCommand, workspaceRevision);
+      }
+      if (momentumCommand) {
+        await applyMomentumCommand(momentumCommand, workspaceRevision);
       }
       return next;
     },
@@ -176,6 +191,7 @@ export async function transitionTimer(
       context?: ActivitySessionContext;
       endReason?: ActivitySessionEndReason;
     };
+    momentum?: Omit<MomentumCommand, "atMs">;
   } = {},
 ) {
   const nowMs = options.nowMs ?? Date.now();
@@ -187,6 +203,7 @@ export async function transitionTimer(
     nowMs,
     targetDurationMs: options.targetDurationMs,
     recording: options.recording,
+    momentum: options.momentum,
   });
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const existing =
@@ -245,6 +262,7 @@ export async function transitionTimer(
           mutationId,
           mutationFingerprint,
           activityCommand,
+          options.momentum ? { ...options.momentum, atMs: nowMs } : undefined,
         )
       ).value;
     } catch (error) {

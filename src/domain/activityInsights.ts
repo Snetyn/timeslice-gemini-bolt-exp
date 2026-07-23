@@ -1,4 +1,5 @@
 import type { ActivitySessionRecord } from "./activitySession";
+import type { DecisionMomentumRecord } from "./decisionMomentum";
 
 export type InsightsPeriod = "today" | "week" | "month";
 export type PeriodBounds = { startMs: number; endMs: number };
@@ -23,6 +24,8 @@ export type ActivityInsights = {
   scaleMaxMs: number;
   recent: ActivitySessionRecord[];
   running: ActivitySessionRecord | null;
+  momentumTotal: number;
+  momentumByArea: Record<string, number>;
 };
 
 export function periodBounds(period: InsightsPeriod, nowMs = Date.now()): PeriodBounds {
@@ -69,6 +72,7 @@ export function buildActivityInsights(
   period: InsightsPeriod,
   nowMs = Date.now(),
   archivedAreaIds: ReadonlySet<string> = new Set(),
+  momentum: DecisionMomentumRecord[] = [],
 ): ActivityInsights {
   const bounds = periodBounds(period, nowMs);
   const areas = new Map<string, AreaInsight>();
@@ -98,6 +102,18 @@ export function buildActivityInsights(
     (left, right) => right.durationMs - left.durationMs || left.name.localeCompare(right.name),
   );
   const classifiedAreas = sortedAreas.filter((area) => area.id !== null);
+  const periodMomentum = momentum.filter(
+    (record) =>
+      record.confirmedAtMs >= bounds.startMs && record.confirmedAtMs < bounds.endMs,
+  );
+  const momentumByArea = periodMomentum.reduce<Record<string, number>>(
+    (totals, record) => {
+      if (record.lifeAreaId)
+        totals[record.lifeAreaId] = (totals[record.lifeAreaId] || 0) + 1;
+      return totals;
+    },
+    {},
+  );
   return {
     period,
     bounds,
@@ -111,6 +127,8 @@ export function buildActivityInsights(
     ),
     recent: included.sort((left, right) => right.startedAtMs - left.startedAtMs).slice(0, 8),
     running,
+    momentumTotal: periodMomentum.length,
+    momentumByArea,
   };
 }
 

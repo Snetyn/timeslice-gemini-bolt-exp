@@ -22,6 +22,10 @@ import { confirmAllocation } from "./domain/timeAllocation";
 import { predictedScheduleSeconds } from "./domain/sessionSchedule";
 import { displayActivityColor } from "./domain/activityColor";
 import { resolveVaultPredictionMode } from "./domain/workspaceSettings";
+import {
+  DecisionCheckpoint,
+  type DecisionStart,
+} from "./components/DecisionCheckpoint";
 import { useTimerLifecycle } from "./hooks/useTimerLifecycle";
 import { listSessionReports, saveSessionReport } from "./data/timerRepository";
 import { timerController } from "./lib/controller";
@@ -7786,6 +7790,12 @@ export default function App() {
   const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [catalogManagerOpen, setCatalogManagerOpen] = useState(false);
+  const [decisionCheckpoint, setDecisionCheckpoint] = useState({
+    open: false,
+    reason: "manual",
+    sourceKey: "idle",
+    foregroundBackgroundMs: 0,
+  });
   const [recentCanonicalActivities, setRecentCanonicalActivities] = useState([]);
   const ensuredSessionRecordingRef = useRef("");
   const ensuredDailyRecordingRef = useRef("");
@@ -7815,12 +7825,19 @@ export default function App() {
         endReason?: ActivitySessionEndReason;
       },
       nowMs?: number,
+      momentum?: {
+        opportunityId: string;
+        activityDefinitionId: string;
+        source: "session" | "daily" | "single";
+        interaction: "suggested" | "alternative" | "distraction-redirect";
+      },
     ) => {
       if (!timerController.getSnapshot().isController) return;
       await transitionTimer(id, transition, {
         targetDurationMs,
         recording,
         nowMs,
+        momentum,
       });
     },
     [],
@@ -7833,7 +7850,8 @@ export default function App() {
         endReason?: ActivitySessionEndReason;
       },
       nowMs?: number,
-    ) => persistModeTimer("session", transition, undefined, recording, nowMs),
+      momentum?: any,
+    ) => persistModeTimer("session", transition, undefined, recording, nowMs, momentum),
     [persistModeTimer],
   );
   // Local date helper for rollover logic
@@ -8017,6 +8035,8 @@ export default function App() {
       enableTimeWindowFiltering: true,
       vaultPredictionMode: "independent",
       colorIntensity: "standard",
+      promptAfterActivity: false,
+      promptWhenReturningIdle: false,
     };
     try {
       const saved = localStorage.getItem("timeSliceSettings");
@@ -9439,7 +9459,7 @@ export default function App() {
   };
 
   // Single Activity Mode handlers
-  const startSingleActivity = (activityName, activityDefinitionId) => {
+  const startSingleActivity = (activityName, activityDefinitionId, momentum) => {
     const now = new Date();
     ensuredSingleRecordingRef.current = adHocActivityId(activityName);
     setSingleActivityState((prev) => ({
@@ -9456,6 +9476,7 @@ export default function App() {
       undefined,
       { context: singleRecordingContext(activityName, activityDefinitionId) },
       now.getTime(),
+      momentum,
     ).catch((error) =>
       console.error("Failed to start Single timer", error),
     );
@@ -10431,6 +10452,61 @@ export default function App() {
     source: "vault",
     remember: false,
   });
+  const wasFocusedActivityRef = useRef(false);
+  const deferredAfterActivityRef = useRef<string | null>(null);
+  const backgroundStartedAtRef = useRef<number | null>(null);
+  const lastForegroundOpportunityRef = useRef("");
+  const anyFocusedActivity =
+    isTimerActive ||
+    singleActivityState.isActive ||
+    dailyActivities.some((activity) => activity.isActive);
+
+  useEffect(() => {
+    const wasActive = wasFocusedActivityRef.current;
+    wasFocusedActivityRef.current = anyFocusedActivity;
+    if (!wasActive || anyFocusedActivity || !settings.promptAfterActivity) return;
+    const sourceKey = `stop:${Date.now()}`;
+    if (sessionReportOpen) deferredAfterActivityRef.current = sourceKey;
+    else setDecisionCheckpoint({ open: true, reason: "after-activity", sourceKey, foregroundBackgroundMs: 0 });
+  }, [anyFocusedActivity, sessionReportOpen, settings.promptAfterActivity]);
+
+  useEffect(() => {
+    if (sessionReportOpen || !deferredAfterActivityRef.current) return;
+    const sourceKey = deferredAfterActivityRef.current;
+    deferredAfterActivityRef.current = null;
+    setDecisionCheckpoint({ open: true, reason: "after-activity", sourceKey, foregroundBackgroundMs: 0 });
+  }, [sessionReportOpen]);
+
+  useEffect(() => {
+    const markBackground = () => {
+      if (document.visibilityState === "hidden" && backgroundStartedAtRef.current === null)
+        backgroundStartedAtRef.current = Date.now();
+    };
+    const considerForeground = () => {
+      if (!settings.promptWhenReturningIdle || anyFocusedActivity) return;
+      const startedAtMs = backgroundStartedAtRef.current;
+      if (startedAtMs === null) return;
+      const elapsed = Math.max(0, Date.now() - startedAtMs);
+      if (elapsed < 15 * 60_000) return;
+      const sourceKey = `foreground:${startedAtMs}`;
+      if (lastForegroundOpportunityRef.current === sourceKey) return;
+      lastForegroundOpportunityRef.current = sourceKey;
+      backgroundStartedAtRef.current = null;
+      setDecisionCheckpoint({ open: true, reason: "foreground", sourceKey, foregroundBackgroundMs: elapsed });
+    };
+    const handleVisibility = () =>
+      document.visibilityState === "hidden" ? markBackground() : considerForeground();
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pagehide", markBackground);
+    window.addEventListener("pageshow", considerForeground);
+    window.addEventListener("focus", considerForeground);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pagehide", markBackground);
+      window.removeEventListener("pageshow", considerForeground);
+      window.removeEventListener("focus", considerForeground);
+    };
+  }, [anyFocusedActivity, settings.promptWhenReturningIdle]);
 
   useEffect(() => {
     let cancelled = false;
@@ -11283,7 +11359,7 @@ export default function App() {
     console.log("Smart scheduled daily activity:", newActivity);
   };
 
-  const startDailyActivity = (activityId) => {
+  const startDailyActivity = (activityId, momentum) => {
     console.log("Starting daily activity:", activityId);
     const now = new Date();
     ensuredDailyRecordingRef.current = activityId;
@@ -11359,6 +11435,7 @@ export default function App() {
           ? { context: dailyRecordingContext(selectedDaily) }
           : undefined,
         now.getTime(),
+        momentum,
       );
     })().catch((error) =>
       console.error("Failed to start Daily timer", error),
@@ -12411,10 +12488,13 @@ export default function App() {
     }
   };
 
-  const startSession = () => {
+  const startSession = (options = {}) => {
     if (Math.abs(totalPercentage - 100) < 0.1 && activities.length > 0) {
       const nowMs = Date.now();
-      const firstIncompleteIndex = activities.findIndex((a) => !a.isCompleted);
+      const requestedIndex = Number(options.activityIndex);
+      const firstIncompleteIndex = Number.isInteger(requestedIndex) && activities[requestedIndex] && !activities[requestedIndex].isCompleted
+        ? requestedIndex
+        : activities.findIndex((a) => !a.isCompleted);
       const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
       const startingContext = sessionRecordingContext(activities[newIndex]);
       ensuredSessionRecordingRef.current = `${startingContext.activityId}:${startingContext.kind}`;
@@ -12425,6 +12505,7 @@ export default function App() {
         "start",
         { context: startingContext },
         nowMs,
+        options.momentum,
       ).catch((error) =>
         console.error("Failed to start persisted session timer", error),
       );
@@ -12796,6 +12877,50 @@ export default function App() {
     setBorrowModalState({ isOpen: false, activityId: "" });
     // Re-normalize planned visuals post manual augmentation
     recalibratePlannedVisuals();
+  };
+
+  const handleDecisionStart = (choice: DecisionStart) => {
+    const definition = choice.definition;
+    const momentum =
+      choice.reward && choice.opportunity.rewardable
+        ? {
+            opportunityId: choice.opportunity.id,
+            activityDefinitionId: definition.id,
+            source: currentMode === "daily" ? "daily" : currentMode === "session" ? "session" : "single",
+            interaction: choice.interaction,
+          }
+        : undefined;
+    const matchesDefinition = (activity, mode) => {
+      if (activity.activityDefinitionId === definition.id) return true;
+      const sourceKey = activity.sharedId
+        ? `shared:${activity.sharedId}`
+        : `${mode}:${activity.id}`;
+      return definition.sourceKeys.includes(sourceKey);
+    };
+    if (currentMode === "session") {
+      const index = activities.findIndex(
+        (activity) => !activity.isCompleted && matchesDefinition(activity, "session"),
+      );
+      if (index >= 0) {
+        startSession({ activityIndex: index, momentum });
+        return;
+      }
+    }
+    if (currentMode === "daily") {
+      const activity = dailyActivities.find(
+        (candidate) => candidate.status !== "completed" && matchesDefinition(candidate, "daily"),
+      );
+      if (activity) {
+        startDailyActivity(activity.id, momentum);
+        return;
+      }
+    }
+    setCurrentMode("single");
+    startSingleActivity(
+      definition.name,
+      definition.id,
+      momentum ? { ...momentum, source: "single" } : undefined,
+    );
   };
 
   const commitAllocationPreview = (preview) => {
@@ -13177,6 +13302,20 @@ export default function App() {
   const displayCurrentActivityIndex = displayActivities.findIndex(
     (activity) => activity.id === currentActivity?.id,
   );
+  const decisionCurrentSourceKeys =
+    currentMode === "daily"
+      ? dailyActivities
+          .filter((activity) => activity.status !== "completed")
+          .map((activity) =>
+            activity.sharedId ? `shared:${activity.sharedId}` : `daily:${activity.id}`,
+          )
+      : currentMode === "session"
+        ? activities
+            .filter((activity) => !activity.isCompleted)
+            .map((activity) =>
+              activity.sharedId ? `shared:${activity.sharedId}` : `session:${activity.id}`,
+            )
+        : [];
 
   useEffect(() => {
     if (
@@ -13963,6 +14102,21 @@ export default function App() {
                 >
                   Insights
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setDecisionCheckpoint({
+                      open: true,
+                      reason: "manual",
+                      sourceKey: "idle",
+                      foregroundBackgroundMs: 0,
+                    })
+                  }
+                  className="flex-1 sm:flex-none h-9 text-sm"
+                >
+                  Choose next
+                </Button>
                 {/* Spider Chart button removed */}
                 {/* RPG Stats button removed */}
                 <Button
@@ -14024,6 +14178,12 @@ export default function App() {
                       <option value="vivid">Vivid</option>
                     </select>
                     <p className="mt-2 text-xs text-slate-600">Vivid adjusts display saturation only. Stored activity colors are unchanged.</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-3">
+                    <Label>Decision checkpoint</Label>
+                    <p className="mt-1 text-xs text-slate-600">The manual Choose next action is always available while idle.</p>
+                    <label className="mt-2 flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(settings.promptAfterActivity)} onChange={(event) => setSettings((previous) => ({ ...previous, promptAfterActivity: event.target.checked }))} />Prompt after an activity stops</label>
+                    <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(settings.promptWhenReturningIdle)} onChange={(event) => setSettings((previous) => ({ ...previous, promptWhenReturningIdle: event.target.checked }))} />Prompt when returning idle after 15 minutes</label>
                   </div>
                   {navigator.storage?.persist && (
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3">
@@ -17408,6 +17568,16 @@ export default function App() {
           setCatalogManagerOpen(false);
           setCurrentPage("manage-activities");
         }}
+      />
+      <DecisionCheckpoint
+        open={decisionCheckpoint.open}
+        reason={decisionCheckpoint.reason}
+        opportunitySourceKey={decisionCheckpoint.sourceKey}
+        foregroundBackgroundMs={decisionCheckpoint.foregroundBackgroundMs}
+        currentSourceKeys={decisionCurrentSourceKeys}
+        source={currentMode === "daily" ? "daily" : currentMode === "session" ? "session" : "single"}
+        onClose={() => setDecisionCheckpoint((previous) => ({ ...previous, open: false }))}
+        onStart={handleDecisionStart}
       />
       {/* Removed ColorPicker - using simple random colors instead */}
       <TimeAllocationDialog

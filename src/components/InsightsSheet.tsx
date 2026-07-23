@@ -45,6 +45,7 @@ export function InsightsSheet({
                 <div className="rounded-xl bg-indigo-50 p-3"><div className="text-xs text-indigo-700">Recorded</div><div className="text-xl font-bold text-indigo-950">{readableDuration(insights.totalDurationMs)}</div></div>
                 <div className="rounded-xl bg-blue-50 p-3"><div className="text-xs text-blue-700">Focus intervals</div><div className="text-xl font-bold text-blue-950">{insights.intervalCount}</div></div>
               </section>
+              <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-sm text-violet-900"><strong>{insights.momentumTotal} intentional {insights.momentumTotal === 1 ? "decision" : "decisions"}</strong> in this period. Momentum marks choices only; recorded time stays unchanged.</div>
               {insights.running && <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-800">Recording · {insights.running.lifeAreaName || "Unassigned"} · {insights.running.activityName}</div>}
               <section className="mb-3 rounded-2xl border border-slate-200 p-3"><h3 className="mb-3 font-bold text-slate-900">Life areas</h3><ActualTimeChart insights={insights} /></section>
               <section className="rounded-2xl border border-slate-200 p-3">

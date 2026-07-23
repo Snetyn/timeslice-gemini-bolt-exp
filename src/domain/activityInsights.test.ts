@@ -69,4 +69,14 @@ describe("activity insights", () => {
     expect(roundedScaleMaximum(61_000)).toBe(100_000);
     expect(roundedScaleMaximum(0)).toBe(60_000);
   });
+
+  it("adds Momentum markers without changing actual duration or scale", () => {
+    const now = new Date(2026, 6, 22, 12).getTime();
+    const session = record({ startedAtMs: now - 10_000, endedAtMs: now, durationMs: 10_000, lifeAreaId: "work", lifeAreaName: "Work" });
+    const base = buildActivityInsights([session], "today", now);
+    const withMomentum = buildActivityInsights([session], "today", now, new Set(), [{ id: "m", decisionOpportunityId: "o", activityDefinitionId: "a", activityName: "Work", lifeAreaId: "work", source: "single", interaction: "suggested", confirmedAtMs: now, revision: 1, updatedAtMs: now }]);
+    expect(withMomentum.momentumTotal).toBe(1);
+    expect(withMomentum.totalDurationMs).toBe(base.totalDurationMs);
+    expect(withMomentum.scaleMaxMs).toBe(base.scaleMaxMs);
+  });
 });

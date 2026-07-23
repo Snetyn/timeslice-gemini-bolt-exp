@@ -16,6 +16,7 @@ export function ActualTimeChart({ insights }: { insights: ActivityInsights }) {
             <div className="mb-1 flex items-center justify-between gap-3 text-sm">
               <span className="font-medium text-slate-800">
                 {area.name}{area.archived ? " (archived)" : ""}
+                {area.id && insights.momentumByArea[area.id] ? ` · ✦${insights.momentumByArea[area.id]}` : ""}
               </span>
               <span className="font-mono text-slate-600">{readableDuration(area.durationMs)}</span>
             </div>
@@ -65,6 +66,7 @@ export function ActualTimeChart({ insights }: { insights: ActivityInsights }) {
           <div key={area.id} className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: area.color }} />
             <span className="truncate">{area.name}</span>
+            {insights.momentumByArea[area.id || ""] ? <span title="Intentional decisions">✦{insights.momentumByArea[area.id || ""]}</span> : null}
             <span className="ml-auto font-mono">{readableDuration(area.durationMs)}</span>
           </div>
         ))}
