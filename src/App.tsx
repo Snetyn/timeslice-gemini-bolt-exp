@@ -7960,6 +7960,10 @@ export default function App() {
     }
     return 0;
   });
+  const [sessionReportOpen, setSessionReportOpen] = useState(false);
+  const [lastSessionReport, setLastSessionReport] = useState<any>(null);
+  const [sessionHistory, setSessionHistory] = useState<any[]>([]);
+  const plannedAtStartRef = useRef<Record<string, number> | null>(null);
   const hasRestoredSessionStateRef = useRef(false);
   // Freeze the session plan (allocations/timeRemaining) once a session starts, so exiting doesn't reset progress
   const [sessionPlanFrozen, setSessionPlanFrozen] = useState<boolean>(() => {
@@ -13136,12 +13140,6 @@ export default function App() {
 
     return Math.min(100, (totalSpentMinutes / totalPlannedMinutes) * 100);
   };
-
-  // Session End Report
-  const [sessionReportOpen, setSessionReportOpen] = useState(false);
-  const [lastSessionReport, setLastSessionReport] = useState<any>(null);
-  const [sessionHistory, setSessionHistory] = useState<any[]>([]);
-  const plannedAtStartRef = useRef<Record<string, number> | null>(null);
 
   useEffect(() => {
     void listSessionReports()
