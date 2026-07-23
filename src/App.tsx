@@ -7862,6 +7862,17 @@ export default function App() {
     return `${y}-${m}-${day}`;
   };
 
+  const getSessionRevision = () => {
+    try {
+      const saved = localStorage.getItem("timeSliceSessionState");
+      if (!saved) return 0;
+      const sessionState = JSON.parse(saved);
+      return Number(sessionState?.lastReconciledAtMs || 0);
+    } catch {
+      return 0;
+    }
+  };
+
   const [activities, setActivities] = useState(() => {
     try {
       const savedActivities = localStorage.getItem("timeSliceActivities");
@@ -11714,14 +11725,6 @@ export default function App() {
   };
 
   const closeActivitySettings = () => {
-    const sessionState = JSON.parse(saved);
-    if (Array.isArray(sessionState)) {
-      return sessionState.map((a) => ({
-        ...a,
-        showOnBar: a.showOnBar !== false,
-      }));
-    }
-    return sessionState;
     setActivitySettingsModal({
       isOpen: false,
       activityId: null,
@@ -12927,7 +12930,7 @@ export default function App() {
     const current = {
       activities,
       vaultSeconds: vaultTime,
-      sessionRevision: Number(sessionState?.lastReconciledAtMs || 0),
+      sessionRevision: getSessionRevision(),
     };
     const result = confirmAllocation(preview, current);
     if (!result.committed) {
@@ -17585,7 +17588,7 @@ export default function App() {
         title="Borrow from Time Vault"
         activities={activities}
         vaultSeconds={vaultTime}
-        sessionRevision={Number(sessionState?.lastReconciledAtMs || 0)}
+        sessionRevision={getSessionRevision()}
         sourceId="vault"
         targetId={borrowModalState.activityId}
         onClose={() => setBorrowModalState({ isOpen: false, activityId: "" })}
@@ -17596,7 +17599,7 @@ export default function App() {
         title="Transfer time"
         activities={activities}
         vaultSeconds={vaultTime}
-        sessionRevision={Number(sessionState?.lastReconciledAtMs || 0)}
+        sessionRevision={getSessionRevision()}
         sourceId={siphonModalState.sourceActivityId}
         targetId={siphonModalState.targetIsVault ? "vault" : siphonModalState.targetActivityId}
         onClose={() => setSiphonModalState({ isOpen: false, sourceActivityId: "", targetActivityId: "", targetIsVault: false })}
@@ -17607,7 +17610,7 @@ export default function App() {
         title="Fund activity time"
         activities={activities}
         vaultSeconds={vaultTime}
-        sessionRevision={Number(sessionState?.lastReconciledAtMs || 0)}
+        sessionRevision={getSessionRevision()}
         operation="extra"
         sourceId={extraTimeFunding.source}
         targetId={extraTimeFunding.targetActivityId}
