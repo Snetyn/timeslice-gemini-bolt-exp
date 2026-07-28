@@ -133,7 +133,7 @@ describe("session run batch transition", () => {
     ]);
   });
 
-  it("protects starred overtime donors and drains bottom-up", () => {
+  it("protects starred donors and drains all eligible donors proportionally", () => {
     const result = advanceSessionRun({
       activities: [
         task("overtime", 0),
@@ -147,13 +147,53 @@ describe("session run batch transition", () => {
       overtimeMode: "drain",
     });
     expect(result.donatedSecondsById).toEqual({
+      first: 1,
       second: 1,
-      locked: 2,
+      locked: 1,
     });
-    expect(result.activities.find((item) => item.id === "starred"))
-      .toMatchObject({ timeRemaining: 2 });
-    expect(result.activities.find((item) => item.id === "locked"))
-      .toMatchObject({ timeRemaining: 0 });
+    expect(
+      result.activities.find((item) => item.id === "starred"),
+    ).toMatchObject({ timeRemaining: 2 });
+    expect(
+      result.activities.find((item) => item.id === "locked"),
+    ).toMatchObject({ timeRemaining: 1 });
+  });
+
+  it("keeps draining the next logical donor until empty, then advances", () => {
+    const result = advanceSessionRun({
+      activities: [
+        task("overtime", 0),
+        task("next", 2),
+        task("starred", 8, { priority: true }),
+        task("after", 4),
+      ],
+      currentActivityIndex: 0,
+      elapsedSeconds: 5,
+      overtimeMode: "drain",
+      overtimeDrainStrategy: "next",
+    });
+    expect(result.donatedSecondsById).toEqual({ next: 2, after: 3 });
+    expect(result.receivedSecondsById).toEqual({ overtime: 5 });
+    expect(result.activities.map((activity) => activity.timeRemaining)).toEqual(
+      [-5, 0, 8, 1],
+    );
+  });
+
+  it("wraps next-donor lookup and never uses count-up or completed tasks", () => {
+    const result = advanceSessionRun({
+      activities: [
+        task("eligible-before", 3),
+        task("done", 4, { isCompleted: true }),
+        task("up", 0, { countUp: true }),
+        task("overtime", 0),
+      ],
+      currentActivityIndex: 3,
+      elapsedSeconds: 2,
+      overtimeMode: "drain",
+      overtimeDrainStrategy: "next",
+    });
+    expect(result.donatedSecondsById).toEqual({ "eligible-before": 2 });
+    expect(result.activities[0].timeRemaining).toBe(1);
   });
 
   it("traces postponed overtime without splitting a contiguous slice", () => {

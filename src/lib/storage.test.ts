@@ -25,9 +25,9 @@ describe("appStorage", () => {
     );
   });
 
-  it("adds the Phase 1 ledger at database version 3", async () => {
+  it("keeps the activity ledger in the current database schema", async () => {
     await hydrateAppStorage();
-    expect(timeSliceDb.verno).toBe(3);
+    expect(timeSliceDb.verno).toBe(4);
     expect(timeSliceDb.tables.map((table) => table.name)).toContain(
       "activitySessions",
     );

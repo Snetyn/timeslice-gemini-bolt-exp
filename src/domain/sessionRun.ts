@@ -4,6 +4,7 @@ import {
 } from "../lib/session";
 
 export type SessionOvertimeMode = "none" | "drain" | "postpone";
+export type OvertimeDrainStrategy = "proportional" | "next";
 export type FlowBreakMode = "none" | "drain" | "postpone";
 
 export type SessionRunActivity = SessionActivityLike & {
@@ -17,6 +18,7 @@ export type SessionAdvanceInput = {
   currentActivityIndex: number;
   elapsedSeconds: number;
   overtimeMode: SessionOvertimeMode;
+  overtimeDrainStrategy?: OvertimeDrainStrategy;
   flowBreakMode?: FlowBreakMode;
   flowBreakRemainingSeconds?: number;
   vaultSeconds?: number;
@@ -88,6 +90,7 @@ export function advanceSessionRun({
   currentActivityIndex,
   elapsedSeconds,
   overtimeMode,
+  overtimeDrainStrategy = "proportional",
   flowBreakMode = "none",
   flowBreakRemainingSeconds = 0,
   vaultSeconds = 0,
@@ -210,19 +213,87 @@ export function advanceSessionRun({
             !activity.countUp &&
             !activity.priority &&
             activity.timeRemaining > 0,
-        )
-        .sort((left, right) => right.index - left.index);
-      if (donors.length > 0) {
-        const donor = donors[0].activity;
-        nextDonorCursor = donors[0].index;
-        donor.timeRemaining -= 1;
-        donatedSecondsById[donor.id] = (donatedSecondsById[donor.id] || 0) + 1;
-        receivedSecondsById[current.id] =
-          (receivedSecondsById[current.id] || 0) + 1;
+        );
+      let fundedSeconds = 0;
+      if (overtimeDrainStrategy === "next" && donors.length > 0) {
+        const retainedDonor = donors.find(
+          ({ index }) => index === nextDonorCursor,
+        );
+        const donor =
+          retainedDonor ||
+          donors
+            .map((candidate) => ({
+              ...candidate,
+              distance:
+                (candidate.index - cursor + activities.length) %
+                activities.length,
+            }))
+            .filter(({ distance }) => distance > 0)
+            .sort(
+              (left, right) =>
+                left.distance - right.distance || left.index - right.index,
+            )[0];
+        if (donor) {
+          fundedSeconds = Math.min(
+            remainingBatch,
+            safeSeconds(donor.activity.timeRemaining),
+          );
+          donor.activity.timeRemaining -= fundedSeconds;
+          nextDonorCursor = donor.activity.timeRemaining > 0 ? donor.index : -1;
+          donatedSecondsById[donor.activity.id] =
+            (donatedSecondsById[donor.activity.id] || 0) + fundedSeconds;
+        }
+      } else if (
+        overtimeDrainStrategy === "proportional" &&
+        donors.length > 0
+      ) {
+        const totalAvailable = donors.reduce(
+          (sum, donor) => sum + safeSeconds(donor.activity.timeRemaining),
+          0,
+        );
+        fundedSeconds = Math.min(remainingBatch, totalAvailable);
+        const shares = donors.map((donor) => {
+          const exact =
+            totalAvailable > 0
+              ? (fundedSeconds * donor.activity.timeRemaining) / totalAvailable
+              : 0;
+          return {
+            ...donor,
+            amount: Math.floor(exact),
+            remainder: exact - Math.floor(exact),
+          };
+        });
+        let unassigned =
+          fundedSeconds - shares.reduce((sum, share) => sum + share.amount, 0);
+        [...shares]
+          .sort(
+            (left, right) =>
+              right.remainder - left.remainder || left.index - right.index,
+          )
+          .forEach((share) => {
+            if (unassigned <= 0) return;
+            share.amount += 1;
+            unassigned -= 1;
+          });
+        shares.forEach((share) => {
+          if (share.amount <= 0) return;
+          share.activity.timeRemaining -= share.amount;
+          donatedSecondsById[share.activity.id] =
+            (donatedSecondsById[share.activity.id] || 0) + share.amount;
+        });
+        nextDonorCursor = -1;
       }
-      current.timeRemaining -= 1;
-      remainingBatch -= 1;
-      appendActivitySlice(current.id, 1, "overtime");
+      if (fundedSeconds > 0) {
+        receivedSecondsById[current.id] =
+          (receivedSecondsById[current.id] || 0) + fundedSeconds;
+      }
+      const overtimeSeconds =
+        overtimeDrainStrategy === "next" && fundedSeconds > 0
+          ? fundedSeconds
+          : remainingBatch;
+      current.timeRemaining -= overtimeSeconds;
+      remainingBatch -= overtimeSeconds;
+      appendActivitySlice(current.id, overtimeSeconds, "overtime");
       continue;
     }
 

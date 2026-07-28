@@ -18,7 +18,9 @@ import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
 import { InsightsSheet } from "./components/InsightsSheet";
 import { ActivityManager } from "./components/ActivityManager";
 import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
+import { DailyTagWheels } from "./components/DailyTagWheels";
 import { confirmAllocation } from "./domain/timeAllocation";
+import { buildDailyTagWheels, resolveTagId } from "./domain/dailyTagWheel";
 import { predictedScheduleSeconds } from "./domain/sessionSchedule";
 import { displayActivityColor } from "./domain/activityColor";
 import { resolveVaultPredictionMode } from "./domain/workspaceSettings";
@@ -48,10 +50,7 @@ import {
   createSessionRunSnapshot,
   normalizeSessionRunSnapshot,
 } from "./domain/sessionSnapshot";
-import {
-  deleteSessionRun,
-  saveSessionRun,
-} from "./data/sessionRunRepository";
+import { deleteSessionRun, saveSessionRun } from "./data/sessionRunRepository";
 import { listRecentActivityDefinitions } from "./data/activityCatalogRepository";
 
 // Keep the existing component code isolated from browser storage details. This
@@ -7055,10 +7054,7 @@ const SingleActivityMode = ({
     });
     setCurrentElapsed(elapsed);
     const baseTime = singleState.chain.reduce((sum, activity, index) => {
-      if (
-        index >=
-        singleState.chain.length - singleState.currentChainStreak
-      ) {
+      if (index >= singleState.chain.length - singleState.currentChainStreak) {
         return sum + activity.duration;
       }
       return sum;
@@ -7465,7 +7461,9 @@ const SingleActivityMode = ({
             </div>
             {recentActivities.length > 0 && (
               <div className="mt-3" aria-label="Recent activities">
-                <div className="mb-1 text-xs font-medium text-gray-500">Recent</div>
+                <div className="mb-1 text-xs font-medium text-gray-500">
+                  Recent
+                </div>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {recentActivities.map((activity) => (
                     <button
@@ -7796,7 +7794,9 @@ export default function App() {
     sourceKey: "idle",
     foregroundBackgroundMs: 0,
   });
-  const [recentCanonicalActivities, setRecentCanonicalActivities] = useState([]);
+  const [recentCanonicalActivities, setRecentCanonicalActivities] = useState(
+    [],
+  );
   const ensuredSessionRecordingRef = useRef("");
   const ensuredDailyRecordingRef = useRef("");
   const ensuredSingleRecordingRef = useRef("");
@@ -7813,12 +7813,7 @@ export default function App() {
     async (
       id: string,
       transition:
-        | "start"
-        | "pause"
-        | "checkpoint"
-        | "complete"
-        | "cancel"
-        | "reset",
+        "start" | "pause" | "checkpoint" | "complete" | "cancel" | "reset",
       targetDurationMs?: number | null,
       recording?: {
         context?: ActivitySessionContext;
@@ -7851,7 +7846,15 @@ export default function App() {
       },
       nowMs?: number,
       momentum?: any,
-    ) => persistModeTimer("session", transition, undefined, recording, nowMs, momentum),
+    ) =>
+      persistModeTimer(
+        "session",
+        transition,
+        undefined,
+        recording,
+        nowMs,
+        momentum,
+      ),
     [persistModeTimer],
   );
   // Local date helper for rollover logic
@@ -7904,7 +7907,6 @@ export default function App() {
   useEffect(() => {
     activitiesRef.current = activities;
   }, [activities]);
-
 
   const [totalHours, setTotalHours] = useState(() => {
     try {
@@ -7995,6 +7997,7 @@ export default function App() {
       activityProgressType: "drain",
       keepScreenAwake: false,
       overtimeType: "none",
+      overtimeDrainStrategy: "proportional",
       showAllocationPercentage: true,
       showActivityPercentOnlyDuringRun: false, // NEW: collapse activity display to percentage only while running
       progressBarStyle: "default",
@@ -8036,6 +8039,8 @@ export default function App() {
       dailySoftDeadlineVisuals: true, // enable visual urgency effects for soft deadlines
       // Daily timeline visibility
       dailyHideCompleted: false, // hide completed items from the daily timeline view
+      dailyTagWheelLayout: "per-tag",
+      dailyTagWheelMetric: "plan",
       // Auto-schedule settings
       autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
       // UI toggles
@@ -8081,7 +8086,9 @@ export default function App() {
   useEffect(() => {
     void listRecentActivityDefinitions()
       .then(setRecentCanonicalActivities)
-      .catch((error) => console.error("Failed to load recent activities", error));
+      .catch((error) =>
+        console.error("Failed to load recent activities", error),
+      );
   }, [activityHistoryOpen, currentMode]);
 
   // Daily Mode State (Step 1: Basic daily activities) - Load from localStorage
@@ -9199,7 +9206,8 @@ export default function App() {
     (observedAtMs: number) => {
       if (!isTimerActive || isPaused) return;
       return persistSessionRunSnapshot("running", { observedAtMs });
-    }, [isPaused, isTimerActive, persistSessionRunSnapshot],
+    },
+    [isPaused, isTimerActive, persistSessionRunSnapshot],
   );
 
   // Unified helper to award Flowmodoro rest time given elapsed focused work seconds.
@@ -9372,12 +9380,9 @@ export default function App() {
       isTimerActive &&
       !isPaused
     ) {
-      void endActivitySession(
-        "session",
-        "flow-break",
-        breakStartedAtMs,
-      ).catch((error) =>
-        console.error("Failed to pause Session activity recording", error),
+      void endActivitySession("session", "flow-break", breakStartedAtMs).catch(
+        (error) =>
+          console.error("Failed to pause Session activity recording", error),
       );
     }
     if (timerController.getSnapshot().isController && activeDailyActivity) {
@@ -9394,12 +9399,9 @@ export default function App() {
       singleActivityState.isActive &&
       !singleActivityState.isPaused
     ) {
-      void endActivitySession(
-        "single",
-        "flow-break",
-        breakStartedAtMs,
-      ).catch((error) =>
-        console.error("Failed to pause Single activity recording", error),
+      void endActivitySession("single", "flow-break", breakStartedAtMs).catch(
+        (error) =>
+          console.error("Failed to pause Single activity recording", error),
       );
     }
     flowBreakDrainSourceRef.current = null;
@@ -9435,8 +9437,7 @@ export default function App() {
       ...flowmodoroState,
       isOnBreak: false,
       availableRestTime:
-        flowmodoroState.availableRestTime +
-        flowmodoroState.breakTimeRemaining,
+        flowmodoroState.availableRestTime + flowmodoroState.breakTimeRemaining,
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
     };
@@ -9474,7 +9475,11 @@ export default function App() {
   };
 
   // Single Activity Mode handlers
-  const startSingleActivity = (activityName, activityDefinitionId, momentum) => {
+  const startSingleActivity = (
+    activityName,
+    activityDefinitionId,
+    momentum,
+  ) => {
     const now = new Date();
     ensuredSingleRecordingRef.current = adHocActivityId(activityName);
     setSingleActivityState((prev) => ({
@@ -9492,9 +9497,7 @@ export default function App() {
       { context: singleRecordingContext(activityName, activityDefinitionId) },
       now.getTime(),
       momentum,
-    ).catch((error) =>
-      console.error("Failed to start Single timer", error),
-    );
+    ).catch((error) => console.error("Failed to start Single timer", error));
   };
 
   const toggleSingleActivityPause = () => {
@@ -9527,9 +9530,7 @@ export default function App() {
         ? { context: singleRecordingContext(singleActivityState.activityName) }
         : { endReason: "paused" },
       now.getTime(),
-    ).catch(
-      (error) => console.error("Failed to persist Single pause", error),
-    );
+    ).catch((error) => console.error("Failed to persist Single pause", error));
   };
 
   const completeSingleActivity = (
@@ -9545,8 +9546,7 @@ export default function App() {
     const completedDuration = elapsedSecondsAt({
       accumulatedSeconds: singleActivityState.elapsedSeconds,
       startedAt: singleActivityState.startTime,
-      running:
-        singleActivityState.isActive && !singleActivityState.isPaused,
+      running: singleActivityState.isActive && !singleActivityState.isPaused,
     });
     const completedActivity = {
       name: singleActivityState.activityName,
@@ -9649,9 +9649,7 @@ export default function App() {
       undefined,
       { endReason: "cancelled" },
       nowMs,
-    ).catch((error) =>
-      console.error("Failed to cancel Single timer", error),
-    );
+    ).catch((error) => console.error("Failed to cancel Single timer", error));
   };
 
   // --- Start of State Saving Logic ---
@@ -9849,8 +9847,7 @@ export default function App() {
             );
             if (baseline > 0) initialTotalAllocatedRef.current = baseline;
           } catch {}
-          const timeGapMs =
-            observedAtMs - sessionState.lastReconciledAtMs;
+          const timeGapMs = observedAtMs - sessionState.lastReconciledAtMs;
           const timeGapSeconds = Math.max(0, Math.floor(timeGapMs / 1000));
 
           if (timeGapSeconds > 0) {
@@ -9867,6 +9864,7 @@ export default function App() {
               currentActivityIndex: sessionState.currentActivityIndex || 0,
               elapsedSeconds: timeGapSeconds,
               overtimeMode: settings.overtimeType,
+              overtimeDrainStrategy: settings.overtimeDrainStrategy,
               flowBreakMode: activeFlowBreak
                 ? settings.flowmodoroMode === "postpone"
                   ? "postpone"
@@ -9921,7 +9919,10 @@ export default function App() {
                     : null,
                 continues: !transition.isComplete,
               }).catch((error) =>
-                console.error("Failed to restore Session activity trace", error),
+                console.error(
+                  "Failed to restore Session activity trace",
+                  error,
+                ),
               );
             }
             void persistSessionRunSnapshot("running", {
@@ -9944,7 +9945,6 @@ export default function App() {
               },
             );
             if (transition.isComplete) setIsTimerActive(false);
-
           }
         }
       }
@@ -10140,281 +10140,284 @@ export default function App() {
 
   const handleTimerTick = useCallback(
     (elapsedSeconds: number, observedAtMs = Date.now()) => {
-    // Check for daily flowmodoro reset
-    const now = new Date();
-    if (currentMode === "daily") {
-      setCurrentTime(now);
-      setDailyActivities((previous) => {
-        let changed = false;
-        const next = previous.map((activity) => {
-          if (!activity.isActive || !activity.startedAt) return activity;
-          const elapsed = elapsedSecondsAt({
-            accumulatedSeconds: Number.isFinite(activity.timeSpentSeconds)
-              ? activity.timeSpentSeconds
-              : Math.max(0, Number(activity.timeSpent || 0) * 60),
-            startedAt: activity.startedAt,
-            running: true,
+      // Check for daily flowmodoro reset
+      const now = new Date();
+      if (currentMode === "daily") {
+        setCurrentTime(now);
+        setDailyActivities((previous) => {
+          let changed = false;
+          const next = previous.map((activity) => {
+            if (!activity.isActive || !activity.startedAt) return activity;
+            const elapsed = elapsedSecondsAt({
+              accumulatedSeconds: Number.isFinite(activity.timeSpentSeconds)
+                ? activity.timeSpentSeconds
+                : Math.max(0, Number(activity.timeSpent || 0) * 60),
+              startedAt: activity.startedAt,
+              running: true,
+            });
+            if (
+              elapsed >= Number(activity.duration || 0) * 60 &&
+              activity.status !== "overtime"
+            ) {
+              changed = true;
+              return { ...activity, status: "overtime" };
+            }
+            return activity;
           });
-          if (
-            elapsed >= Number(activity.duration || 0) * 60 &&
-            activity.status !== "overtime"
-          ) {
-            changed = true;
-            return { ...activity, status: "overtime" };
-          }
-          return activity;
+          return changed ? next : previous;
         });
-        return changed ? next : previous;
-      });
-    }
-    const shouldReset = checkIfShouldReset(
-      now,
-      new Date(flowmodoroState.lastResetDate),
-    );
-    if (shouldReset) {
-      setFlowmodoroState((prev) => ({
-        availableRestTime: 0,
-        totalEarnedToday: 0,
-        cycleCount: 0,
-        isOnBreak: false,
-        breakTimeRemaining: 0,
-        initialBreakDuration: 0,
-        lastResetDate: now.toDateString(),
-      }));
-    }
+      }
+      const shouldReset = checkIfShouldReset(
+        now,
+        new Date(flowmodoroState.lastResetDate),
+      );
+      if (shouldReset) {
+        setFlowmodoroState((prev) => ({
+          availableRestTime: 0,
+          totalEarnedToday: 0,
+          cycleCount: 0,
+          isOnBreak: false,
+          breakTimeRemaining: 0,
+          initialBreakDuration: 0,
+          lastResetDate: now.toDateString(),
+        }));
+      }
 
-    if (elapsedSeconds <= 0) return;
+      if (elapsedSeconds <= 0) return;
 
-    // Smooth catch-up awards (if any queued from off-screen reconciliation) before normal accrual
-    if (settings.flowmodoroEnabled && settings.flowmodoroSmoothCatchup) {
-      setFlowmodoroState((prev) => {
-        const pending = (prev as any).pendingCatchup || 0;
-        if (!pending) return prev;
-        const chunk = Math.min(pending, Math.max(5, elapsedSeconds * 3));
-        const capA = Math.max(
-          0,
-          (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
-        );
-        const capB = Math.max(
-          0,
-          (settings.flowmodoroSessionActivityMinutes || 0) * 60,
-        );
-        const effectiveCap =
-          capA > 0 && capB > 0
-            ? Math.min(capA, capB)
-            : capA > 0
-              ? capA
-              : capB > 0
-                ? capB
-                : 0;
-        const remainingCap =
-          effectiveCap > 0
-            ? Math.max(0, effectiveCap - prev.availableRestTime)
-            : chunk;
-        const actualAdd =
-          effectiveCap > 0 ? Math.min(chunk, remainingCap) : chunk;
-        if (actualAdd <= 0) return prev; // cap reached, keep pending for future resets
-        const nextAvailable = prev.availableRestTime + actualAdd;
-        const remainingPending = Math.max(0, pending - actualAdd);
-        const base: any = {
-          ...prev,
-          availableRestTime: nextAvailable,
-          availableRestMinutes: Math.floor(nextAvailable / 60),
-          totalEarnedToday: (prev.totalEarnedToday || 0) + actualAdd,
-        };
-        if (remainingPending > 0) base.pendingCatchup = remainingPending;
-        else delete base.pendingCatchup;
-        return base;
-      });
-    }
+      // Smooth catch-up awards (if any queued from off-screen reconciliation) before normal accrual
+      if (settings.flowmodoroEnabled && settings.flowmodoroSmoothCatchup) {
+        setFlowmodoroState((prev) => {
+          const pending = (prev as any).pendingCatchup || 0;
+          if (!pending) return prev;
+          const chunk = Math.min(pending, Math.max(5, elapsedSeconds * 3));
+          const capA = Math.max(
+            0,
+            (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
+          );
+          const capB = Math.max(
+            0,
+            (settings.flowmodoroSessionActivityMinutes || 0) * 60,
+          );
+          const effectiveCap =
+            capA > 0 && capB > 0
+              ? Math.min(capA, capB)
+              : capA > 0
+                ? capA
+                : capB > 0
+                  ? capB
+                  : 0;
+          const remainingCap =
+            effectiveCap > 0
+              ? Math.max(0, effectiveCap - prev.availableRestTime)
+              : chunk;
+          const actualAdd =
+            effectiveCap > 0 ? Math.min(chunk, remainingCap) : chunk;
+          if (actualAdd <= 0) return prev; // cap reached, keep pending for future resets
+          const nextAvailable = prev.availableRestTime + actualAdd;
+          const remainingPending = Math.max(0, pending - actualAdd);
+          const base: any = {
+            ...prev,
+            availableRestTime: nextAvailable,
+            availableRestMinutes: Math.floor(nextAvailable / 60),
+            totalEarnedToday: (prev.totalEarnedToday || 0) + actualAdd,
+          };
+          if (remainingPending > 0) base.pendingCatchup = remainingPending;
+          else delete base.pendingCatchup;
+          return base;
+        });
+      }
 
-    // Flowmodoro countdown runs concurrently with session/daily
-    if (
-      settings.flowmodoroEnabled &&
-      flowmodoroState.isOnBreak &&
-      flowmodoroState.breakTimeRemaining > 0
-    ) {
-      if (elapsedSeconds >= flowmodoroState.breakTimeRemaining) {
-        void persistModeTimer("flowmodoro:break", "complete").catch((error) =>
-          console.error("Failed to complete Flowmodoro break timer", error),
-        );
-        if (isTimerActive) {
-          void persistSessionRunSnapshot("running", {
-            flowmodoroState: {
-              ...flowmodoroState,
+      // Flowmodoro countdown runs concurrently with session/daily
+      if (
+        settings.flowmodoroEnabled &&
+        flowmodoroState.isOnBreak &&
+        flowmodoroState.breakTimeRemaining > 0
+      ) {
+        if (elapsedSeconds >= flowmodoroState.breakTimeRemaining) {
+          void persistModeTimer("flowmodoro:break", "complete").catch((error) =>
+            console.error("Failed to complete Flowmodoro break timer", error),
+          );
+          if (isTimerActive) {
+            void persistSessionRunSnapshot("running", {
+              flowmodoroState: {
+                ...flowmodoroState,
+                isOnBreak: false,
+                breakTimeRemaining: 0,
+                initialBreakDuration: 0,
+              },
+            });
+          }
+        }
+        setFlowmodoroState((prev) => {
+          const newBreakTimeRemaining = Math.max(
+            0,
+            prev.breakTimeRemaining - elapsedSeconds,
+          );
+          if (newBreakTimeRemaining <= 0) {
+            return {
+              ...prev,
               isOnBreak: false,
               breakTimeRemaining: 0,
               initialBreakDuration: 0,
-            },
-          });
-        }
+            };
+          }
+          return { ...prev, breakTimeRemaining: newBreakTimeRemaining };
+        });
       }
-      setFlowmodoroState((prev) => {
-        const newBreakTimeRemaining = Math.max(
-          0,
-          prev.breakTimeRemaining - elapsedSeconds,
+
+      // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
+      // This works for both session and daily modes
+      // Earn flowmodoro rest time during active focused work:
+      // - Session mode while timer running
+      // - Daily mode when at least one daily activity is active (status 'active' or 'overtime')
+      const hasActiveDailyWork =
+        currentMode === "daily" &&
+        dailyActivities.some(
+          (a) => a.isActive || a.status === "active" || a.status === "overtime",
         );
-        if (newBreakTimeRemaining <= 0) {
-          return {
-            ...prev,
-            isOnBreak: false,
-            breakTimeRemaining: 0,
-            initialBreakDuration: 0,
-          };
-        }
-        return { ...prev, breakTimeRemaining: newBreakTimeRemaining };
-      });
-    }
-
-    // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
-    // This works for both session and daily modes
-    // Earn flowmodoro rest time during active focused work:
-    // - Session mode while timer running
-    // - Daily mode when at least one daily activity is active (status 'active' or 'overtime')
-    const hasActiveDailyWork =
-      currentMode === "daily" &&
-      dailyActivities.some(
-        (a) => a.isActive || a.status === "active" || a.status === "overtime",
-      );
-    if (
-      settings.flowmodoroEnabled &&
-      !flowmodoroState.isOnBreak &&
-      ((isTimerActive && !isPaused) || hasActiveDailyWork)
-    ) {
-      awardFlowmodoroWork(elapsedSeconds);
-    }
-
-    const hasRunningSession = isTimerActive && !isPaused;
-    const activeFlowBreak =
-      settings.flowmodoroEnabled &&
-      flowmodoroState.isOnBreak &&
-      flowmodoroState.breakTimeRemaining > 0;
-    if (hasRunningSession || activeFlowBreak) {
-      const flowBreakMode = activeFlowBreak
-        ? settings.flowmodoroMode === "postpone"
-          ? "postpone"
-          : "drain"
-        : "none";
-      const transition = advanceSessionRun({
-        activities: activitiesRef.current,
-        currentActivityIndex,
-        elapsedSeconds: hasRunningSession
-          ? elapsedSeconds
-          : Math.min(elapsedSeconds, flowmodoroState.breakTimeRemaining),
-        overtimeMode: settings.overtimeType,
-        flowBreakMode,
-        flowBreakRemainingSeconds: activeFlowBreak
-          ? flowmodoroState.breakTimeRemaining
-          : 0,
-        vaultSeconds: vaultTimeRef.current,
-        flowDrainSourceId: flowBreakDrainSourceRef.current,
-        donorCursor: lastDrainedIndex.current,
-      });
-
-      activitiesRef.current = transition.activities as Activity[];
-      setActivities(transition.activities as Activity[]);
-      flowBreakDrainSourceRef.current = transition.flowDrainSourceId;
-      lastDrainedIndex.current = transition.donorCursor;
-      if (transition.vaultSeconds !== vaultTimeRef.current) {
-        vaultTimeRef.current = transition.vaultSeconds;
-        setVaultTime(transition.vaultSeconds);
-      }
-      Object.entries(transition.donatedSecondsById).forEach(
-        ([activityId, seconds]) => {
-          drainStatsRef.current.donated[activityId] =
-            (drainStatsRef.current.donated[activityId] || 0) + seconds;
-        },
-      );
-      Object.entries(transition.receivedSecondsById).forEach(
-        ([activityId, seconds]) => {
-          drainStatsRef.current.received[activityId] =
-            (drainStatsRef.current.received[activityId] || 0) + seconds;
-        },
-      );
-      const traceHasBoundary =
-        transition.activitySlices.length > 1 ||
-        transition.completedActivityIds.length > 0 ||
-        transition.currentActivityIndex !== currentActivityIndex ||
-        (transition.activitySlices[0]?.offsetSeconds || 0) > 0;
       if (
-        timerController.getSnapshot().isController &&
-        traceHasBoundary
+        settings.flowmodoroEnabled &&
+        !flowmodoroState.isOnBreak &&
+        ((isTimerActive && !isPaused) || hasActiveDailyWork)
       ) {
-        const nextCurrent =
-          transition.activities[transition.currentActivityIndex] || null;
-        if (nextCurrent && !transition.isComplete) {
-          const nextContext = sessionRecordingContext(nextCurrent as Activity);
-          ensuredSessionRecordingRef.current = `${nextContext.activityId}:${nextContext.kind}`;
-        } else {
-          ensuredSessionRecordingRef.current = "";
+        awardFlowmodoroWork(elapsedSeconds);
+      }
+
+      const hasRunningSession = isTimerActive && !isPaused;
+      const activeFlowBreak =
+        settings.flowmodoroEnabled &&
+        flowmodoroState.isOnBreak &&
+        flowmodoroState.breakTimeRemaining > 0;
+      if (hasRunningSession || activeFlowBreak) {
+        const flowBreakMode = activeFlowBreak
+          ? settings.flowmodoroMode === "postpone"
+            ? "postpone"
+            : "drain"
+          : "none";
+        const transition = advanceSessionRun({
+          activities: activitiesRef.current,
+          currentActivityIndex,
+          elapsedSeconds: hasRunningSession
+            ? elapsedSeconds
+            : Math.min(elapsedSeconds, flowmodoroState.breakTimeRemaining),
+          overtimeMode: settings.overtimeType,
+          overtimeDrainStrategy: settings.overtimeDrainStrategy,
+          flowBreakMode,
+          flowBreakRemainingSeconds: activeFlowBreak
+            ? flowmodoroState.breakTimeRemaining
+            : 0,
+          vaultSeconds: vaultTimeRef.current,
+          flowDrainSourceId: flowBreakDrainSourceRef.current,
+          donorCursor: lastDrainedIndex.current,
+        });
+
+        activitiesRef.current = transition.activities as Activity[];
+        setActivities(transition.activities as Activity[]);
+        flowBreakDrainSourceRef.current = transition.flowDrainSourceId;
+        lastDrainedIndex.current = transition.donorCursor;
+        if (transition.vaultSeconds !== vaultTimeRef.current) {
+          vaultTimeRef.current = transition.vaultSeconds;
+          setVaultTime(transition.vaultSeconds);
         }
-        const breakConsumesWholeBatch =
-          activeFlowBreak &&
-          elapsedSeconds <= flowmodoroState.breakTimeRemaining;
-        void applyActivitySessionTrace({
-          sourceTimerId: "session",
-          observedAtMs,
-          elapsedSeconds,
-          slices: transition.activitySlices,
-          activities: transition.activities.map((activity) =>
-            sessionRecordingContext(activity as Activity),
-          ),
-          currentActivity:
-            nextCurrent && !transition.isComplete
-              ? sessionRecordingContext(nextCurrent as Activity)
-              : null,
-          continues:
-            hasRunningSession &&
-            !transition.isComplete &&
-            !breakConsumesWholeBatch,
-        }).catch((error) =>
-          console.error("Failed to persist Session activity trace", error),
+        Object.entries(transition.donatedSecondsById).forEach(
+          ([activityId, seconds]) => {
+            drainStatsRef.current.donated[activityId] =
+              (drainStatsRef.current.donated[activityId] || 0) + seconds;
+          },
         );
-      }
-      if (transition.currentActivityIndex !== currentActivityIndex) {
-        const nextActivity =
-          transition.activities[transition.currentActivityIndex];
-        ensuredSessionRecordingRef.current = nextActivity
-          ? `${nextActivity.id}:${sessionRecordingContext(nextActivity as Activity).kind}`
-          : "";
-        setCurrentActivityIndex(transition.currentActivityIndex);
-        currentActivityIndexRef.current = transition.currentActivityIndex;
-        void persistSessionRunSnapshot("running", {
-          activities: transition.activities as Activity[],
-          currentActivityIndex: transition.currentActivityIndex,
-          vaultSeconds: transition.vaultSeconds,
-        }).catch((error) =>
-          console.error("Failed to persist automatic Session switch", error),
+        Object.entries(transition.receivedSecondsById).forEach(
+          ([activityId, seconds]) => {
+            drainStatsRef.current.received[activityId] =
+              (drainStatsRef.current.received[activityId] || 0) + seconds;
+          },
         );
+        const traceHasBoundary =
+          transition.activitySlices.length > 1 ||
+          transition.completedActivityIds.length > 0 ||
+          transition.currentActivityIndex !== currentActivityIndex ||
+          (transition.activitySlices[0]?.offsetSeconds || 0) > 0;
+        if (timerController.getSnapshot().isController && traceHasBoundary) {
+          const nextCurrent =
+            transition.activities[transition.currentActivityIndex] || null;
+          if (nextCurrent && !transition.isComplete) {
+            const nextContext = sessionRecordingContext(
+              nextCurrent as Activity,
+            );
+            ensuredSessionRecordingRef.current = `${nextContext.activityId}:${nextContext.kind}`;
+          } else {
+            ensuredSessionRecordingRef.current = "";
+          }
+          const breakConsumesWholeBatch =
+            activeFlowBreak &&
+            elapsedSeconds <= flowmodoroState.breakTimeRemaining;
+          void applyActivitySessionTrace({
+            sourceTimerId: "session",
+            observedAtMs,
+            elapsedSeconds,
+            slices: transition.activitySlices,
+            activities: transition.activities.map((activity) =>
+              sessionRecordingContext(activity as Activity),
+            ),
+            currentActivity:
+              nextCurrent && !transition.isComplete
+                ? sessionRecordingContext(nextCurrent as Activity)
+                : null,
+            continues:
+              hasRunningSession &&
+              !transition.isComplete &&
+              !breakConsumesWholeBatch,
+          }).catch((error) =>
+            console.error("Failed to persist Session activity trace", error),
+          );
+        }
+        if (transition.currentActivityIndex !== currentActivityIndex) {
+          const nextActivity =
+            transition.activities[transition.currentActivityIndex];
+          ensuredSessionRecordingRef.current = nextActivity
+            ? `${nextActivity.id}:${sessionRecordingContext(nextActivity as Activity).kind}`
+            : "";
+          setCurrentActivityIndex(transition.currentActivityIndex);
+          currentActivityIndexRef.current = transition.currentActivityIndex;
+          void persistSessionRunSnapshot("running", {
+            activities: transition.activities as Activity[],
+            currentActivityIndex: transition.currentActivityIndex,
+            vaultSeconds: transition.vaultSeconds,
+          }).catch((error) =>
+            console.error("Failed to persist automatic Session switch", error),
+          );
+        }
+        if (hasRunningSession && transition.isComplete) {
+          setIsTimerActive(false);
+          localStorage.removeItem("timeSliceSessionState");
+          void deleteSessionRun();
+          void persistModeTimer("session", "complete").catch((error) =>
+            console.error("Failed to complete Session timer", error),
+          );
+        }
       }
-      if (hasRunningSession && transition.isComplete) {
-        setIsTimerActive(false);
-        localStorage.removeItem("timeSliceSessionState");
-        void deleteSessionRun();
-        void persistModeTimer("session", "complete").catch((error) =>
-          console.error("Failed to complete Session timer", error),
-        );
-      }
-    }
-  }, [
-    currentActivityIndex,
-    currentMode,
-    dailyActivities,
-    isPaused,
-    isTimerActive,
-    settings.overtimeType,
-    settings.flowmodoroEnabled,
-    settings.flowmodoroMode,
-    settings.flowmodoroRatio,
-    settings.flowmodoroMaxProgressMinutes,
-    flowmodoroState.isOnBreak,
-    flowmodoroState.breakTimeRemaining,
-    flowmodoroState.lastResetDate,
-    awardFlowmodoroWork,
-    checkIfShouldReset,
-    persistModeTimer,
-    persistSessionRunSnapshot,
-  ]);
+    },
+    [
+      currentActivityIndex,
+      currentMode,
+      dailyActivities,
+      isPaused,
+      isTimerActive,
+      settings.overtimeType,
+      settings.overtimeDrainStrategy,
+      settings.flowmodoroEnabled,
+      settings.flowmodoroMode,
+      settings.flowmodoroRatio,
+      settings.flowmodoroMaxProgressMinutes,
+      flowmodoroState.isOnBreak,
+      flowmodoroState.breakTimeRemaining,
+      flowmodoroState.lastResetDate,
+      awardFlowmodoroWork,
+      checkIfShouldReset,
+      persistModeTimer,
+      persistSessionRunSnapshot,
+    ],
+  );
 
   // Sync shared progress when session activities change during active timer
   useEffect(() => {
@@ -10479,22 +10482,37 @@ export default function App() {
   useEffect(() => {
     const wasActive = wasFocusedActivityRef.current;
     wasFocusedActivityRef.current = anyFocusedActivity;
-    if (!wasActive || anyFocusedActivity || !settings.promptAfterActivity) return;
+    if (!wasActive || anyFocusedActivity || !settings.promptAfterActivity)
+      return;
     const sourceKey = `stop:${Date.now()}`;
     if (sessionReportOpen) deferredAfterActivityRef.current = sourceKey;
-    else setDecisionCheckpoint({ open: true, reason: "after-activity", sourceKey, foregroundBackgroundMs: 0 });
+    else
+      setDecisionCheckpoint({
+        open: true,
+        reason: "after-activity",
+        sourceKey,
+        foregroundBackgroundMs: 0,
+      });
   }, [anyFocusedActivity, sessionReportOpen, settings.promptAfterActivity]);
 
   useEffect(() => {
     if (sessionReportOpen || !deferredAfterActivityRef.current) return;
     const sourceKey = deferredAfterActivityRef.current;
     deferredAfterActivityRef.current = null;
-    setDecisionCheckpoint({ open: true, reason: "after-activity", sourceKey, foregroundBackgroundMs: 0 });
+    setDecisionCheckpoint({
+      open: true,
+      reason: "after-activity",
+      sourceKey,
+      foregroundBackgroundMs: 0,
+    });
   }, [sessionReportOpen]);
 
   useEffect(() => {
     const markBackground = () => {
-      if (document.visibilityState === "hidden" && backgroundStartedAtRef.current === null)
+      if (
+        document.visibilityState === "hidden" &&
+        backgroundStartedAtRef.current === null
+      )
         backgroundStartedAtRef.current = Date.now();
     };
     const considerForeground = () => {
@@ -10507,10 +10525,17 @@ export default function App() {
       if (lastForegroundOpportunityRef.current === sourceKey) return;
       lastForegroundOpportunityRef.current = sourceKey;
       backgroundStartedAtRef.current = null;
-      setDecisionCheckpoint({ open: true, reason: "foreground", sourceKey, foregroundBackgroundMs: elapsed });
+      setDecisionCheckpoint({
+        open: true,
+        reason: "foreground",
+        sourceKey,
+        foregroundBackgroundMs: elapsed,
+      });
     };
     const handleVisibility = () =>
-      document.visibilityState === "hidden" ? markBackground() : considerForeground();
+      document.visibilityState === "hidden"
+        ? markBackground()
+        : considerForeground();
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("pagehide", markBackground);
     window.addEventListener("pageshow", considerForeground);
@@ -10529,7 +10554,10 @@ export default function App() {
       const persisted = await getTimer("flowmodoro:break");
       if (cancelled) return;
       if (!persisted) {
-        if (flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0) {
+        if (
+          flowmodoroState.isOnBreak &&
+          flowmodoroState.breakTimeRemaining > 0
+        ) {
           await persistModeTimer(
             "flowmodoro:break",
             "start",
@@ -11390,7 +11418,9 @@ export default function App() {
         ) {
           timeSpentSeconds += Math.max(
             0,
-            Math.floor((now.getTime() - new Date(activity.startedAt).getTime()) / 1_000),
+            Math.floor(
+              (now.getTime() - new Date(activity.startedAt).getTime()) / 1_000,
+            ),
           );
         }
         return {
@@ -11452,9 +11482,7 @@ export default function App() {
         now.getTime(),
         momentum,
       );
-    })().catch((error) =>
-      console.error("Failed to start Daily timer", error),
-    );
+    })().catch((error) => console.error("Failed to start Daily timer", error));
   };
 
   const toggleDailyActivityCompletion = (activityId: string) => {
@@ -11520,14 +11548,14 @@ export default function App() {
         return updatedCompleted;
       }),
     );
-    const selected = dailyActivities.find((activity) => activity.id === activityId);
+    const selected = dailyActivities.find(
+      (activity) => activity.id === activityId,
+    );
     void persistModeTimer(
       `daily:${activityId}`,
       selected?.status === "completed" ? "reset" : "complete",
       undefined,
-      selected?.status === "completed"
-        ? undefined
-        : { endReason: "completed" },
+      selected?.status === "completed" ? undefined : { endReason: "completed" },
       nowMs,
     ).catch((error) =>
       console.error("Failed to persist Daily completion", error),
@@ -11574,9 +11602,7 @@ export default function App() {
         undefined,
         { endReason: "paused" },
         nowMs,
-      ).catch((error) =>
-        console.error("Failed to pause Daily timer", error),
-      );
+      ).catch((error) => console.error("Failed to pause Daily timer", error));
     }
   };
 
@@ -11589,14 +11615,9 @@ export default function App() {
       ensuredDailyRecordingRef.current = "";
       setActiveDailyActivity(null);
     }
-    void persistModeTimer(
-      `daily:${activityId}`,
-      "cancel",
-      undefined,
-      { endReason: "cancelled" },
-    ).catch((error) =>
-      console.error("Failed to cancel Daily timer", error),
-    );
+    void persistModeTimer(`daily:${activityId}`, "cancel", undefined, {
+      endReason: "cancelled",
+    }).catch((error) => console.error("Failed to cancel Daily timer", error));
   };
 
   // Subtask management functions
@@ -12499,9 +12520,12 @@ export default function App() {
     if (Math.abs(totalPercentage - 100) < 0.1 && activities.length > 0) {
       const nowMs = Date.now();
       const requestedIndex = Number(options.activityIndex);
-      const firstIncompleteIndex = Number.isInteger(requestedIndex) && activities[requestedIndex] && !activities[requestedIndex].isCompleted
-        ? requestedIndex
-        : activities.findIndex((a) => !a.isCompleted);
+      const firstIncompleteIndex =
+        Number.isInteger(requestedIndex) &&
+        activities[requestedIndex] &&
+        !activities[requestedIndex].isCompleted
+          ? requestedIndex
+          : activities.findIndex((a) => !a.isCompleted);
       const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
       const startingContext = sessionRecordingContext(activities[newIndex]);
       ensuredSessionRecordingRef.current = `${startingContext.activityId}:${startingContext.kind}`;
@@ -12603,11 +12627,10 @@ export default function App() {
         ? { context: sessionRecordingContext(activities[currentActivityIndex]) }
         : { endReason: "paused" },
       nowMs,
-    ).catch((error) =>
-      console.error("Failed to persist session pause", error),
-    );
+    ).catch((error) => console.error("Failed to persist session pause", error));
     void persistSessionRunSnapshot(isPaused ? "running" : "paused").catch(
-      (error) => console.error("Failed to persist Session pause snapshot", error),
+      (error) =>
+        console.error("Failed to persist Session pause snapshot", error),
     );
   };
 
@@ -12631,12 +12654,9 @@ export default function App() {
       })),
     );
     setCurrentActivityIndex(0);
-    void persistSessionTimer(
-      "reset",
-      { endReason: "reset" },
-      nowMs,
-    ).catch((error) =>
-      console.error("Failed to reset persisted session timer", error),
+    void persistSessionTimer("reset", { endReason: "reset" }, nowMs).catch(
+      (error) =>
+        console.error("Failed to reset persisted session timer", error),
     );
     void deleteSessionRun();
 
@@ -12659,10 +12679,7 @@ export default function App() {
         isTimerActive &&
         !isPaused
       ) {
-        void switchActivitySession(
-          "session",
-          context,
-        ).catch((error) =>
+        void switchActivitySession("session", context).catch((error) =>
           console.error("Failed to record Session activity switch", error),
         );
       }
@@ -12691,10 +12708,7 @@ export default function App() {
         isTimerActive &&
         !isPaused
       ) {
-        void switchActivitySession(
-          "session",
-          context,
-        ).catch((error) =>
+        void switchActivitySession("session", context).catch((error) =>
           console.error("Failed to record random Session switch", error),
         );
       }
@@ -12861,12 +12875,8 @@ export default function App() {
     setIsTimerActive(false);
     // Reset vault on exit so it doesn't carry to next session
     setVaultTime(0);
-    void persistSessionTimer(
-      "pause",
-      { endReason: "exited" },
-      nowMs,
-    ).catch((error) =>
-      console.error("Failed to checkpoint session", error),
+    void persistSessionTimer("pause", { endReason: "exited" }, nowMs).catch(
+      (error) => console.error("Failed to checkpoint session", error),
     );
     void deleteSessionRun();
   };
@@ -12893,7 +12903,12 @@ export default function App() {
         ? {
             opportunityId: choice.opportunity.id,
             activityDefinitionId: definition.id,
-            source: currentMode === "daily" ? "daily" : currentMode === "session" ? "session" : "single",
+            source:
+              currentMode === "daily"
+                ? "daily"
+                : currentMode === "session"
+                  ? "session"
+                  : "single",
             interaction: choice.interaction,
           }
         : undefined;
@@ -12906,7 +12921,8 @@ export default function App() {
     };
     if (currentMode === "session") {
       const index = activities.findIndex(
-        (activity) => !activity.isCompleted && matchesDefinition(activity, "session"),
+        (activity) =>
+          !activity.isCompleted && matchesDefinition(activity, "session"),
       );
       if (index >= 0) {
         startSession({ activityIndex: index, momentum });
@@ -12915,7 +12931,9 @@ export default function App() {
     }
     if (currentMode === "daily") {
       const activity = dailyActivities.find(
-        (candidate) => candidate.status !== "completed" && matchesDefinition(candidate, "daily"),
+        (candidate) =>
+          candidate.status !== "completed" &&
+          matchesDefinition(candidate, "daily"),
       );
       if (activity) {
         startDailyActivity(activity.id, momentum);
@@ -12932,17 +12950,20 @@ export default function App() {
 
   const commitAllocationPreview = (preview) => {
     const current = {
-      activities,
-      vaultSeconds: vaultTime,
+      activities: activitiesRef.current,
+      vaultSeconds: vaultTimeRef.current,
       sessionRevision: getSessionRevision(),
     };
     const result = confirmAllocation(preview, current);
     if (!result.committed) {
-      window.alert("The Session changed while this preview was open. Review the refreshed values and try again.");
+      window.alert(
+        "The Session changed while this preview was open. Review the refreshed values and try again.",
+      );
       return false;
     }
     const nextActivities = result.preview.activities;
     const nextVault = result.preview.vaultAfterSeconds;
+    activitiesRef.current = nextActivities;
     setActivities(nextActivities);
     setVaultTime(nextVault);
     vaultTimeRef.current = nextVault;
@@ -12953,7 +12974,6 @@ export default function App() {
         observedAtMs: Date.now(),
       });
     }
-    recalibratePlannedVisuals();
     return true;
   };
 
@@ -13308,13 +13328,17 @@ export default function App() {
       ? dailyActivities
           .filter((activity) => activity.status !== "completed")
           .map((activity) =>
-            activity.sharedId ? `shared:${activity.sharedId}` : `daily:${activity.id}`,
+            activity.sharedId
+              ? `shared:${activity.sharedId}`
+              : `daily:${activity.id}`,
           )
       : currentMode === "session"
         ? activities
             .filter((activity) => !activity.isCompleted)
             .map((activity) =>
-              activity.sharedId ? `shared:${activity.sharedId}` : `session:${activity.id}`,
+              activity.sharedId
+                ? `shared:${activity.sharedId}`
+                : `session:${activity.id}`,
             )
         : [];
 
@@ -13593,7 +13617,9 @@ export default function App() {
                     currentActivity
                       ? displayActivityColor(
                           currentActivity.color,
-                          settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                          settings.colorIntensity === "vivid"
+                            ? "vivid"
+                            : "standard",
                         )
                       : undefined
                   }
@@ -13619,7 +13645,9 @@ export default function App() {
                     currentActivity
                       ? displayActivityColor(
                           currentActivity.color,
-                          settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                          settings.colorIntensity === "vivid"
+                            ? "vivid"
+                            : "standard",
                         )
                       : undefined
                   }
@@ -13645,7 +13673,9 @@ export default function App() {
                     backgroundColor: currentActivity
                       ? displayActivityColor(
                           currentActivity.color,
-                          settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                          settings.colorIntensity === "vivid"
+                            ? "vivid"
+                            : "standard",
                         )
                       : undefined,
                   }}
@@ -13886,6 +13916,9 @@ export default function App() {
                       settings.showActivityPercentOnlyDuringRun &&
                       isTimerActive &&
                       !isPaused;
+                    const isVisuallyInactive =
+                      activity.isCompleted ||
+                      Number(activity.timeRemaining || 0) === 0;
                     return (
                       <div
                         key={activity.id}
@@ -13917,7 +13950,8 @@ export default function App() {
                           setDragOverActivityId(null);
                         }}
                         className={`relative overflow-hidden flex items-center justify-between p-2 rounded-lg border transition-colors ${index === currentActivityIndex && !activity.isCompleted ? "bg-blue-50 border-blue-200" : "hover:bg-gray-50"}
-                      ${activity.isCompleted ? "bg-green-50 text-gray-500 cursor-not-allowed" : "cursor-pointer"} ${activity.priority ? "ring-1 ring-amber-300" : ""}
+                      ${activity.isCompleted ? "bg-slate-50 text-gray-500 cursor-not-allowed" : "cursor-pointer"} ${activity.priority ? "ring-1 ring-amber-300" : ""}
+                      ${isVisuallyInactive ? "opacity-40 saturate-[.35]" : "opacity-100"}
                       ${draggingActivityId === activity.id ? "opacity-40" : ""}
                       ${dragOverActivityId === activity.id && draggingActivityId ? "ring-2 ring-blue-300" : ""}`}
                         onClick={() =>
@@ -13938,10 +13972,15 @@ export default function App() {
                               width: `${activity.isCompleted ? 100 : displayProgress}%`,
                               backgroundColor: displayActivityColor(
                                 activity.color,
-                                settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                                settings.colorIntensity === "vivid"
+                                  ? "vivid"
+                                  : "standard",
                               ),
-                              opacity:
-                                index === currentActivityIndex ? 0.25 : 0.18,
+                              opacity: isVisuallyInactive
+                                ? 0.08
+                                : index === currentActivityIndex
+                                  ? 0.25
+                                  : 0.18,
                               transition:
                                 "width 0.5s linear, opacity 0.25s linear",
                             }}
@@ -13961,7 +14000,9 @@ export default function App() {
                             style={{
                               backgroundColor: displayActivityColor(
                                 activity.color,
-                                settings.colorIntensity === "vivid" ? "vivid" : "standard",
+                                settings.colorIntensity === "vivid"
+                                  ? "vivid"
+                                  : "standard",
                               ),
                             }}
                           />
@@ -14009,6 +14050,32 @@ export default function App() {
                                 ? formatTime(spentForCompleted)
                                 : formatTime(activity.timeRemaining)}
                             </span>
+                          )}
+                          {isVisuallyInactive && !activity.countUp && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setExtraTimeFunding({
+                                  isOpen: true,
+                                  targetActivityId: activity.id,
+                                  requestedSeconds: 5 * 60,
+                                  source:
+                                    settings.preferredExtraTimeSource ||
+                                    (settings.redistributionUseVaultFirst
+                                      ? "vault"
+                                      : "otherActivities"),
+                                  remember: false,
+                                });
+                              }}
+                              title="Give time and reactivate"
+                              aria-label={`Give time to ${activity.name}`}
+                              className="z-20 h-7 px-2 text-[10px] font-semibold text-indigo-700"
+                            >
+                              + Time
+                            </Button>
                           )}
                           <Button
                             size="sm"
@@ -14143,7 +14210,9 @@ export default function App() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
-                    <Label htmlFor="vault-prediction-mode">Time Vault and Predicted End</Label>
+                    <Label htmlFor="vault-prediction-mode">
+                      Time Vault and Predicted End
+                    </Label>
                     <select
                       id="vault-prediction-mode"
                       value={settings.vaultPredictionMode || "linked"}
@@ -14155,11 +14224,18 @@ export default function App() {
                       }
                       className="mt-2 min-h-11 w-full rounded-lg border border-blue-200 bg-white px-3 text-sm"
                     >
-                      <option value="linked">Linked · task allocation controls the end</option>
-                      <option value="independent">Independent · preserve task + Vault schedule (recommended)</option>
+                      <option value="linked">
+                        Linked · task allocation controls the end
+                      </option>
+                      <option value="independent">
+                        Independent · preserve task + Vault schedule
+                        (recommended)
+                      </option>
                     </select>
                     <p className="mt-2 text-xs text-slate-600">
-                      Independent keeps Predicted End stable when time moves between a task and the Vault. It never rewrites allocations or history.
+                      Independent keeps Predicted End stable when time moves
+                      between a task and the Vault. It never rewrites
+                      allocations or history.
                     </p>
                   </div>
                   <div className="rounded-lg border border-violet-100 bg-violet-50 p-3">
@@ -14178,13 +14254,43 @@ export default function App() {
                       <option value="standard">Standard</option>
                       <option value="vivid">Vivid</option>
                     </select>
-                    <p className="mt-2 text-xs text-slate-600">Vivid adjusts display saturation only. Stored activity colors are unchanged.</p>
+                    <p className="mt-2 text-xs text-slate-600">
+                      Vivid adjusts display saturation only. Stored activity
+                      colors are unchanged.
+                    </p>
                   </div>
                   <div className="rounded-lg border border-slate-200 bg-white p-3">
                     <Label>Decision checkpoint</Label>
-                    <p className="mt-1 text-xs text-slate-600">The manual Choose next action is always available while idle.</p>
-                    <label className="mt-2 flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(settings.promptAfterActivity)} onChange={(event) => setSettings((previous) => ({ ...previous, promptAfterActivity: event.target.checked }))} />Prompt after an activity stops</label>
-                    <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(settings.promptWhenReturningIdle)} onChange={(event) => setSettings((previous) => ({ ...previous, promptWhenReturningIdle: event.target.checked }))} />Prompt when returning idle after 15 minutes</label>
+                    <p className="mt-1 text-xs text-slate-600">
+                      The manual Choose next action is always available while
+                      idle.
+                    </p>
+                    <label className="mt-2 flex min-h-11 items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settings.promptAfterActivity)}
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            promptAfterActivity: event.target.checked,
+                          }))
+                        }
+                      />
+                      Prompt after an activity stops
+                    </label>
+                    <label className="flex min-h-11 items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settings.promptWhenReturningIdle)}
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            promptWhenReturningIdle: event.target.checked,
+                          }))
+                        }
+                      />
+                      Prompt when returning idle after 15 minutes
+                    </label>
                   </div>
                   {navigator.storage?.persist && (
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3">
@@ -14258,6 +14364,51 @@ export default function App() {
                         Drain
                       </Button>
                     </div>
+                    {settings.overtimeType === "drain" && (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                        <div className="mb-1 text-xs font-medium text-slate-600">
+                          Drain donors
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            size="sm"
+                            variant={
+                              settings.overtimeDrainStrategy === "proportional"
+                                ? "default"
+                                : "outline"
+                            }
+                            onClick={() =>
+                              setSettings((current) => ({
+                                ...current,
+                                overtimeDrainStrategy: "proportional",
+                              }))
+                            }
+                          >
+                            All proportionally
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={
+                              settings.overtimeDrainStrategy === "next"
+                                ? "default"
+                                : "outline"
+                            }
+                            onClick={() =>
+                              setSettings((current) => ({
+                                ...current,
+                                overtimeDrainStrategy: "next",
+                              }))
+                            }
+                          >
+                            Next in order
+                          </Button>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Starred activities are always protected. Lock only
+                          affects manual allocation editing.
+                        </p>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
                     <div>
@@ -16222,61 +16373,227 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Tag filter/search */}
-                    <div className="flex items-center gap-2 mb-2">
-                      <input
-                        value={tagQuery}
-                        onChange={(e) => setTagQuery(e.target.value)}
-                        placeholder="Filter by tag..."
-                        className="border rounded px-2 py-1 text-sm"
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          const q = tagQuery.trim().toLowerCase();
-                          if (!q) return;
-                          if (!tagFilter.includes(q))
-                            setTagFilter([...tagFilter, q]);
-                          setTagQuery("");
-                        }}
-                      >
-                        Add Filter
-                      </Button>
-                      {tagFilter.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {tagFilter.map((t) => (
-                            <span
-                              key={t}
-                              className="px-2 py-0.5 bg-slate-200 rounded-full text-xs flex items-center gap-1"
+                    {/* Tag filter and radial feedback */}
+                    {(() => {
+                      const colorForTag = (name: string) => {
+                        let hash = 0;
+                        for (let index = 0; index < name.length; index += 1)
+                          hash = name.charCodeAt(index) + ((hash << 5) - hash);
+                        return `hsl(${Math.abs(hash) % 360}, 65%, 48%)`;
+                      };
+                      const knownIds = new Set(rpgTags.map((tag) => tag.id));
+                      const rawTags = Array.from(
+                        new Set(
+                          dailyActivities.flatMap((activity) =>
+                            (activity.tags || []).map(String),
+                          ),
+                        ),
+                      );
+                      const availableTags = [
+                        ...rpgTags.map((tag) => ({
+                          id: tag.id,
+                          name: tag.name,
+                          color: tag.color,
+                        })),
+                        ...rawTags
+                          .filter(
+                            (value) =>
+                              !knownIds.has(value) &&
+                              !rpgTags.some(
+                                (tag) =>
+                                  tag.name.toLowerCase() ===
+                                  value.toLowerCase(),
+                              ),
+                          )
+                          .map((value) => ({
+                            id: value,
+                            name: value,
+                            color: colorForTag(value),
+                          })),
+                      ].filter((tag) =>
+                        rawTags.some(
+                          (value) =>
+                            resolveTagId(value, rpgTags) === tag.id ||
+                            value.toLowerCase() === tag.name.toLowerCase(),
+                        ),
+                      );
+                      const wheelActivities = dailyActivities.map(
+                        (activity) => {
+                          const actualSeconds =
+                            getRealTimeSpentInSeconds(activity);
+                          return {
+                            id: activity.id,
+                            name: activity.name,
+                            color:
+                              typeof activity.color === "string" &&
+                              /^(#|rgb|hsl)/.test(activity.color)
+                                ? activity.color
+                                : "#3b82f6",
+                            tagIds: (activity.tags || []).map(String),
+                            plannedSeconds: Math.max(
+                              0,
+                              Number(activity.duration || 0) * 60 -
+                                actualSeconds,
+                            ),
+                            actualSeconds,
+                          };
+                        },
+                      );
+                      const wheelModels = buildDailyTagWheels({
+                        activities: wheelActivities,
+                        tags: availableTags,
+                        selectedTagIds: tagFilter,
+                        metric: settings.dailyTagWheelMetric,
+                        layout: settings.dailyTagWheelLayout,
+                      });
+                      return (
+                        <div className="mb-3 space-y-2">
+                          <div className="flex gap-2">
+                            <input
+                              value={tagQuery}
+                              onChange={(event) =>
+                                setTagQuery(event.target.value)
+                              }
+                              placeholder="Filter by tag..."
+                              className="min-h-11 min-w-0 flex-1 rounded-lg border px-2 text-sm"
+                            />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="min-h-11"
+                              onClick={() => {
+                                const query = tagQuery.trim();
+                                if (!query) return;
+                                const id = resolveTagId(query, availableTags);
+                                if (!tagFilter.includes(id))
+                                  setTagFilter([...tagFilter, id]);
+                                setTagQuery("");
+                              }}
                             >
-                              #{t}
+                              Add
+                            </Button>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {availableTags.map((tag) => {
+                              const selected = tagFilter.includes(tag.id);
+                              return (
+                                <button
+                                  key={tag.id}
+                                  type="button"
+                                  aria-pressed={selected}
+                                  onClick={() =>
+                                    setTagFilter((current) =>
+                                      selected
+                                        ? current.filter((id) => id !== tag.id)
+                                        : [...current, tag.id],
+                                    )
+                                  }
+                                  className={`min-h-11 rounded-full border px-3 text-xs font-semibold ${
+                                    selected
+                                      ? "border-indigo-500 bg-indigo-50 text-indigo-800"
+                                      : "border-slate-200 bg-white text-slate-600"
+                                  }`}
+                                >
+                                  <span
+                                    className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full"
+                                    style={{ backgroundColor: tag.color }}
+                                  />
+                                  {tag.name}
+                                </button>
+                              );
+                            })}
+                            {tagFilter.length > 0 && (
                               <button
-                                onClick={() =>
-                                  setTagFilter(tagFilter.filter((x) => x !== t))
-                                }
-                                className="text-slate-600 hover:text-slate-900"
+                                className="min-h-11 px-2 text-xs font-semibold text-blue-600"
+                                onClick={() => setTagFilter([])}
                               >
-                                ×
+                                Clear
                               </button>
-                            </span>
-                          ))}
-                          <button
-                            className="text-xs text-blue-600"
-                            onClick={() => setTagFilter([])}
-                          >
-                            Clear
-                          </button>
+                            )}
+                          </div>
+                          {tagFilter.length > 0 && (
+                            <>
+                              <div className="grid grid-cols-2 gap-2">
+                                <div
+                                  className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
+                                  aria-label="Tag wheel metric"
+                                >
+                                  {(["plan", "actual"] as const).map(
+                                    (metric) => (
+                                      <button
+                                        key={metric}
+                                        type="button"
+                                        aria-pressed={
+                                          settings.dailyTagWheelMetric ===
+                                          metric
+                                        }
+                                        onClick={() =>
+                                          setSettings((current) => ({
+                                            ...current,
+                                            dailyTagWheelMetric: metric,
+                                          }))
+                                        }
+                                        className={`min-h-11 rounded-md text-xs font-semibold capitalize ${
+                                          settings.dailyTagWheelMetric ===
+                                          metric
+                                            ? "bg-white text-indigo-700 shadow-sm"
+                                            : "text-slate-600"
+                                        }`}
+                                      >
+                                        {metric}
+                                      </button>
+                                    ),
+                                  )}
+                                </div>
+                                <div
+                                  className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
+                                  aria-label="Tag wheel layout"
+                                >
+                                  {[
+                                    ["per-tag", "Per tag"],
+                                    ["combined", "Combined"],
+                                  ].map(([layout, label]) => (
+                                    <button
+                                      key={layout}
+                                      type="button"
+                                      aria-pressed={
+                                        settings.dailyTagWheelLayout === layout
+                                      }
+                                      onClick={() =>
+                                        setSettings((current) => ({
+                                          ...current,
+                                          dailyTagWheelLayout: layout,
+                                        }))
+                                      }
+                                      className={`min-h-11 rounded-md text-xs font-semibold ${
+                                        settings.dailyTagWheelLayout === layout
+                                          ? "bg-white text-indigo-700 shadow-sm"
+                                          : "text-slate-600"
+                                      }`}
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <DailyTagWheels
+                                models={wheelModels}
+                                metric={settings.dailyTagWheelMetric}
+                              />
+                            </>
+                          )}
                         </div>
-                      )}
-                    </div>
+                      );
+                    })()}
                     {/* Dynamic Activity Cards */}
                     <div className="space-y-2">
                       {(() => {
                         const base = tagFilter.length
                           ? dailyActivities.filter((a) =>
                               (a.tags || []).some((t) =>
-                                tagFilter.includes(String(t).toLowerCase()),
+                                tagFilter.includes(
+                                  resolveTagId(String(t), rpgTags),
+                                ),
                               ),
                             )
                           : dailyActivities;
@@ -16332,13 +16649,16 @@ export default function App() {
                         const earnedRestMinutes = settings.flowmodoroEnabled
                           ? Math.floor(realTimeSpent / settings.flowmodoroRatio)
                           : 0;
+                        const isVisuallyInactive =
+                          activity.status === "completed" ||
+                          Number(activity.duration || 0) === 0;
 
                         return (
                           <div
                             key={activity.id}
                             className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
                               activity.status === "completed"
-                                ? "border-green-200 hover:bg-green-100 cursor-pointer completion-glow"
+                                ? "border-slate-200 cursor-pointer"
                                 : activity.status === "overtime"
                                   ? "border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer"
                                   : activity.status === "active"
@@ -16350,11 +16670,15 @@ export default function App() {
                               activity.status === "active"
                                 ? "transform scale-90 -translate-x-4 shadow-xl transition-all duration-500"
                                 : "transition-all duration-300"
-                            } ${settings.showRolloverIndicators && activity.rolledOverFromYesterday ? "border-dashed border-2" : ""}`}
+                            } ${settings.showRolloverIndicators && activity.rolledOverFromYesterday ? "border-dashed border-2" : ""} ${
+                              isVisuallyInactive
+                                ? "opacity-40 saturate-[.35]"
+                                : "opacity-100"
+                            }`}
                             style={{
                               backgroundColor:
                                 activity.status === "completed"
-                                  ? "#f0fdf4"
+                                  ? "#f8fafc"
                                   : activity.status === "overtime"
                                     ? "#fef2f2"
                                     : activity.status === "active"
@@ -16364,7 +16688,7 @@ export default function App() {
                                         : "#ffffff",
                               boxShadow:
                                 activity.status === "completed"
-                                  ? "0 0 15px rgba(34, 197, 94, 0.3)"
+                                  ? "none"
                                   : undefined,
                             }}
                             onClick={() => {
@@ -17576,8 +17900,16 @@ export default function App() {
         opportunitySourceKey={decisionCheckpoint.sourceKey}
         foregroundBackgroundMs={decisionCheckpoint.foregroundBackgroundMs}
         currentSourceKeys={decisionCurrentSourceKeys}
-        source={currentMode === "daily" ? "daily" : currentMode === "session" ? "session" : "single"}
-        onClose={() => setDecisionCheckpoint((previous) => ({ ...previous, open: false }))}
+        source={
+          currentMode === "daily"
+            ? "daily"
+            : currentMode === "session"
+              ? "session"
+              : "single"
+        }
+        onClose={() =>
+          setDecisionCheckpoint((previous) => ({ ...previous, open: false }))
+        }
         onStart={handleDecisionStart}
       />
       {/* Removed ColorPicker - using simple random colors instead */}
@@ -17599,8 +17931,19 @@ export default function App() {
         vaultSeconds={vaultTime}
         sessionRevision={getSessionRevision()}
         sourceId={siphonModalState.sourceActivityId}
-        targetId={siphonModalState.targetIsVault ? "vault" : siphonModalState.targetActivityId}
-        onClose={() => setSiphonModalState({ isOpen: false, sourceActivityId: "", targetActivityId: "", targetIsVault: false })}
+        targetId={
+          siphonModalState.targetIsVault
+            ? "vault"
+            : siphonModalState.targetActivityId
+        }
+        onClose={() =>
+          setSiphonModalState({
+            isOpen: false,
+            sourceActivityId: "",
+            targetActivityId: "",
+            targetIsVault: false,
+          })
+        }
         onConfirm={commitAllocationPreview}
       />
       <TimeAllocationDialog
@@ -17613,12 +17956,16 @@ export default function App() {
         sourceId={extraTimeFunding.source}
         targetId={extraTimeFunding.targetActivityId}
         initialSeconds={extraTimeFunding.requestedSeconds}
-        onClose={() => setExtraTimeFunding((previous) => ({ ...previous, isOpen: false }))}
+        onClose={() =>
+          setExtraTimeFunding((previous) => ({ ...previous, isOpen: false }))
+        }
         fundingChoice={{
           value: extraTimeFunding.source,
-          onChange: (source) => setExtraTimeFunding((previous) => ({ ...previous, source })),
+          onChange: (source) =>
+            setExtraTimeFunding((previous) => ({ ...previous, source })),
           remember: extraTimeFunding.remember,
-          onRememberChange: (remember) => setExtraTimeFunding((previous) => ({ ...previous, remember })),
+          onRememberChange: (remember) =>
+            setExtraTimeFunding((previous) => ({ ...previous, remember })),
         }}
         onConfirm={(preview) => {
           const committed = commitAllocationPreview(preview);

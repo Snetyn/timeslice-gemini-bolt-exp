@@ -2,9 +2,12 @@ export type AllocationActivity = {
   id: string;
   name: string;
   timeRemaining: number;
+  percentage?: number;
   priority?: boolean;
   isCompleted?: boolean;
   countUp?: boolean;
+  completedElapsedSeconds?: number;
+  status?: "scheduled" | "active" | "completed" | "overtime";
 };
 
 export type AllocationSource = "vault" | "otherActivities" | string;
@@ -48,18 +51,50 @@ export type AllocationPreview = {
 const seconds = (value: number) =>
   Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 
-export function allocationFingerprint(input: Pick<AllocationRequest, "activities" | "vaultSeconds" | "sessionRevision">) {
+export function allocationFingerprint(
+  input: Pick<
+    AllocationRequest,
+    "activities" | "vaultSeconds" | "sessionRevision"
+  >,
+) {
   return JSON.stringify({
     order: input.activities.map((activity) => activity.id),
-    remaining: input.activities.map((activity) => [activity.id, seconds(activity.timeRemaining)]),
-    protected: input.activities.map((activity) => [activity.id, Boolean(activity.priority)]),
-    vault: seconds(input.vaultSeconds),
-    revision: Math.max(0, Math.floor(input.sessionRevision || 0)),
+    protected: input.activities.map((activity) => [
+      activity.id,
+      Boolean(activity.priority),
+    ]),
+    eligibility: input.activities.map((activity) => [
+      activity.id,
+      Boolean(activity.isCompleted),
+      Boolean(activity.countUp),
+    ]),
   });
 }
 
-export function calculateAllocation(request: AllocationRequest): AllocationPreview {
-  const activities = request.activities.map((activity) => ({
+export function normalizeAllocationPercentages<T extends AllocationActivity>(
+  activities: T[],
+): T[] {
+  const total = activities.reduce(
+    (sum, activity) =>
+      sum +
+      (activity.countUp || activity.isCompleted
+        ? 0
+        : seconds(activity.timeRemaining)),
+    0,
+  );
+  return activities.map((activity) => ({
+    ...activity,
+    percentage:
+      activity.countUp || activity.isCompleted || total <= 0
+        ? 0
+        : (seconds(activity.timeRemaining) / total) * 100,
+  }));
+}
+
+export function calculateAllocation(
+  request: AllocationRequest,
+): AllocationPreview {
+  let activities = request.activities.map((activity) => ({
     ...activity,
     timeRemaining: seconds(activity.timeRemaining),
   }));
@@ -69,27 +104,40 @@ export function calculateAllocation(request: AllocationRequest): AllocationPrevi
   let remaining = requestedSeconds;
   let protectedOverrideRequired = false;
   let error: string | undefined;
-  const target = request.targetId === "vault"
-    ? null
-    : activities.find((activity) => activity.id === request.targetId);
-  const source = request.sourceId === "vault" || request.sourceId === "otherActivities"
-    ? null
-    : activities.find((activity) => activity.id === request.sourceId);
-  const validTarget = request.targetId === "vault" || Boolean(target && !target.isCompleted && !target.countUp);
+  const target =
+    request.targetId === "vault"
+      ? null
+      : activities.find((activity) => activity.id === request.targetId);
+  const source =
+    request.sourceId === "vault" || request.sourceId === "otherActivities"
+      ? null
+      : activities.find((activity) => activity.id === request.sourceId);
+  const validTarget =
+    request.targetId === "vault" || Boolean(target && !target.countUp);
   if (!requestedSeconds) error = "Enter a positive amount.";
   else if (!validTarget) error = "Choose an active countdown target.";
-  else if (request.operation === "transfer" && !source && request.sourceId !== "vault")
+  else if (
+    request.operation === "transfer" &&
+    !source &&
+    request.sourceId !== "vault"
+  )
     error = "Choose an available source.";
   else if (source && (source.isCompleted || source.countUp))
     error = "That source cannot donate time.";
   else if (source?.priority && !request.allowProtectedManual) {
-    error = "This activity is Priority & protected. Confirm the protected override explicitly.";
+    error =
+      "This activity is Priority & protected. Confirm the protected override explicitly.";
     protectedOverrideRequired = true;
   }
 
   const addToTarget = (amount: number) => {
     if (request.targetId === "vault") vaultAfterSeconds += amount;
-    else if (target) target.timeRemaining += amount;
+    else if (target && amount > 0) {
+      target.timeRemaining += amount;
+      target.isCompleted = false;
+      target.completedElapsedSeconds = undefined;
+      if (target.status === "completed") target.status = "scheduled";
+    }
   };
 
   if (!error) {
@@ -101,12 +149,13 @@ export function calculateAllocation(request: AllocationRequest): AllocationPrevi
     } else if (request.sourceId === "otherActivities") {
       const minimum = seconds(request.minimumDonorSeconds || 0);
       const donors = activities
-        .filter((activity) =>
-          activity.id !== request.targetId &&
-          !activity.priority &&
-          !activity.isCompleted &&
-          !activity.countUp &&
-          activity.timeRemaining > minimum,
+        .filter(
+          (activity) =>
+            activity.id !== request.targetId &&
+            !activity.priority &&
+            !activity.isCompleted &&
+            !activity.countUp &&
+            activity.timeRemaining > minimum,
         )
         .reverse();
       for (const donor of donors) {
@@ -117,17 +166,26 @@ export function calculateAllocation(request: AllocationRequest): AllocationPrevi
         remaining -= amount;
       }
     } else if (source) {
-      const minimum = request.operation === "extra" ? seconds(request.minimumDonorSeconds || 0) : 0;
-      const amount = Math.min(remaining, Math.max(0, source.timeRemaining - minimum));
+      const minimum =
+        request.operation === "extra"
+          ? seconds(request.minimumDonorSeconds || 0)
+          : 0;
+      const amount = Math.min(
+        remaining,
+        Math.max(0, source.timeRemaining - minimum),
+      );
       source.timeRemaining -= amount;
       addToTarget(amount);
       remaining -= amount;
     }
   }
 
+  activities = normalizeAllocationPercentages(activities);
   const changes = activities
     .map((activity) => {
-      const before = request.activities.find((candidate) => candidate.id === activity.id);
+      const before = request.activities.find(
+        (candidate) => candidate.id === activity.id,
+      );
       return {
         id: activity.id,
         name: activity.name,
@@ -154,13 +212,20 @@ export function calculateAllocation(request: AllocationRequest): AllocationPrevi
   };
 }
 
-export function confirmAllocation(preview: AllocationPreview, current: Omit<AllocationRequest, "requestedSeconds" | "sourceId" | "targetId" | "operation">) {
+export function confirmAllocation(
+  preview: AllocationPreview,
+  current: Omit<
+    AllocationRequest,
+    "requestedSeconds" | "sourceId" | "targetId" | "operation"
+  >,
+) {
   if (allocationFingerprint(current) !== preview.fingerprint) {
-    return { committed: false as const, reason: "stale" as const, preview: calculateAllocation({ ...preview.request, ...current }) };
+    return {
+      committed: false as const,
+      reason: "stale" as const,
+      preview: calculateAllocation({ ...preview.request, ...current }),
+    };
   }
   const refreshed = calculateAllocation({ ...preview.request, ...current });
-  if (JSON.stringify(refreshed.activities) !== JSON.stringify(preview.activities) || refreshed.vaultAfterSeconds !== preview.vaultAfterSeconds) {
-    return { committed: false as const, reason: "changed" as const, preview: refreshed };
-  }
   return { committed: true as const, preview: refreshed };
 }

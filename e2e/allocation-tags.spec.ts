@@ -1,0 +1,150 @@
+import { expect, test } from "@playwright/test";
+
+test("running Session allocation keeps input focus and can reactivate a completed task", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const activities = [
+      {
+        id: "focus",
+        name: "Focus",
+        color: "#2563eb",
+        percentage: 100,
+        duration: 10,
+        timeRemaining: 600,
+        isCompleted: false,
+        countUp: false,
+      },
+      {
+        id: "done",
+        name: "Done",
+        color: "#7c3aed",
+        percentage: 0,
+        duration: 2,
+        timeRemaining: 0,
+        isCompleted: true,
+        completedElapsedSeconds: 120,
+        countUp: false,
+      },
+    ];
+    localStorage.setItem(
+      "timeslice.state.v2",
+      JSON.stringify({
+        version: 2,
+        values: {
+          timeSliceActivities: JSON.stringify(activities),
+          timeSliceTotalHours: "0",
+          timeSliceTotalMinutes: "10",
+          timeSliceSettings: JSON.stringify({
+            overtimeType: "none",
+            vaultPredictionMode: "independent",
+          }),
+          timeSliceSessionState: JSON.stringify({
+            isTimerActive: true,
+            isPaused: false,
+            currentActivityIndex: 0,
+            sessionPlanFrozen: true,
+            initialAllocatedSeconds: 600,
+            lastActiveTimestamp: Date.now(),
+          }),
+        },
+      }),
+    );
+  });
+  await page.goto("/");
+
+  const predicted = page
+    .getByText("Predicted End", { exact: true })
+    .locator("..");
+  const before = await predicted.textContent();
+  await page
+    .getByRole("button", { name: "Transfer time to vault" })
+    .first()
+    .click();
+  const minutes = page.getByRole("textbox", { name: "Minutes" });
+  await minutes.fill("1");
+  const seconds = page.getByRole("textbox", { name: "Seconds" });
+  await seconds.fill("0");
+  await expect(seconds).toBeFocused();
+  await page.waitForTimeout(1_200);
+  await expect(seconds).toBeFocused();
+  await expect(minutes).toHaveValue("1");
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect(predicted).toHaveText(before || "");
+
+  await page.getByRole("button", { name: "Give time to Done" }).click();
+  await page.getByRole("textbox", { name: "Minutes" }).fill("1");
+  await page.getByRole("textbox", { name: "Seconds" }).fill("0");
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await expect(
+    page.getByRole("button", { name: "Give time to Done" }),
+  ).toHaveCount(0);
+  await expect(predicted).toHaveText(before || "");
+  await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
+});
+
+test("Daily tag filters provide persistent per-tag/combined and Plan/Actual wheels", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const daily = [
+      {
+        id: "shared",
+        name: "Shared",
+        color: "#7c3aed",
+        duration: 30,
+        timeSpentSeconds: 600,
+        status: "scheduled",
+        isActive: false,
+        startedAt: null,
+        tags: ["1", "2"],
+      },
+      {
+        id: "work",
+        name: "Work only",
+        color: "#2563eb",
+        duration: 20,
+        timeSpentSeconds: 300,
+        status: "scheduled",
+        isActive: false,
+        startedAt: null,
+        tags: ["1"],
+      },
+    ];
+    localStorage.setItem(
+      "timeslice.state.v2",
+      JSON.stringify({
+        version: 2,
+        values: {
+          timeSliceDailyActivities: JSON.stringify(daily),
+        },
+      }),
+    );
+  });
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Daily" }).click();
+  await page.getByRole("button", { name: /Work$/ }).click();
+  await page.getByRole("button", { name: /Health$/ }).click();
+  await expect(page.getByRole("img", { name: /^Work, plan/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: /^Health, plan/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "Combined" }).click();
+  await page.getByRole("button", { name: "actual" }).click();
+  await expect(
+    page.getByRole("img", { name: /^Selected tags, actual/ }),
+  ).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("tab", { name: "Daily" }).click();
+  await page.getByRole("button", { name: /Work$/ }).click();
+  await page.getByRole("button", { name: /Health$/ }).click();
+  await expect(page.getByRole("button", { name: "Combined" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByRole("button", { name: "actual" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
