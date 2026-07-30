@@ -78,4 +78,43 @@ describe("persisted Session run snapshot", () => {
       vaultSeconds: 0,
     });
   });
+
+  it("normalizes two-tier Flowmodoro fields without rejecting old snapshots", () => {
+    const normalized = normalizePersistedSessionRun({
+      snapshot: createSessionRunSnapshot({
+        status: "paused",
+        currentActivityIndex: 0,
+        sessionPlanFrozen: false,
+      }),
+      activities: [],
+      vaultSeconds: 0,
+      flowmodoroState: {
+        availableRestTime: 30,
+        relaxationVaultSeconds: "120",
+        totalEarnedToday: 150,
+        cycleCount: 0,
+        isOnBreak: true,
+        breakTimeRemaining: 60,
+        initialBreakDuration: 90,
+        lastResetDate: new Date().toDateString(),
+        accumulatedFractionalTime: 1,
+        relaxationVaultPeriodKey: "week:2026-07-27",
+        activeBreakFunding: {
+          reserveSeconds: "bad",
+          vaultSeconds: 60,
+          vaultPeriodKey: "week:2026-07-27",
+        },
+        activeBreakBehavior: "postpone",
+      },
+    });
+    expect(normalized?.flowmodoroState).toMatchObject({
+      availableRestTime: 30,
+      relaxationVaultSeconds: 120,
+      activeBreakFunding: {
+        reserveSeconds: 0,
+        vaultSeconds: 60,
+      },
+      activeBreakBehavior: "postpone",
+    });
+  });
 });

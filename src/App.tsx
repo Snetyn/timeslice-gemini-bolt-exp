@@ -6,7 +6,7 @@ import React, {
   useCallback,
   useSyncExternalStore,
 } from "react";
-import { appStorage } from "./lib/storage";
+import { appStorage, flushAppStorage } from "./lib/storage";
 import { isNewDay } from "./lib/timing";
 import {
   allocateSessionSeconds,
@@ -52,6 +52,17 @@ import {
 } from "./domain/sessionSnapshot";
 import { deleteSessionRun, saveSessionRun } from "./data/sessionRunRepository";
 import { listRecentActivityDefinitions } from "./data/activityCatalogRepository";
+import {
+  applyFlowRewardExpiry,
+  awardFocusedFlowTime,
+  completeFlowBreak,
+  depositFlowReward,
+  flowRewardPeriodKey,
+  fundFlowBreak,
+  nextFlowRewardResetAt,
+  normalizeFlowRewardFields,
+  refundUnusedFlowBreak,
+} from "./domain/flowRewards";
 
 // Keep the existing component code isolated from browser storage details. This
 // compatibility facade is hydrated from IndexedDB; browser localStorage is
@@ -6240,7 +6251,8 @@ const FlowmodoroActivity = ({
   if (
     settings.flowmodoroMode === "drain" &&
     !flowState.isOnBreak &&
-    (flowState.availableRestTime || 0) <= 0
+    (flowState.availableRestTime || 0) <= 0 &&
+    (flowState.relaxationVaultSeconds || 0) <= 0
   )
     return null;
 
@@ -6281,7 +6293,7 @@ const FlowmodoroActivity = ({
           ? "bg-purple-100 border-purple-300"
           : flowState.availableRestTime > 0
             ? "hover:bg-purple-50 border-purple-200 cursor-pointer"
-            : "bg-purple-25 border-purple-100 cursor-not-allowed opacity-70"
+            : "bg-purple-25 border-purple-100"
       }`}
       onClick={handleFlowmodoroClick}
       title={
@@ -6289,7 +6301,9 @@ const FlowmodoroActivity = ({
           ? "Click to skip break and return unused time"
           : flowState.availableRestTime > 0
             ? `Start ${Math.floor(flowState.availableRestTime / 60)}m ${flowState.availableRestTime % 60}s break`
-            : "No rest time earned yet. Work on activities to earn break time."
+            : flowState.relaxationVaultSeconds > 0
+              ? `Banked ${formatTime(flowState.relaxationVaultSeconds)}. Open Flowmodoro mode to start a Vault Rest.`
+              : "No rest time earned yet. Work on activities to earn break time."
       }
     >
       {/* Background progress bar like other activities */}
@@ -6308,7 +6322,7 @@ const FlowmodoroActivity = ({
           className={`w-4 h-4 rounded-full ${flowState.availableRestTime > 0 ? "bg-purple-500" : "bg-gray-300"}`}
         />
         <span className="font-semibold text-purple-800">
-          {flowState.isOnBreak ? "Flowmodoro Break" : "Flowmodoro Rest"}
+          {flowState.isOnBreak ? "Flowmodoro Break" : "Flow Reserve"}
         </span>
         {!flowState.isOnBreak && flowState.availableRestTime === 0 && (
           <span className="text-xs text-gray-500">
@@ -6319,10 +6333,12 @@ const FlowmodoroActivity = ({
 
       <div className="flex items-center space-x-2 z-10">
         {settings.showActivityTime && (
-          <span className="text-sm font-mono">
+          <span className="text-xs sm:text-sm font-mono text-right">
             {flowState.isOnBreak
               ? formatTime(flowState.breakTimeRemaining)
-              : formatTime(flowState.availableRestTime)}
+              : `Quick ${formatTime(flowState.availableRestTime)} · Banked ${formatTime(
+                  flowState.relaxationVaultSeconds || 0,
+                )}`}
           </span>
         )}
       </div>
@@ -6739,288 +6755,299 @@ const FlowmodoroMode = ({
   onTakeBreak,
   onSkipBreak,
   onReset,
+  onResetVault,
   formatTime,
+  settings,
 }) => {
-  const [customBreakMinutes, setCustomBreakMinutes] = useState(0);
-  const [customBreakSeconds, setCustomBreakSeconds] = useState(0);
-  const [showCustomInput, setShowCustomInput] = useState(false);
-
-  const availableMinutes = Math.floor(flowmodoroState.availableRestTime / 60);
-  const availableSeconds = flowmodoroState.availableRestTime % 60;
-  const breakMinutes = Math.floor(flowmodoroState.breakTimeRemaining / 60);
-  const breakSeconds = flowmodoroState.breakTimeRemaining % 60;
-
-  const totalEarnedMinutes = Math.floor(flowmodoroState.totalEarnedToday / 60);
-  const totalEarnedSeconds = flowmodoroState.totalEarnedToday % 60;
-
-  const handleStartAllAvailableTime = () => {
-    if (flowmodoroState.availableRestTime > 0) {
-      onTakeBreak(flowmodoroState.availableRestTime);
-    }
+  const [customSource, setCustomSource] = useState<
+    "reserve" | "vault" | "combined" | null
+  >(null);
+  const [customBreakMinutes, setCustomBreakMinutes] = useState("");
+  const [customBreakSeconds, setCustomBreakSeconds] = useState("");
+  const quickSeconds = Math.max(0, flowmodoroState.availableRestTime || 0);
+  const vaultSeconds = Math.max(0, flowmodoroState.relaxationVaultSeconds || 0);
+  const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
+  const capB = Math.max(
+    0,
+    (settings.flowmodoroSessionActivityMinutes || 0) * 60,
+  );
+  const quickCap =
+    capA > 0 && capB > 0 ? Math.min(capA, capB) : capA > 0 ? capA : capB;
+  const vaultCap = Math.max(
+    0,
+    (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+  );
+  const vaultIsFull = vaultCap > 0 && vaultSeconds >= vaultCap;
+  const nextReset = nextFlowRewardResetAt(
+    new Date(),
+    settings.flowmodoroRelaxationVaultExpiry || "never",
+    settings.flowmodoroResetStartTime || "06:00",
+  );
+  const sourceMaximum = (source) =>
+    source === "reserve"
+      ? quickSeconds
+      : source === "vault"
+        ? vaultSeconds
+        : quickSeconds + vaultSeconds;
+  const sourceLabel = (source) =>
+    source === "reserve"
+      ? "Quick Break"
+      : source === "vault"
+        ? "Vault Rest"
+        : "Combined";
+  const startAll = (source) => {
+    const duration = sourceMaximum(source);
+    if (duration > 0) onTakeBreak(duration, source);
   };
-
-  const handleStartCustomTime = () => {
-    const customTime = customBreakMinutes * 60 + customBreakSeconds;
-    if (customTime > 0 && customTime <= flowmodoroState.availableRestTime) {
-      onTakeBreak(customTime);
-      setShowCustomInput(false);
-      setCustomBreakMinutes(0);
-      setCustomBreakSeconds(0);
-    }
+  const startCustom = () => {
+    if (!customSource) return;
+    const duration =
+      Math.max(0, Number(customBreakMinutes) || 0) * 60 +
+      Math.min(59, Math.max(0, Number(customBreakSeconds) || 0));
+    if (duration <= 0 || duration > sourceMaximum(customSource)) return;
+    onTakeBreak(duration, customSource);
+    setCustomSource(null);
+    setCustomBreakMinutes("");
+    setCustomBreakSeconds("");
   };
+  const activeFunding = flowmodoroState.activeBreakFunding;
+  const activeSource =
+    activeFunding?.vaultSeconds > 0 && activeFunding?.reserveSeconds > 0
+      ? "Combined"
+      : activeFunding?.vaultSeconds > 0
+        ? "Vault Rest"
+        : "Quick Break";
 
   return (
-    <div className="max-w-4xl mx-auto p-2 sm:p-4 md:p-6 space-y-3 sm:space-y-4 md:space-y-6">
-      {/* Header */}
+    <div className="max-w-4xl mx-auto p-2 sm:p-4 space-y-3 sm:space-y-4">
       <div className="text-center">
-        <h2 className="text-xl sm:text-2xl md:text-3xl font-bold bg-gradient-to-r from-purple-600 to-green-600 bg-clip-text text-transparent mb-2">
+        <h2 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-purple-600 to-green-600 bg-clip-text text-transparent">
           🌟 Flowmodoro Mode
         </h2>
-        <p className="text-gray-600 text-sm sm:text-base md:text-lg px-2">
-          Dedicated timer for your earned break time. Use the rest time you've
-          earned from working!
+        <p className="text-gray-600 text-sm px-2 mt-1">
+          Quick pauses stay ready. Overflow is banked for longer rest later.
         </p>
       </div>
 
-      {/* Current Break Timer */}
       {flowmodoroState.isOnBreak && (
         <Card className="border-2 border-purple-300 bg-gradient-to-r from-purple-50 to-green-50">
-          <CardContent className="p-4 sm:p-6 md:p-8 text-center">
-            <div className="space-y-4 sm:space-y-6">
-              <div>
-                <h3 className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">
-                  Break in Progress
-                </h3>
-                <div
-                  className="text-4xl sm:text-6xl md:text-8xl font-mono font-bold text-purple-600"
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
-                  {formatTime(flowmodoroState.breakTimeRemaining)}
-                </div>
-                <div className="text-sm sm:text-base md:text-lg text-gray-600 mt-2">
-                  Enjoy your well-earned break! 🌱
-                </div>
+          <CardContent className="p-4 sm:p-6 text-center">
+            <div className="space-y-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-purple-700">
+                {activeSource} ·{" "}
+                {flowmodoroState.activeBreakBehavior === "drain"
+                  ? "activities continue"
+                  : "activities postponed"}
               </div>
-
-              <div className="flex justify-center">
-                <Button
-                  onClick={onSkipBreak}
-                  size="lg"
-                  className="w-full sm:w-auto sm:min-w-48 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-700 hover:to-red-700"
-                >
-                  <Icon name="x" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
-                  <span className="hidden sm:inline">
-                    Skip Break & Return Time
-                  </span>
-                  <span className="sm:hidden">Skip Break</span>
-                </Button>
+              <div
+                className="text-5xl sm:text-6xl font-mono font-bold text-purple-700"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+                aria-label={`${activeSource} remaining ${formatTime(
+                  flowmodoroState.breakTimeRemaining,
+                )}`}
+              >
+                {formatTime(flowmodoroState.breakTimeRemaining)}
               </div>
+              <p className="text-sm text-gray-600">
+                Stop early to return unused time to its original balance.
+              </p>
+              <Button
+                onClick={onSkipBreak}
+                size="lg"
+                className="w-full sm:w-auto bg-orange-600 hover:bg-orange-700"
+              >
+                <Icon name="x" className="w-5 h-5 mr-2" />
+                Stop & return unused time
+              </Button>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Available Time & Controls */}
       {!flowmodoroState.isOnBreak && (
-        <Card className="border-2 border-green-200">
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 md:gap-6 mb-4 sm:mb-6">
-              <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-200">
-                <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">
-                  Available Break Time
+        <>
+          <div className="grid grid-cols-2 gap-2 sm:gap-3">
+            <Card className="border-2 border-green-200">
+              <CardContent className="p-3 sm:p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-green-700">
+                  Quick Break
                 </div>
-                <div className="text-2xl sm:text-3xl md:text-4xl font-bold text-green-600">
-                  {availableMinutes}m {availableSeconds}s
+                <div className="text-2xl sm:text-3xl font-bold text-green-700 tabular-nums mt-1">
+                  {formatTime(quickSeconds)}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">Ready to use</div>
-              </div>
-              <div className="text-center p-3 sm:p-4 md:p-6 bg-gradient-to-br from-blue-50 to-purple-50 rounded-xl border-2 border-blue-200">
-                <div className="text-xs sm:text-sm font-medium text-gray-500 uppercase tracking-wide mb-2">
-                  Total Earned Today
+                <div className="h-2 rounded-full bg-green-100 overflow-hidden mt-2">
+                  <div
+                    className="h-full bg-green-500"
+                    style={{
+                      width: `${
+                        quickCap > 0
+                          ? Math.min(100, (quickSeconds / quickCap) * 100)
+                          : 0
+                      }%`,
+                    }}
+                  />
                 </div>
-                <div className="text-2xl sm:text-3xl md:text-4xl font-bold text-blue-600">
-                  {totalEarnedMinutes}m {totalEarnedSeconds}s
+                <div className="text-[11px] text-gray-500 mt-1">
+                  {quickCap > 0
+                    ? `${formatTime(quickCap)} capacity`
+                    : "Unlimited capacity"}
                 </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  All work sessions
+              </CardContent>
+            </Card>
+            <Card
+              className={`border-2 ${
+                vaultIsFull ? "border-amber-300" : "border-violet-200"
+              }`}
+            >
+              <CardContent className="p-3 sm:p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-violet-700">
+                  Relaxation Vault
                 </div>
-              </div>
-            </div>
+                <div className="text-2xl sm:text-3xl font-bold text-violet-700 tabular-nums mt-1">
+                  {formatTime(vaultSeconds)}
+                </div>
+                <div className="text-[11px] text-gray-500 mt-2">
+                  {vaultCap > 0
+                    ? `${formatTime(vaultCap)} maximum`
+                    : "Unlimited bank"}
+                </div>
+                <div
+                  className={`text-[11px] mt-1 ${
+                    vaultIsFull
+                      ? "font-semibold text-amber-700"
+                      : "text-gray-500"
+                  }`}
+                >
+                  {vaultIsFull
+                    ? "Vault full — new overflow is not stored"
+                    : nextReset
+                      ? `Resets ${nextReset.toLocaleString()}`
+                      : "Does not expire"}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
-            {flowmodoroState.availableRestTime > 0 ? (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:justify-center gap-2 md:gap-4">
+          <Card className="border-2 border-slate-200">
+            <CardContent className="p-3 sm:p-4 space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                {(["reserve", "vault", "combined"] as const).map((source) => (
                   <Button
-                    onClick={handleStartAllAvailableTime}
-                    size="lg"
-                    className="w-full sm:w-auto sm:min-w-48 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                    key={source}
+                    variant={source === "reserve" ? "default" : "outline"}
+                    className="h-11 px-2 text-xs sm:text-sm"
+                    disabled={sourceMaximum(source) <= 0}
+                    onClick={() => startAll(source)}
                   >
-                    <Icon name="play" className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
-                    <span className="hidden sm:inline">
-                      Use All Available Time
-                    </span>
-                    <span className="sm:hidden">Use All Time</span>
+                    {sourceLabel(source)}
                   </Button>
+                ))}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {(["reserve", "vault", "combined"] as const).map((source) => (
                   <Button
-                    onClick={() => setShowCustomInput(!showCustomInput)}
-                    variant="outline"
-                    size="lg"
-                    className="w-full sm:w-auto sm:min-w-48 border-2 border-blue-400 text-blue-600 hover:bg-blue-50"
+                    key={source}
+                    variant={customSource === source ? "secondary" : "ghost"}
+                    className="h-10 px-1 text-xs"
+                    disabled={sourceMaximum(source) <= 0}
+                    onClick={() =>
+                      setCustomSource((current) =>
+                        current === source ? null : source,
+                      )
+                    }
                   >
-                    <Icon
-                      name="settings"
-                      className="w-4 h-4 sm:w-5 sm:h-5 mr-2"
-                    />
-                    <span className="hidden sm:inline">Custom Duration</span>
-                    <span className="sm:hidden">Custom</span>
+                    Custom {sourceLabel(source)}
                   </Button>
+                ))}
+              </div>
+
+              {customSource && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 space-y-2">
+                  <div className="text-sm font-semibold text-blue-900">
+                    Custom {sourceLabel(customSource)}
+                  </div>
+                  <div className="grid grid-cols-[1fr_auto_1fr_auto] items-end gap-2">
+                    <label className="text-xs text-gray-700">
+                      Minutes
+                      <Input
+                        inputMode="numeric"
+                        type="number"
+                        min="0"
+                        value={customBreakMinutes}
+                        onChange={(event) =>
+                          setCustomBreakMinutes(event.target.value)
+                        }
+                        className="mt-1 h-11 text-center"
+                      />
+                    </label>
+                    <span className="pb-3">:</span>
+                    <label className="text-xs text-gray-700">
+                      Seconds
+                      <Input
+                        inputMode="numeric"
+                        type="number"
+                        min="0"
+                        max="59"
+                        value={customBreakSeconds}
+                        onChange={(event) =>
+                          setCustomBreakSeconds(event.target.value)
+                        }
+                        className="mt-1 h-11 text-center"
+                      />
+                    </label>
+                    <Button className="h-11" onClick={startCustom}>
+                      Start
+                    </Button>
+                  </div>
+                  <p className="text-xs text-blue-700">
+                    Available from this source:{" "}
+                    {formatTime(sourceMaximum(customSource))}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-2 border-t pt-3">
+                <div className="text-xs text-gray-500">
+                  Earned today: {formatTime(flowmodoroState.totalEarnedToday)}
+                </div>
+                <div className="flex gap-2">
                   <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={quickSeconds <= 0}
                     onClick={onReset}
-                    variant="outline"
-                    size="lg"
-                    className="w-full sm:w-auto sm:min-w-32 border-2 border-red-400 text-red-600 hover:bg-red-50 sm:col-span-2 md:col-span-1"
-                    title="Reset all earned break time"
                   >
-                    <Icon
-                      name="refresh"
-                      className="w-4 h-4 sm:w-5 sm:h-5 mr-2"
-                    />
-                    Reset
+                    Reset Quick
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={vaultSeconds <= 0}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "Reset the Relaxation Vault? Quick Break time is not affected.",
+                        )
+                      )
+                        onResetVault();
+                    }}
+                    className="text-red-600"
+                  >
+                    Reset Vault
                   </Button>
                 </div>
-
-                {/* Custom Time Input */}
-                {showCustomInput && (
-                  <Card className="border-2 border-blue-300 bg-blue-50">
-                    <CardContent className="p-4">
-                      <div className="space-y-3">
-                        <h4 className="text-lg font-semibold text-blue-800">
-                          Custom Break Duration
-                        </h4>
-                        <div className="flex items-center justify-center space-x-4">
-                          <div className="flex items-center space-x-2">
-                            <label className="text-sm font-medium">
-                              Minutes:
-                            </label>
-                            <Input
-                              type="number"
-                              min="0"
-                              max={Math.floor(
-                                flowmodoroState.availableRestTime / 60,
-                              )}
-                              value={customBreakMinutes}
-                              onChange={(e) =>
-                                setCustomBreakMinutes(
-                                  parseInt(e.target.value) || 0,
-                                )
-                              }
-                              className="w-16 text-center"
-                            />
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            <label className="text-sm font-medium">
-                              Seconds:
-                            </label>
-                            <Input
-                              type="number"
-                              min="0"
-                              max="59"
-                              value={customBreakSeconds}
-                              onChange={(e) =>
-                                setCustomBreakSeconds(
-                                  parseInt(e.target.value) || 0,
-                                )
-                              }
-                              className="w-16 text-center"
-                            />
-                          </div>
-                          <Button
-                            onClick={handleStartCustomTime}
-                            disabled={
-                              customBreakMinutes === 0 &&
-                              customBreakSeconds === 0
-                            }
-                            className="bg-blue-600 hover:bg-blue-700"
-                          >
-                            <Icon name="play" className="w-4 h-4 mr-2" />
-                            Start
-                          </Button>
-                          <Button
-                            onClick={() => setShowCustomInput(false)}
-                            variant="outline"
-                            className="border-red-300 text-red-600"
-                          >
-                            <Icon name="x" className="w-4 h-4" />
-                          </Button>
-                        </div>
-                        <p className="text-sm text-blue-600 text-center">
-                          Maximum:{" "}
-                          {Math.floor(flowmodoroState.availableRestTime / 60)}m{" "}
-                          {flowmodoroState.availableRestTime % 60}s
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )}
               </div>
-            ) : (
-              <div className="text-center py-8">
-                <div className="text-6xl mb-4">⏰</div>
-                <h3 className="text-xl font-semibold text-gray-700 mb-2">
-                  No Break Time Available
-                </h3>
-                <p className="text-gray-600">
-                  Work in Session, Daily, or Single mode to earn flowmodoro
-                  break time!
-                </p>
-                <div className="mt-4 text-sm text-gray-500">
-                  Tip: The longer you work, the more break time you earn
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </>
       )}
 
-      {/* Instructions */}
       {!flowmodoroState.isOnBreak && (
         <Card className="border-2 border-gray-200 bg-gray-50">
-          <CardContent className="p-6">
-            <h4 className="text-lg font-semibold text-gray-800 mb-3">
-              How Flowmodoro Works
-            </h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-600">
-              <div className="flex items-start space-x-2">
-                <span className="text-green-600 font-bold">1.</span>
-                <div>
-                  <div className="font-medium">Earn Time</div>
-                  <div>
-                    Work in any mode to accumulate break time based on your
-                    productivity
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-start space-x-2">
-                <span className="text-blue-600 font-bold">2.</span>
-                <div>
-                  <div className="font-medium">Use Time</div>
-                  <div>
-                    Come here to take breaks using your earned time - all or
-                    custom amounts
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-start space-x-2">
-                <span className="text-purple-600 font-bold">3.</span>
-                <div>
-                  <div className="font-medium">Stay Fresh</div>
-                  <div>
-                    Regular breaks help maintain focus and prevent burnout
-                    during long work sessions
-                  </div>
-                </div>
-              </div>
-            </div>
+          <CardContent className="p-3 text-sm text-gray-600">
+            Quick Reserve fills first. Once full, every new reward second moves
+            into the Relaxation Vault. Neither balance changes your Session Time
+            Vault or Predicted End.
           </CardContent>
         </Card>
       )}
@@ -8020,6 +8047,9 @@ export default function App() {
       flowmodoroResetEndTime: "23:59", // Daily reset at 11:59 PM
       flowmodoroShowAsActivity: true, // visualize Flowmodoro as its own pseudo-activity segment
       flowmodoroSessionActivityMinutes: 10, // planned Flow capacity for pseudo segment
+      flowmodoroRelaxationVaultMaxMinutes: 0, // 0 = unlimited
+      flowmodoroRelaxationVaultExpiry: "never", // 'never' | 'daily' | 'weekly' | 'monthly'
+      flowmodoroRelaxationVaultMode: "postpone", // independent behavior for longer Vault rests
       flowmodoroAutoCatchup: true, // NEW: enable off-screen rest accrual reconciliation
       flowmodoroSmoothCatchup: false, // NEW: smooth large catch-up awards over ticks
       showDragPlaceholders: true, // NEW: allow disabling drag gap highlight
@@ -9109,9 +9139,15 @@ export default function App() {
   const [flowmodoroState, setFlowmodoroState] = useState(() => {
     try {
       const saved = localStorage.getItem("timeSliceFlowmodoro");
+      const now = new Date();
+      const expiry = settings.flowmodoroRelaxationVaultExpiry || "never";
+      const resetTime = settings.flowmodoroResetStartTime || "06:00";
       const defaultState = {
         availableRestTime: 0, // in seconds
         availableRestMinutes: 0, // in minutes (calculated from availableRestTime)
+        relaxationVaultSeconds: 0,
+        relaxationVaultPeriodKey: flowRewardPeriodKey(now, expiry, resetTime),
+        relaxationVaultExpiryPolicy: expiry,
         totalEarnedToday: 0, // Total earned rest time today
         cycleCount: 0,
         isOnBreak: false,
@@ -9124,32 +9160,62 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         // Check if we need to reset based on time
-        const now = new Date();
         const lastReset = new Date(parsed.lastResetDate || now.toDateString());
         const shouldReset = checkIfShouldReset(now, lastReset);
 
         if (shouldReset) {
-          return {
-            ...defaultState,
-            lastResetDate: now.toDateString(),
-          };
+          return applyFlowRewardExpiry(
+            normalizeFlowRewardFields(
+              {
+                ...defaultState,
+                ...parsed,
+                availableRestTime: 0,
+                totalEarnedToday: 0,
+                cycleCount: 0,
+                accumulatedFractionalTime: 0,
+                lastResetDate: now.toDateString(),
+              },
+              now,
+              expiry,
+              resetTime,
+            ),
+            now,
+            expiry,
+            resetTime,
+          );
         }
 
-        return { ...defaultState, ...parsed };
+        return applyFlowRewardExpiry(
+          normalizeFlowRewardFields(
+            { ...defaultState, ...parsed },
+            now,
+            expiry,
+            resetTime,
+          ),
+          now,
+          expiry,
+          resetTime,
+        );
       }
 
-      return defaultState;
+      return normalizeFlowRewardFields(defaultState, now, expiry, resetTime);
     } catch (e) {
-      return {
-        availableRestTime: 0,
-        totalEarnedToday: 0,
-        cycleCount: 0,
-        isOnBreak: false,
-        breakTimeRemaining: 0,
-        initialBreakDuration: 0,
-        lastResetDate: new Date().toDateString(),
-        accumulatedFractionalTime: 0,
-      };
+      return normalizeFlowRewardFields(
+        {
+          availableRestTime: 0,
+          relaxationVaultSeconds: 0,
+          totalEarnedToday: 0,
+          cycleCount: 0,
+          isOnBreak: false,
+          breakTimeRemaining: 0,
+          initialBreakDuration: 0,
+          lastResetDate: new Date().toDateString(),
+          accumulatedFractionalTime: 0,
+        },
+        new Date(),
+        settings.flowmodoroRelaxationVaultExpiry || "never",
+        settings.flowmodoroResetStartTime || "06:00",
+      );
     }
   });
   const flowmodoroStateRef = useRef(flowmodoroState);
@@ -9216,35 +9282,38 @@ export default function App() {
     (elapsedSecs: number, opts: { deferLargeCatchup?: boolean } = {}) => {
       if (!settings.flowmodoroEnabled) return;
       if (!elapsedSecs || elapsedSecs <= 0) return;
-      // Don't accrue while on a break
-      if (flowmodoroState.isOnBreak) return;
       const ratio = Math.max(1, settings.flowmodoroRatio || 1);
+      const capA = Math.max(
+        0,
+        (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
+      );
+      const capB = Math.max(
+        0,
+        (settings.flowmodoroSessionActivityMinutes || 0) * 60,
+      );
+      const quickReserveCapSeconds =
+        capA > 0 && capB > 0 ? Math.min(capA, capB) : capA > 0 ? capA : capB;
+      const limits = {
+        quickReserveCapSeconds,
+        vaultCapSeconds: Math.max(
+          0,
+          (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+        ),
+      };
       setFlowmodoroState((prev) => {
-        // If state flipped to break mid-schedule, abort
-        if (prev.isOnBreak) return prev;
+        const current = applyFlowRewardExpiry(
+          prev,
+          new Date(),
+          settings.flowmodoroRelaxationVaultExpiry || "never",
+          settings.flowmodoroResetStartTime || "06:00",
+        );
+        if (current.isOnBreak) return current;
         const accum = (prev.accumulatedFractionalTime || 0) + elapsedSecs;
         const restToAdd = Math.floor(accum / ratio);
         const remainingFrac = accum % ratio;
         if (restToAdd <= 0) {
-          return { ...prev, accumulatedFractionalTime: accum };
+          return { ...current, accumulatedFractionalTime: accum };
         }
-        // Cap logic (combine legacy cap + pseudo activity cap)
-        const capA = Math.max(
-          0,
-          (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
-        );
-        const capB = Math.max(
-          0,
-          (settings.flowmodoroSessionActivityMinutes || 0) * 60,
-        );
-        const effectiveCap =
-          capA > 0 && capB > 0
-            ? Math.min(capA, capB)
-            : capA > 0
-              ? capA
-              : capB > 0
-                ? capB
-                : 0;
 
         // Optional smoothing / deferral for large catch-up bursts
         const shouldDefer =
@@ -9252,36 +9321,25 @@ export default function App() {
           settings.flowmodoroSmoothCatchup &&
           restToAdd > 5;
         if (shouldDefer) {
-          // Queue the whole restToAdd; we don't apply cap until dispensing to avoid losing potential time
-          const pending = ((prev as any).pendingCatchup || 0) + restToAdd;
+          const pending = ((current as any).pendingCatchup || 0) + restToAdd;
           return {
-            ...prev,
+            ...current,
             pendingCatchup: pending,
             accumulatedFractionalTime: remainingFrac,
           } as any;
         }
 
-        let actualAdd = restToAdd;
-        if (effectiveCap > 0) {
-          const remainingCap = Math.max(
-            0,
-            effectiveCap - prev.availableRestTime,
-          );
-          if (remainingCap <= 0) {
-            // Cap reached; just update fractional accumulator for future day reset
-            return { ...prev, accumulatedFractionalTime: remainingFrac };
-          }
-          actualAdd = Math.min(actualAdd, remainingCap);
-        }
-        if (actualAdd <= 0) {
-          return { ...prev, accumulatedFractionalTime: remainingFrac };
-        }
-        const nextAvailable = prev.availableRestTime + actualAdd;
+        const awarded = awardFocusedFlowTime(
+          { ...current, accumulatedFractionalTime: 0 },
+          accum,
+          ratio,
+          limits,
+        );
         return {
-          ...prev,
-          availableRestTime: nextAvailable,
-          totalEarnedToday: (prev.totalEarnedToday || 0) + actualAdd,
-          availableRestMinutes: Math.floor(nextAvailable / 60),
+          ...awarded.state,
+          availableRestMinutes: Math.floor(
+            awarded.state.availableRestTime / 60,
+          ),
           accumulatedFractionalTime: remainingFrac,
         };
       });
@@ -9291,8 +9349,10 @@ export default function App() {
       settings.flowmodoroRatio,
       settings.flowmodoroMaxPerSessionMinutes,
       settings.flowmodoroSessionActivityMinutes,
+      settings.flowmodoroRelaxationVaultMaxMinutes,
+      settings.flowmodoroRelaxationVaultExpiry,
+      settings.flowmodoroResetStartTime,
       settings.flowmodoroSmoothCatchup,
-      flowmodoroState.isOnBreak,
     ],
   );
 
@@ -9365,13 +9425,127 @@ export default function App() {
     }
   };
 
-  // Simplified flowmodoro functions
-  const takeFlowmodoroBreak = (duration) => {
-    if (!settings.flowmodoroEnabled || flowmodoroState.availableRestTime <= 0)
-      return;
+  const pauseTimersForFlowBreak = (
+    behavior: "drain" | "postpone",
+    observedAtMs: number,
+  ) => {
+    if (behavior !== "postpone") {
+      return { postponedDailyActivityIds: [], postponedSingleActivity: false };
+    }
+    const pausedDailyIds = dailyActivities
+      .filter((activity) => activity.isActive && activity.startedAt)
+      .map((activity) => activity.id);
+    if (pausedDailyIds.length > 0) {
+      setDailyActivities((previous) =>
+        previous.map((activity) => {
+          if (!pausedDailyIds.includes(activity.id) || !activity.startedAt)
+            return activity;
+          const timeSpentSeconds = elapsedSecondsAt(
+            {
+              accumulatedSeconds: Number.isFinite(activity.timeSpentSeconds)
+                ? activity.timeSpentSeconds
+                : Math.max(0, Number(activity.timeSpent || 0) * 60),
+              startedAt: activity.startedAt,
+              running: true,
+            },
+            observedAtMs,
+          );
+          return {
+            ...activity,
+            timeSpentSeconds,
+            timeSpent: Math.floor(timeSpentSeconds / 60),
+            startedAt: null,
+          };
+        }),
+      );
+    }
+    const postponedSingleActivity =
+      singleActivityState.isActive && !singleActivityState.isPaused;
+    if (postponedSingleActivity) {
+      setSingleActivityState((previous) => ({
+        ...previous,
+        isPaused: true,
+        elapsedSeconds: elapsedSecondsAt(
+          {
+            accumulatedSeconds: previous.elapsedSeconds,
+            startedAt: previous.startTime,
+            running: true,
+          },
+          observedAtMs,
+        ),
+        startTime: null,
+      }));
+    }
+    return {
+      postponedDailyActivityIds: pausedDailyIds,
+      postponedSingleActivity,
+    };
+  };
 
-    const breakDuration = Math.min(duration, flowmodoroState.availableRestTime);
+  const resumeTimersAfterFlowBreak = useCallback(
+    (state, observedAtMs: number) => {
+      const resumedAt = new Date(observedAtMs);
+      const pausedDailyIds = Array.isArray(state.postponedDailyActivityIds)
+        ? state.postponedDailyActivityIds
+        : [];
+      if (pausedDailyIds.length > 0) {
+        setDailyActivities((previous) =>
+          previous.map((activity) =>
+            pausedDailyIds.includes(activity.id) && activity.isActive
+              ? { ...activity, startedAt: resumedAt }
+              : activity,
+          ),
+        );
+      }
+      if (state.postponedSingleActivity) {
+        setSingleActivityState((previous) =>
+          previous.isActive
+            ? {
+                ...previous,
+                isPaused: false,
+                startTime: resumedAt,
+              }
+            : previous,
+        );
+      }
+    },
+    [],
+  );
+
+  // Simplified flowmodoro functions
+  const takeFlowmodoroBreak = (
+    duration,
+    source: "reserve" | "vault" | "combined" = "reserve",
+  ) => {
+    if (!settings.flowmodoroEnabled) return;
+    const now = new Date();
+    const current = applyFlowRewardExpiry(
+      flowmodoroStateRef.current,
+      now,
+      settings.flowmodoroRelaxationVaultExpiry || "never",
+      settings.flowmodoroResetStartTime || "06:00",
+    );
+    const initiallyFunded = fundFlowBreak(
+      current,
+      duration,
+      source,
+      settings.flowmodoroMode === "postpone" ? "postpone" : "drain",
+    );
+    if (initiallyFunded.durationSeconds <= 0) return;
+    const breakBehavior =
+      initiallyFunded.funding.vaultSeconds > 0
+        ? settings.flowmodoroRelaxationVaultMode === "drain"
+          ? "drain"
+          : "postpone"
+        : settings.flowmodoroMode === "postpone"
+          ? "postpone"
+          : "drain";
+    const breakDuration = initiallyFunded.durationSeconds;
     const breakStartedAtMs = Date.now();
+    const postponedTimers = pauseTimersForFlowBreak(
+      breakBehavior,
+      breakStartedAtMs,
+    );
     ensuredSessionRecordingRef.current = "";
     ensuredDailyRecordingRef.current = "";
     ensuredSingleRecordingRef.current = "";
@@ -9406,13 +9580,23 @@ export default function App() {
     }
     flowBreakDrainSourceRef.current = null;
     const nextFlowmodoroState = {
-      ...flowmodoroState,
+      ...initiallyFunded.state,
       isOnBreak: true,
       breakTimeRemaining: breakDuration,
       initialBreakDuration: breakDuration, // Store initial duration for progress calculation
-      availableRestTime: flowmodoroState.availableRestTime - breakDuration,
+      activeBreakBehavior: breakBehavior,
+      ...postponedTimers,
+      availableRestMinutes: Math.floor(
+        initiallyFunded.state.availableRestTime / 60,
+      ),
     };
+    flowmodoroStateRef.current = nextFlowmodoroState;
     setFlowmodoroState(nextFlowmodoroState);
+    localStorage.setItem(
+      "timeSliceFlowmodoro",
+      JSON.stringify(nextFlowmodoroState),
+    );
+    void flushAppStorage();
     if (isTimerActive) {
       void persistSessionRunSnapshot("running", {
         flowmodoroState: nextFlowmodoroState,
@@ -9433,15 +9617,38 @@ export default function App() {
 
   const skipFlowmodoroBreak = () => {
     flowBreakDrainSourceRef.current = null;
+    const now = new Date();
+    const currentPeriodKey = flowRewardPeriodKey(
+      now,
+      settings.flowmodoroRelaxationVaultExpiry || "never",
+      settings.flowmodoroResetStartTime || "06:00",
+    );
+    const current = applyFlowRewardExpiry(
+      flowmodoroStateRef.current,
+      now,
+      settings.flowmodoroRelaxationVaultExpiry || "never",
+      settings.flowmodoroResetStartTime || "06:00",
+    );
+    const refunded = refundUnusedFlowBreak(
+      current,
+      current.breakTimeRemaining,
+      currentPeriodKey,
+    );
+    resumeTimersAfterFlowBreak(current, now.getTime());
     const nextFlowmodoroState = {
-      ...flowmodoroState,
+      ...refunded,
       isOnBreak: false,
-      availableRestTime:
-        flowmodoroState.availableRestTime + flowmodoroState.breakTimeRemaining,
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
+      availableRestMinutes: Math.floor(refunded.availableRestTime / 60),
     };
+    flowmodoroStateRef.current = nextFlowmodoroState;
     setFlowmodoroState(nextFlowmodoroState);
+    localStorage.setItem(
+      "timeSliceFlowmodoro",
+      JSON.stringify(nextFlowmodoroState),
+    );
+    void flushAppStorage();
     if (isTimerActive) {
       void persistSessionRunSnapshot("running", {
         flowmodoroState: nextFlowmodoroState,
@@ -9454,16 +9661,26 @@ export default function App() {
 
   const resetFlowmodoroState = () => {
     flowBreakDrainSourceRef.current = null;
+    resumeTimersAfterFlowBreak(flowmodoroStateRef.current, Date.now());
     const nextFlowmodoroState = {
-      ...flowmodoroState,
+      ...flowmodoroStateRef.current,
       availableRestTime: 0,
+      availableRestMinutes: 0,
       cycleCount: 0,
       isOnBreak: false,
       breakTimeRemaining: 0,
       initialBreakDuration: 0,
       accumulatedFractionalTime: 0,
+      activeBreakFunding: undefined,
+      activeBreakBehavior: undefined,
     };
+    flowmodoroStateRef.current = nextFlowmodoroState;
     setFlowmodoroState(nextFlowmodoroState);
+    localStorage.setItem(
+      "timeSliceFlowmodoro",
+      JSON.stringify(nextFlowmodoroState),
+    );
+    void flushAppStorage();
     if (isTimerActive) {
       void persistSessionRunSnapshot("running", {
         flowmodoroState: nextFlowmodoroState,
@@ -9472,6 +9689,30 @@ export default function App() {
     void persistModeTimer("flowmodoro:break", "reset", 0).catch((error) =>
       console.error("Failed to reset Flowmodoro break timer", error),
     );
+  };
+
+  const resetRelaxationVault = () => {
+    const nextFlowmodoroState = {
+      ...flowmodoroStateRef.current,
+      relaxationVaultSeconds: 0,
+      relaxationVaultPeriodKey: flowRewardPeriodKey(
+        new Date(),
+        settings.flowmodoroRelaxationVaultExpiry || "never",
+        settings.flowmodoroResetStartTime || "06:00",
+      ),
+    };
+    flowmodoroStateRef.current = nextFlowmodoroState;
+    setFlowmodoroState(nextFlowmodoroState);
+    localStorage.setItem(
+      "timeSliceFlowmodoro",
+      JSON.stringify(nextFlowmodoroState),
+    );
+    void flushAppStorage();
+    if (isTimerActive) {
+      void persistSessionRunSnapshot("running", {
+        flowmodoroState: nextFlowmodoroState,
+      });
+    }
   };
 
   // Single Activity Mode handlers
@@ -9600,12 +9841,37 @@ export default function App() {
       };
     });
 
-    // Add flowmodoro reward
-    setFlowmodoroState((prev) => ({
-      ...prev,
-      availableRestTime: prev.availableRestTime + rewardSeconds,
-      totalEarnedToday: prev.totalEarnedToday + rewardSeconds,
-    }));
+    // Single uses the same capped two-tier allocator as Session and Daily.
+    setFlowmodoroState((prev) => {
+      const capA = Math.max(
+        0,
+        (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
+      );
+      const capB = Math.max(
+        0,
+        (settings.flowmodoroSessionActivityMinutes || 0) * 60,
+      );
+      const current = applyFlowRewardExpiry(
+        prev,
+        completedAt,
+        settings.flowmodoroRelaxationVaultExpiry || "never",
+        settings.flowmodoroResetStartTime || "06:00",
+      );
+      const deposited = depositFlowReward(current, rewardSeconds, {
+        quickReserveCapSeconds:
+          capA > 0 && capB > 0 ? Math.min(capA, capB) : capA > 0 ? capA : capB,
+        vaultCapSeconds: Math.max(
+          0,
+          (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+        ),
+      });
+      return {
+        ...deposited.state,
+        availableRestMinutes: Math.floor(
+          deposited.state.availableRestTime / 60,
+        ),
+      };
+    });
     void (async () => {
       await persistModeTimer(
         "single",
@@ -9714,6 +9980,36 @@ export default function App() {
   }, [flowmodoroState]);
 
   useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    const expiry = settings.flowmodoroRelaxationVaultExpiry || "never";
+    const resetTime = settings.flowmodoroResetStartTime || "06:00";
+    const reconcileAndSchedule = () => {
+      if (cancelled) return;
+      const now = new Date();
+      setFlowmodoroState((previous) =>
+        applyFlowRewardExpiry(previous, now, expiry, resetTime),
+      );
+      const nextReset = nextFlowRewardResetAt(now, expiry, resetTime);
+      if (nextReset) {
+        const delay = Math.min(
+          2_147_000_000,
+          Math.max(1_000, nextReset.getTime() - now.getTime() + 250),
+        );
+        timeoutId = setTimeout(reconcileAndSchedule, delay);
+      }
+    };
+    reconcileAndSchedule();
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [
+    settings.flowmodoroRelaxationVaultExpiry,
+    settings.flowmodoroResetStartTime,
+  ]);
+
+  useEffect(() => {
     try {
       localStorage.setItem("timeSliceSettings", JSON.stringify(settings));
     } catch (e) {
@@ -9801,12 +10097,18 @@ export default function App() {
   // Restore active daily activity state on app load
   useEffect(() => {
     if (activeDailyActivity) {
+      const pausedByFlowBreak =
+        flowmodoroState.isOnBreak &&
+        flowmodoroState.activeBreakBehavior === "postpone" &&
+        (flowmodoroState.postponedDailyActivityIds || []).includes(
+          activeDailyActivity,
+        );
       // Check if the saved active activity still exists and is actually active
       const activeActivity = dailyActivities.find(
         (activity) =>
           activity.id === activeDailyActivity &&
           (activity.status === "active" || activity.status === "overtime") &&
-          activity.startedAt,
+          (activity.startedAt || pausedByFlowBreak),
       );
 
       if (!activeActivity) {
@@ -9814,7 +10116,13 @@ export default function App() {
         setActiveDailyActivity(null);
       }
     }
-  }, [dailyActivities, activeDailyActivity]);
+  }, [
+    dailyActivities,
+    activeDailyActivity,
+    flowmodoroState.isOnBreak,
+    flowmodoroState.activeBreakBehavior,
+    flowmodoroState.postponedDailyActivityIds,
+  ]);
 
   // Restore session state and handle time gap on app load
   useEffect(() => {
@@ -9866,9 +10174,10 @@ export default function App() {
               overtimeMode: settings.overtimeType,
               overtimeDrainStrategy: settings.overtimeDrainStrategy,
               flowBreakMode: activeFlowBreak
-                ? settings.flowmodoroMode === "postpone"
-                  ? "postpone"
-                  : "drain"
+                ? flowmodoroState.activeBreakBehavior ||
+                  (settings.flowmodoroMode === "postpone"
+                    ? "postpone"
+                    : "drain")
                 : "none",
               flowBreakRemainingSeconds: activeFlowBreak
                 ? flowmodoroState.breakTimeRemaining
@@ -10172,15 +10481,23 @@ export default function App() {
         new Date(flowmodoroState.lastResetDate),
       );
       if (shouldReset) {
-        setFlowmodoroState((prev) => ({
-          availableRestTime: 0,
-          totalEarnedToday: 0,
-          cycleCount: 0,
-          isOnBreak: false,
-          breakTimeRemaining: 0,
-          initialBreakDuration: 0,
-          lastResetDate: now.toDateString(),
-        }));
+        setFlowmodoroState((prev) =>
+          applyFlowRewardExpiry(
+            {
+              ...prev,
+              availableRestTime: 0,
+              availableRestMinutes: 0,
+              totalEarnedToday: 0,
+              cycleCount: 0,
+              accumulatedFractionalTime: 0,
+              pendingCatchup: undefined,
+              lastResetDate: now.toDateString(),
+            },
+            now,
+            settings.flowmodoroRelaxationVaultExpiry || "never",
+            settings.flowmodoroResetStartTime || "06:00",
+          ),
+        );
       }
 
       if (elapsedSeconds <= 0) return;
@@ -10199,7 +10516,7 @@ export default function App() {
             0,
             (settings.flowmodoroSessionActivityMinutes || 0) * 60,
           );
-          const effectiveCap =
+          const quickReserveCapSeconds =
             capA > 0 && capB > 0
               ? Math.min(capA, capB)
               : capA > 0
@@ -10207,20 +10524,25 @@ export default function App() {
                 : capB > 0
                   ? capB
                   : 0;
-          const remainingCap =
-            effectiveCap > 0
-              ? Math.max(0, effectiveCap - prev.availableRestTime)
-              : chunk;
-          const actualAdd =
-            effectiveCap > 0 ? Math.min(chunk, remainingCap) : chunk;
-          if (actualAdd <= 0) return prev; // cap reached, keep pending for future resets
-          const nextAvailable = prev.availableRestTime + actualAdd;
-          const remainingPending = Math.max(0, pending - actualAdd);
+          const current = applyFlowRewardExpiry(
+            prev,
+            now,
+            settings.flowmodoroRelaxationVaultExpiry || "never",
+            settings.flowmodoroResetStartTime || "06:00",
+          );
+          const deposited = depositFlowReward(current, chunk, {
+            quickReserveCapSeconds,
+            vaultCapSeconds: Math.max(
+              0,
+              (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+            ),
+          });
+          const remainingPending = Math.max(0, pending - chunk);
           const base: any = {
-            ...prev,
-            availableRestTime: nextAvailable,
-            availableRestMinutes: Math.floor(nextAvailable / 60),
-            totalEarnedToday: (prev.totalEarnedToday || 0) + actualAdd,
+            ...deposited.state,
+            availableRestMinutes: Math.floor(
+              deposited.state.availableRestTime / 60,
+            ),
           };
           if (remainingPending > 0) base.pendingCatchup = remainingPending;
           else delete base.pendingCatchup;
@@ -10235,35 +10557,41 @@ export default function App() {
         flowmodoroState.breakTimeRemaining > 0
       ) {
         if (elapsedSeconds >= flowmodoroState.breakTimeRemaining) {
+          const completedAtMs =
+            observedAtMs -
+            Math.max(0, elapsedSeconds - flowmodoroState.breakTimeRemaining) *
+              1_000;
+          resumeTimersAfterFlowBreak(flowmodoroState, completedAtMs);
           void persistModeTimer("flowmodoro:break", "complete").catch((error) =>
             console.error("Failed to complete Flowmodoro break timer", error),
           );
+          const completedFlowmodoroState = {
+            ...completeFlowBreak(flowmodoroStateRef.current),
+            isOnBreak: false,
+            breakTimeRemaining: 0,
+            initialBreakDuration: 0,
+          };
+          flowmodoroStateRef.current = completedFlowmodoroState;
+          setFlowmodoroState(completedFlowmodoroState);
+          localStorage.setItem(
+            "timeSliceFlowmodoro",
+            JSON.stringify(completedFlowmodoroState),
+          );
+          void flushAppStorage();
           if (isTimerActive) {
             void persistSessionRunSnapshot("running", {
-              flowmodoroState: {
-                ...flowmodoroState,
-                isOnBreak: false,
-                breakTimeRemaining: 0,
-                initialBreakDuration: 0,
-              },
+              flowmodoroState: completedFlowmodoroState,
             });
           }
+        } else {
+          setFlowmodoroState((prev) => ({
+            ...prev,
+            breakTimeRemaining: Math.max(
+              0,
+              prev.breakTimeRemaining - elapsedSeconds,
+            ),
+          }));
         }
-        setFlowmodoroState((prev) => {
-          const newBreakTimeRemaining = Math.max(
-            0,
-            prev.breakTimeRemaining - elapsedSeconds,
-          );
-          if (newBreakTimeRemaining <= 0) {
-            return {
-              ...prev,
-              isOnBreak: false,
-              breakTimeRemaining: 0,
-              initialBreakDuration: 0,
-            };
-          }
-          return { ...prev, breakTimeRemaining: newBreakTimeRemaining };
-        });
       }
 
       // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
@@ -10291,9 +10619,8 @@ export default function App() {
         flowmodoroState.breakTimeRemaining > 0;
       if (hasRunningSession || activeFlowBreak) {
         const flowBreakMode = activeFlowBreak
-          ? settings.flowmodoroMode === "postpone"
-            ? "postpone"
-            : "drain"
+          ? flowmodoroState.activeBreakBehavior ||
+            (settings.flowmodoroMode === "postpone" ? "postpone" : "drain")
           : "none";
         const transition = advanceSessionRun({
           activities: activitiesRef.current,
@@ -10407,15 +10734,23 @@ export default function App() {
       settings.overtimeDrainStrategy,
       settings.flowmodoroEnabled,
       settings.flowmodoroMode,
+      settings.flowmodoroRelaxationVaultMode,
       settings.flowmodoroRatio,
       settings.flowmodoroMaxProgressMinutes,
+      settings.flowmodoroMaxPerSessionMinutes,
+      settings.flowmodoroSessionActivityMinutes,
+      settings.flowmodoroRelaxationVaultMaxMinutes,
+      settings.flowmodoroRelaxationVaultExpiry,
+      settings.flowmodoroResetStartTime,
       flowmodoroState.isOnBreak,
       flowmodoroState.breakTimeRemaining,
+      flowmodoroState.activeBreakBehavior,
       flowmodoroState.lastResetDate,
       awardFlowmodoroWork,
       checkIfShouldReset,
       persistModeTimer,
       persistSessionRunSnapshot,
+      resumeTimersAfterFlowBreak,
     ],
   );
 
@@ -10567,14 +10902,18 @@ export default function App() {
         return;
       }
       const snapshot = snapshotTimer(persisted);
+      const restoredRemaining = Math.max(
+        0,
+        Math.ceil((snapshot.remainingMs || 0) / 1_000),
+      );
+      if (restoredRemaining <= 0) {
+        resumeTimersAfterFlowBreak(flowmodoroStateRef.current, Date.now());
+      }
       setFlowmodoroState((previous) => {
         if (!previous.isOnBreak) return previous;
-        const remaining = Math.max(
-          0,
-          Math.ceil((snapshot.remainingMs || 0) / 1_000),
-        );
+        const remaining = restoredRemaining;
         return {
-          ...previous,
+          ...(remaining > 0 ? previous : completeFlowBreak(previous)),
           isOnBreak: remaining > 0,
           breakTimeRemaining: remaining,
           initialBreakDuration:
@@ -10643,7 +10982,16 @@ export default function App() {
           }
           if (keys.includes("timeSliceFlowmodoro")) {
             const next = read("timeSliceFlowmodoro");
-            if (next && typeof next === "object") setFlowmodoroState(next);
+            if (next && typeof next === "object") {
+              setFlowmodoroState(
+                normalizeFlowRewardFields(
+                  next,
+                  new Date(),
+                  next.relaxationVaultExpiryPolicy || "never",
+                  "06:00",
+                ),
+              );
+            }
           }
           if (keys.includes("timeSliceSessionState")) {
             const next = read("timeSliceSessionState");
@@ -13815,7 +14163,11 @@ export default function App() {
                             ? "Break in progress – click settings to adjust"
                             : flowmodoroState.availableRestTime > 0
                               ? "Click to start break with earned Flow time"
-                              : "No Flow time yet – click to adjust settings"
+                              : flowmodoroState.relaxationVaultSeconds > 0
+                                ? `Banked ${formatTime(
+                                    flowmodoroState.relaxationVaultSeconds,
+                                  )}. Open Flowmodoro mode for a Vault Rest.`
+                                : "No Flow time yet – click to adjust settings"
                         }
                         className="relative overflow-hidden flex items-center justify-between w-full text-left p-2 rounded-lg border bg-purple-50 border-purple-200 hover:bg-purple-100 focus:outline-none focus:ring-2 focus:ring-purple-400 transition-colors"
                       >
@@ -13823,7 +14175,7 @@ export default function App() {
                           className="absolute inset-0 bg-purple-400/20"
                           style={{ width: pct + "%" }}
                         />
-                        <div className="flex items-center space-x-2 z-10">
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 z-10">
                           <div
                             className="w-3 h-3 rounded-full"
                             style={{ backgroundColor: "#8b5cf6" }}
@@ -13835,6 +14187,14 @@ export default function App() {
                             {Math.floor(displaySeconds / 60)}m /{" "}
                             {Math.floor(capSec / 60)}m
                           </span>
+                          {!onBreak && (
+                            <span className="text-[10px] font-medium text-violet-700">
+                              Banked{" "}
+                              {formatTime(
+                                flowmodoroState.relaxationVaultSeconds || 0,
+                              )}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center space-x-2 z-10">
                           <span className="text-[10px] text-purple-700">
@@ -13846,12 +14206,7 @@ export default function App() {
                               className="text-[10px] px-2 py-0.5 rounded bg-purple-200 hover:bg-purple-300 text-purple-800 font-medium"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setFlowmodoroState((prev) => ({
-                                  ...prev,
-                                  availableRestTime: 0,
-                                  availableRestMinutes: 0,
-                                  accumulatedFractionalTime: 0,
-                                }));
+                                resetFlowmodoroState();
                               }}
                               title="Reset Flow Reserve to 0"
                             >
@@ -15264,7 +15619,7 @@ export default function App() {
                               <div className="grid gap-3 sm:grid-cols-2">
                                 <div className="space-y-1">
                                   <Label className="text-sm">
-                                    Planned Minutes
+                                    Quick Break Capacity
                                   </Label>
                                   <div className="flex items-center gap-2">
                                     <Input
@@ -15367,6 +15722,155 @@ export default function App() {
 
                           <Separator />
 
+                          <div className="space-y-3">
+                            <div>
+                              <Label className="font-medium text-violet-800">
+                                Relaxation Vault
+                              </Label>
+                              <p className="text-xs text-gray-500 mt-1">
+                                Reward earned above Quick Break capacity is
+                                banked here and never changes Predicted End.
+                              </p>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="space-y-1">
+                                <Label
+                                  htmlFor="flow-vault-max"
+                                  className="text-sm"
+                                >
+                                  Vault maximum
+                                </Label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    id="flow-vault-max"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    max={10080}
+                                    value={
+                                      settings.flowmodoroRelaxationVaultMaxMinutes
+                                    }
+                                    onChange={(event) =>
+                                      setSettings((previous) => ({
+                                        ...previous,
+                                        flowmodoroRelaxationVaultMaxMinutes:
+                                          Math.max(
+                                            0,
+                                            Math.min(
+                                              10080,
+                                              Number(event.target.value) || 0,
+                                            ),
+                                          ),
+                                      }))
+                                    }
+                                    className="w-24"
+                                  />
+                                  <span className="text-xs text-gray-500">
+                                    minutes (0 = unlimited)
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="space-y-1">
+                                <Label
+                                  htmlFor="flow-vault-expiry"
+                                  className="text-sm"
+                                >
+                                  Vault expiry
+                                </Label>
+                                <select
+                                  id="flow-vault-expiry"
+                                  value={
+                                    settings.flowmodoroRelaxationVaultExpiry
+                                  }
+                                  onChange={(event) =>
+                                    setSettings((previous) => ({
+                                      ...previous,
+                                      flowmodoroRelaxationVaultExpiry:
+                                        event.target.value,
+                                    }))
+                                  }
+                                  className="h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-sm"
+                                >
+                                  <option value="never">Never</option>
+                                  <option value="daily">Daily</option>
+                                  <option value="weekly">Weekly</option>
+                                  <option value="monthly">Monthly</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-sm">
+                                During a Vault Rest
+                              </Label>
+                              <div className="grid grid-cols-2 gap-2">
+                                <Button
+                                  size="sm"
+                                  variant={
+                                    settings.flowmodoroRelaxationVaultMode ===
+                                    "drain"
+                                      ? "default"
+                                      : "outline"
+                                  }
+                                  onClick={() =>
+                                    setSettings((previous) => ({
+                                      ...previous,
+                                      flowmodoroRelaxationVaultMode: "drain",
+                                    }))
+                                  }
+                                >
+                                  Continue activities
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={
+                                    settings.flowmodoroRelaxationVaultMode ===
+                                    "postpone"
+                                      ? "default"
+                                      : "outline"
+                                  }
+                                  onClick={() =>
+                                    setSettings((previous) => ({
+                                      ...previous,
+                                      flowmodoroRelaxationVaultMode: "postpone",
+                                    }))
+                                  }
+                                >
+                                  Postpone activities
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between gap-3 rounded-md bg-violet-50 p-2">
+                              <span className="text-sm text-violet-800">
+                                Banked:{" "}
+                                <strong>
+                                  {formatTime(
+                                    flowmodoroState.relaxationVaultSeconds || 0,
+                                  )}
+                                </strong>
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={
+                                  !flowmodoroState.relaxationVaultSeconds
+                                }
+                                onClick={() => {
+                                  if (
+                                    window.confirm(
+                                      "Reset the Relaxation Vault? Quick Break time is not affected.",
+                                    )
+                                  )
+                                    resetRelaxationVault();
+                                }}
+                                className="text-red-600"
+                              >
+                                Reset Vault
+                              </Button>
+                            </div>
+                          </div>
+
+                          <Separator />
+
                           <div className="space-y-2">
                             <Label>Daily Reset Times</Label>
                             <div className="grid grid-cols-2 gap-2">
@@ -15400,7 +15904,8 @@ export default function App() {
                               </div>
                             </div>
                             <p className="text-xs text-gray-500">
-                              Rest time resets at these times each day
+                              Quick Break time resets at these times. Vault
+                              expiry uses the start time.
                             </p>
                           </div>
 
@@ -15411,7 +15916,7 @@ export default function App() {
                               onClick={resetFlowmodoroState}
                               className="text-red-600 border-red-200 hover:bg-red-50"
                             >
-                              Reset Today's Rest Time
+                              Reset Today's Quick Break Time
                             </Button>
                           </div>
                         </div>
@@ -17331,7 +17836,9 @@ export default function App() {
                   onTakeBreak={takeFlowmodoroBreak}
                   onSkipBreak={skipFlowmodoroBreak}
                   onReset={resetFlowmodoroState}
+                  onResetVault={resetRelaxationVault}
                   formatTime={formatTime}
+                  settings={settings}
                 />
               ) : null}
             </div>

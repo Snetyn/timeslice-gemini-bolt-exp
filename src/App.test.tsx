@@ -11,7 +11,7 @@ const {
   confirmAllocationMock,
 } = vi.hoisted(() => ({
   appStorageMock: {
-    getItem: vi.fn(() => null),
+    getItem: vi.fn((_key?: string) => null as string | null),
     setItem: vi.fn(),
     removeItem: vi.fn(),
     subscribe: vi.fn(() => () => undefined),
@@ -53,6 +53,7 @@ const {
 
 vi.mock("./lib/storage", () => ({
   appStorage: appStorageMock,
+  flushAppStorage: vi.fn(async () => undefined),
 }));
 
 vi.mock("./data/timerRepository", () => ({
@@ -120,7 +121,8 @@ describe("App startup regression", () => {
     document.body.append(host);
     root = createRoot(host);
     window.localStorage.clear();
-    appStorageMock.getItem.mockClear();
+    appStorageMock.getItem.mockReset();
+    appStorageMock.getItem.mockImplementation(() => null);
     appStorageMock.setItem.mockClear();
     appStorageMock.removeItem.mockClear();
     listSessionReportsMock.mockClear();
@@ -141,5 +143,57 @@ describe("App startup regression", () => {
     });
 
     expect(listSessionReportsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows separate Quick and Vault balances and refunds a stopped Vault Rest", async () => {
+    const values = new Map<string, string>([
+      [
+        "timeSliceFlowmodoro",
+        JSON.stringify({
+          availableRestTime: 120,
+          availableRestMinutes: 2,
+          relaxationVaultSeconds: 1_200,
+          relaxationVaultPeriodKey: "never",
+          relaxationVaultExpiryPolicy: "never",
+          totalEarnedToday: 1_320,
+          cycleCount: 0,
+          isOnBreak: false,
+          breakTimeRemaining: 0,
+          initialBreakDuration: 0,
+          lastResetDate: new Date().toDateString(),
+          accumulatedFractionalTime: 0,
+        }),
+      ],
+    ]);
+    appStorageMock.getItem.mockImplementation(
+      (key?: string) => values.get(key || "") ?? null,
+    );
+
+    await act(async () => {
+      root.render(<App />);
+    });
+    const flowTab = Array.from(
+      host.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+    ).find((button) => button.textContent?.includes("Flowmodoro"));
+    expect(flowTab).toBeTruthy();
+    await act(async () => flowTab?.click());
+
+    expect(host.textContent).toContain("Quick Break");
+    expect(host.textContent).toContain("Relaxation Vault");
+    expect(host.textContent).toContain("20:00");
+
+    const vaultRest = Array.from(
+      host.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Vault Rest");
+    await act(async () => vaultRest?.click());
+    expect(host.textContent).toContain("Vault Rest · activities postponed");
+
+    const stop = Array.from(
+      host.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) =>
+      button.textContent?.includes("Stop & return unused time"),
+    );
+    await act(async () => stop?.click());
+    expect(host.textContent).toContain("20:00");
   });
 });

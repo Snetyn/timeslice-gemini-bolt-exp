@@ -42,6 +42,9 @@ export type PersistedSessionActivity = {
 
 export type PersistedFlowmodoroState = {
   availableRestTime: number;
+  relaxationVaultSeconds: number;
+  relaxationVaultPeriodKey?: string;
+  relaxationVaultExpiryPolicy?: "never" | "daily" | "weekly" | "monthly";
   totalEarnedToday: number;
   cycleCount: number;
   isOnBreak: boolean;
@@ -50,6 +53,15 @@ export type PersistedFlowmodoroState = {
   lastResetDate: string;
   accumulatedFractionalTime: number;
   pendingCatchup?: number;
+  activeBreakFunding?: {
+    reserveSeconds: number;
+    vaultSeconds: number;
+    vaultPeriodKey: string;
+    vaultExpiryPolicy?: "never" | "daily" | "weekly" | "monthly";
+  };
+  activeBreakBehavior?: "drain" | "postpone";
+  postponedDailyActivityIds?: string[];
+  postponedSingleActivity?: boolean;
   [key: string]: unknown;
 };
 
@@ -177,9 +189,44 @@ export const normalizePersistedFlowmodoroState = (
     Number.isFinite(new Date(value.lastResetDate).getTime())
       ? value.lastResetDate
       : new Date().toDateString();
+  const funding: PersistedFlowmodoroState["activeBreakFunding"] = isRecord(
+    value.activeBreakFunding,
+  )
+    ? {
+        reserveSeconds: nonNegativeInteger(
+          value.activeBreakFunding.reserveSeconds,
+        ),
+        vaultSeconds: nonNegativeInteger(value.activeBreakFunding.vaultSeconds),
+        vaultPeriodKey:
+          typeof value.activeBreakFunding.vaultPeriodKey === "string"
+            ? value.activeBreakFunding.vaultPeriodKey
+            : "never",
+        vaultExpiryPolicy: (() => {
+          const vaultExpiryPolicy = value.activeBreakFunding.vaultExpiryPolicy;
+          return vaultExpiryPolicy === "daily" ||
+            vaultExpiryPolicy === "weekly" ||
+            vaultExpiryPolicy === "monthly" ||
+            vaultExpiryPolicy === "never"
+            ? (vaultExpiryPolicy as PersistedFlowmodoroState["relaxationVaultExpiryPolicy"])
+            : undefined;
+        })(),
+      }
+    : undefined;
   return {
     ...value,
     availableRestTime: nonNegativeInteger(value.availableRestTime),
+    relaxationVaultSeconds: nonNegativeInteger(value.relaxationVaultSeconds),
+    relaxationVaultPeriodKey:
+      typeof value.relaxationVaultPeriodKey === "string"
+        ? value.relaxationVaultPeriodKey
+        : undefined,
+    relaxationVaultExpiryPolicy:
+      value.relaxationVaultExpiryPolicy === "daily" ||
+      value.relaxationVaultExpiryPolicy === "weekly" ||
+      value.relaxationVaultExpiryPolicy === "monthly" ||
+      value.relaxationVaultExpiryPolicy === "never"
+        ? value.relaxationVaultExpiryPolicy
+        : undefined,
     totalEarnedToday: nonNegativeInteger(value.totalEarnedToday),
     cycleCount: nonNegativeInteger(value.cycleCount),
     isOnBreak: Boolean(value.isOnBreak) && breakTimeRemaining > 0,
@@ -191,6 +238,18 @@ export const normalizePersistedFlowmodoroState = (
       finiteNumber(value.accumulatedFractionalTime),
     ),
     pendingCatchup: pendingCatchup > 0 ? pendingCatchup : undefined,
+    activeBreakFunding: funding,
+    activeBreakBehavior:
+      value.activeBreakBehavior === "drain" ||
+      value.activeBreakBehavior === "postpone"
+        ? value.activeBreakBehavior
+        : undefined,
+    postponedDailyActivityIds: Array.isArray(value.postponedDailyActivityIds)
+      ? value.postponedDailyActivityIds.filter(
+          (id): id is string => typeof id === "string",
+        )
+      : [],
+    postponedSingleActivity: Boolean(value.postponedSingleActivity),
   };
 };
 
@@ -204,8 +263,7 @@ export const normalizePersistedSessionRun = (
     ? value.activities
         .map(normalizePersistedSessionActivity)
         .filter(
-          (activity): activity is PersistedSessionActivity =>
-            activity !== null,
+          (activity): activity is PersistedSessionActivity => activity !== null,
         )
     : [];
   const flowmodoroState = normalizePersistedFlowmodoroState(
