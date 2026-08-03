@@ -39,6 +39,11 @@ import {
   createBulkActivityId,
   parseBulkActivities,
 } from "./domain/bulkActivities";
+import {
+  allocateBankedRest,
+  BANKED_REST_ACTIVITY_ID,
+  rewardEligibleSessionSeconds,
+} from "./domain/bankedRest";
 import { predictedScheduleSeconds } from "./domain/sessionSchedule";
 import { displayActivityColor } from "./domain/activityColor";
 import { resolveVaultPredictionMode } from "./domain/workspaceSettings";
@@ -115,6 +120,7 @@ interface Activity {
   percentage?: number;
   duration: number;
   timeRemaining?: number;
+  originalPlannedSeconds?: number;
   isCompleted?: boolean;
   isLocked?: boolean;
   category?: string;
@@ -143,6 +149,8 @@ interface Activity {
   earlyCompleted?: boolean;
   // Mark as priority/important
   priority?: boolean;
+  // Special Session activity funded from the Flow Relaxation Vault.
+  isRewardRest?: boolean;
   // Optional per-activity time window overrides (HH:MM 24h). If set, they take precedence over template window.
   startTime?: string;
   endTime?: string;
@@ -8250,6 +8258,7 @@ export default function App() {
       flowmodoroRelaxationVaultMaxMinutes: 0, // 0 = unlimited
       flowmodoroRelaxationVaultExpiry: "never", // 'never' | 'daily' | 'weekly' | 'monthly'
       flowmodoroRelaxationVaultMode: "postpone", // independent behavior for longer Vault rests
+      flowmodoroAutoScheduleBankedRest: false,
       flowmodoroAutoCatchup: true, // NEW: enable off-screen rest accrual reconciliation
       flowmodoroSmoothCatchup: false, // NEW: smooth large catch-up awards over ticks
       showDragPlaceholders: true, // NEW: allow disabling drag gap highlight
@@ -8627,6 +8636,9 @@ export default function App() {
   const [addActivityModalState, setAddActivityModalState] = useState({
     isOpen: false,
   });
+  const [bankedRestDialogOpen, setBankedRestDialogOpen] = useState(false);
+  const [bankedRestMinutesDraft, setBankedRestMinutesDraft] = useState("");
+  const [bankedRestSecondsDraft, setBankedRestSecondsDraft] = useState("");
 
   // Navigation State for Activity Management Page
   const [currentPage, setCurrentPage] = useState("timer"); // 'timer', 'manage-activities', 'spider'
@@ -10742,7 +10754,31 @@ export default function App() {
   const activityPercentages = activities.map((a) => a.percentage).join(",");
   const applyPlannedDurations = useCallback(
     (items: Activity[], totalSeconds: number) => {
-      const allocations = allocateSessionSeconds(items, totalSeconds);
+      const restActivity = items.find((activity) => activity.isRewardRest);
+      const fixedRestSeconds = restActivity
+        ? Math.min(
+            totalSeconds,
+            Math.max(
+              0,
+              Math.round(
+                Number(
+                  restActivity.originalPlannedSeconds ??
+                    restActivity.timeRemaining ??
+                    restActivity.duration * 60,
+                ) || 0,
+              ),
+            ),
+          )
+        : 0;
+      const allocations = restActivity
+        ? {
+            ...allocateSessionSeconds(
+              items.filter((activity) => !activity.isRewardRest),
+              Math.max(0, totalSeconds - fixedRestSeconds),
+            ),
+            [restActivity.id]: fixedRestSeconds,
+          }
+        : allocateSessionSeconds(items, totalSeconds);
       return items.map((activity) => {
         const allocatedSeconds = activity.countUp
           ? 0
@@ -10755,6 +10791,11 @@ export default function App() {
           : 0;
         return {
           ...activity,
+          percentage: restActivity
+            ? totalSeconds > 0 && !activity.countUp
+              ? (allocatedSeconds / totalSeconds) * 100
+              : 0
+            : activity.percentage,
           duration,
           timeRemaining: allocatedSeconds,
           originalPlannedSeconds: allocatedSeconds,
@@ -10765,6 +10806,73 @@ export default function App() {
     },
     [],
   );
+
+  const scheduleBankedRest = useCallback(
+    (requestedSeconds: number) => {
+      if (isTimerActive) return 0;
+      const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
+      const currentFlow = flowmodoroStateRef.current;
+      const result = allocateBankedRest<Activity>({
+        activities: activitiesRef.current,
+        totalSessionSeconds,
+        requestedSeconds,
+        bankedSeconds: currentFlow.relaxationVaultSeconds || 0,
+        createRestActivity: () => ({
+          id: BANKED_REST_ACTIVITY_ID,
+          name: "Reward Rest",
+          color: "hsl(270, 70%, 55%)",
+          percentage: 0,
+          duration: 0,
+          timeRemaining: 0,
+          originalPlannedSeconds: 0,
+          isCompleted: false,
+          isLocked: true,
+          countUp: false,
+          priority: true,
+          isRewardRest: true,
+          tags: [],
+        }),
+      });
+      if (result.allocatedSeconds <= 0) return 0;
+
+      const nextFlow = {
+        ...currentFlow,
+        relaxationVaultSeconds: result.remainingBankedSeconds,
+      };
+      activitiesRef.current = result.activities;
+      flowmodoroStateRef.current = nextFlow;
+      setActivities(result.activities);
+      setFlowmodoroState(nextFlow);
+      localStorage.setItem(
+        "timeSliceActivities",
+        JSON.stringify(result.activities),
+      );
+      localStorage.setItem("timeSliceFlowmodoro", JSON.stringify(nextFlow));
+      void flushAppStorage();
+      if (sessionPlanFrozenRef.current) {
+        sessionPlanFrozenRef.current = false;
+        setSessionPlanFrozen(false);
+        initialTotalAllocatedRef.current = 0;
+      }
+      return result.allocatedSeconds;
+    },
+    [calculateTotalSessionMinutes, isTimerActive],
+  );
+
+  useEffect(() => {
+    if (
+      !settings.flowmodoroAutoScheduleBankedRest ||
+      isTimerActive ||
+      (flowmodoroState.relaxationVaultSeconds || 0) <= 0
+    )
+      return;
+    scheduleBankedRest(flowmodoroState.relaxationVaultSeconds);
+  }, [
+    flowmodoroState.relaxationVaultSeconds,
+    isTimerActive,
+    scheduleBankedRest,
+    settings.flowmodoroAutoScheduleBankedRest,
+  ]);
 
   useEffect(() => {
     console.log("Duration sync effect triggered:", {
@@ -10934,11 +11042,8 @@ export default function App() {
         }
       }
 
-      // Accumulate flowmodoro rest time if enabled and timer is active (not during break)
-      // This works for both session and daily modes
-      // Earn flowmodoro rest time during active focused work:
-      // - Session mode while timer running
-      // - Daily mode when at least one daily activity is active (status 'active' or 'overtime')
+      // Daily can award immediately. Session awards from the transition trace
+      // below so scheduled Reward Rest slices never earn more reward.
       const hasActiveDailyWork =
         currentMode === "daily" &&
         dailyActivities.some(
@@ -10947,7 +11052,7 @@ export default function App() {
       if (
         settings.flowmodoroEnabled &&
         !flowmodoroState.isOnBreak &&
-        ((isTimerActive && !isPaused) || hasActiveDailyWork)
+        hasActiveDailyWork
       ) {
         awardFlowmodoroWork(elapsedSeconds);
       }
@@ -10978,6 +11083,18 @@ export default function App() {
           flowDrainSourceId: flowBreakDrainSourceRef.current,
           donorCursor: lastDrainedIndex.current,
         });
+
+        if (
+          settings.flowmodoroEnabled &&
+          !flowmodoroState.isOnBreak &&
+          hasRunningSession
+        ) {
+          const rewardEligibleSeconds = rewardEligibleSessionSeconds(
+            transition.activities as Activity[],
+            transition.activitySlices,
+          );
+          awardFlowmodoroWork(rewardEligibleSeconds);
+        }
 
         activitiesRef.current = transition.activities as Activity[];
         setActivities(transition.activities as Activity[]);
@@ -16170,6 +16287,33 @@ export default function App() {
                                 banked here and never changes Predicted End.
                               </p>
                             </div>
+                            <label className="flex items-start gap-3 rounded-md border border-violet-200 bg-violet-50 p-3">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5 h-4 w-4"
+                                checked={Boolean(
+                                  settings.flowmodoroAutoScheduleBankedRest,
+                                )}
+                                onChange={(event) =>
+                                  setSettings((previous) => ({
+                                    ...previous,
+                                    flowmodoroAutoScheduleBankedRest:
+                                      event.target.checked,
+                                  }))
+                                }
+                              />
+                              <span>
+                                <span className="block text-sm font-medium text-violet-900">
+                                  Auto-fill Session Reward Rest
+                                </span>
+                                <span className="mt-1 block text-xs text-violet-700">
+                                  During Session setup, move available Banked
+                                  time into Reward Rest and proportionally
+                                  reduce non-starred countdown tasks. The
+                                  Session end stays unchanged.
+                                </span>
+                              </span>
+                            </label>
                             <div className="grid gap-3 sm:grid-cols-2">
                               <div className="space-y-1">
                                 <Label
@@ -18273,6 +18417,83 @@ export default function App() {
 
             {currentMode === "session" && (
               <>
+                <div
+                  className="rounded-lg border border-violet-200 bg-violet-50 p-3"
+                  data-testid="banked-rest-activity"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="h-3 w-3 shrink-0 rounded-full bg-violet-500"
+                          aria-hidden="true"
+                        />
+                        <h2 className="font-semibold text-violet-950">
+                          Reward Rest
+                        </h2>
+                        <Badge variant="outline" className="text-[10px]">
+                          protected
+                        </Badge>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                        <span>
+                          Scheduled:{" "}
+                          <strong className="tabular-nums">
+                            {formatTime(
+                              Math.max(
+                                0,
+                                activities.find(
+                                  (activity) => activity.isRewardRest,
+                                )?.timeRemaining || 0,
+                              ),
+                            )}
+                          </strong>
+                        </span>
+                        <span className="text-violet-700">
+                          Banked:{" "}
+                          <strong className="tabular-nums">
+                            {formatTime(
+                              flowmodoroState.relaxationVaultSeconds || 0,
+                            )}
+                          </strong>
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-violet-700">
+                        Scheduling rest keeps the Session total and Predicted
+                        End unchanged by reducing eligible tasks proportionally.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="min-h-11 shrink-0 border-violet-300 bg-white"
+                      disabled={
+                        (flowmodoroState.relaxationVaultSeconds || 0) <= 0
+                      }
+                      onClick={() => {
+                        const banked = Math.max(
+                          0,
+                          Math.floor(
+                            flowmodoroState.relaxationVaultSeconds || 0,
+                          ),
+                        );
+                        setBankedRestMinutesDraft(
+                          String(Math.floor(banked / 60)),
+                        );
+                        setBankedRestSecondsDraft(String(banked % 60));
+                        setBankedRestDialogOpen(true);
+                      }}
+                    >
+                      Add time
+                    </Button>
+                  </div>
+                  {settings.flowmodoroAutoScheduleBankedRest && (
+                    <div className="mt-2 text-xs font-medium text-violet-800">
+                      Auto-fill is on for Session setup.
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-4">
                   {durationType === "duration" ? (
                     <div className="grid grid-cols-2 gap-4 sm:flex sm:flex-wrap sm:items-center sm:gap-6">
@@ -18537,235 +18758,242 @@ export default function App() {
                     </div>
                   </div>
                   <div className="space-y-3">
-                    {activities.map((activity) => (
-                      <div
-                        key={activity.id}
-                        className="border rounded-lg bg-white p-3"
-                        data-testid={`session-activity-${activity.id}`}
-                      >
-                        {/* First Row: Color + Name + Lock + Delete */}
-                        <div className="flex items-center gap-3 mb-3">
-                          <button
-                            className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0"
-                            style={{ backgroundColor: activity.color }}
-                            onClick={() => {
-                              // Simple random color change - no complex picker
-                              const colorPalette = [
-                                "hsl(220, 70%, 50%)", // blue
-                                "hsl(120, 60%, 50%)", // green
-                                "hsl(280, 60%, 50%)", // purple
-                                "hsl(0, 70%, 50%)", // red
-                                "hsl(60, 80%, 50%)", // yellow
-                                "hsl(320, 60%, 50%)", // pink
-                                "hsl(250, 70%, 50%)", // indigo
-                              ];
-                              const newColor =
-                                colorPalette[
-                                  Math.floor(
-                                    Math.random() * colorPalette.length,
-                                  )
+                    {activities
+                      .filter((activity) => !activity.isRewardRest)
+                      .map((activity) => (
+                        <div
+                          key={activity.id}
+                          className="border rounded-lg bg-white p-3"
+                          data-testid={`session-activity-${activity.id}`}
+                        >
+                          {/* First Row: Color + Name + Lock + Delete */}
+                          <div className="flex items-center gap-3 mb-3">
+                            <button
+                              className="w-8 h-8 rounded-full border-2 border-gray-300 hover:scale-110 transition-transform flex-shrink-0"
+                              style={{ backgroundColor: activity.color }}
+                              onClick={() => {
+                                // Simple random color change - no complex picker
+                                const colorPalette = [
+                                  "hsl(220, 70%, 50%)", // blue
+                                  "hsl(120, 60%, 50%)", // green
+                                  "hsl(280, 60%, 50%)", // purple
+                                  "hsl(0, 70%, 50%)", // red
+                                  "hsl(60, 80%, 50%)", // yellow
+                                  "hsl(320, 60%, 50%)", // pink
+                                  "hsl(250, 70%, 50%)", // indigo
                                 ];
-                              updateActivityColor(activity.id, newColor);
-                            }}
-                          />
-
-                          <Input
-                            value={activity.name}
-                            onChange={(e) =>
-                              updateActivityName(activity.id, e.target.value)
-                            }
-                            onBlur={(e) => {
-                              // If name is empty on blur, set default
-                              if (!e.target.value.trim()) {
-                                updateActivityName(activity.id, "New Activity");
-                              }
-                            }}
-                            className="flex-1 h-9 text-sm"
-                            placeholder="Activity name"
-                          />
-
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => toggleLockActivity(activity.id)}
-                            className="h-9 w-9 p-0 flex-shrink-0"
-                          >
-                            <Icon
-                              name={activity.isLocked ? "lock" : "unlock"}
-                              className={`h-4 w-4 ${activity.isLocked ? "text-red-500" : ""}`}
+                                const newColor =
+                                  colorPalette[
+                                    Math.floor(
+                                      Math.random() * colorPalette.length,
+                                    )
+                                  ];
+                                updateActivityColor(activity.id, newColor);
+                              }}
                             />
-                          </Button>
 
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => removeActivity(activity.id)}
-                            disabled={activities.length === 1}
-                            className="h-9 w-9 p-0 flex-shrink-0"
-                          >
-                            <Icon name="trash2" className="h-4 w-4" />
-                          </Button>
-                        </div>
-
-                        {/* Second Row: Percentage + Minutes */}
-                        <div className="flex items-center justify-center gap-6">
-                          <div className="flex items-center gap-2">
                             <Input
-                              aria-label={`${activity.name} percentage`}
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="1"
-                              value={Math.round(activity.percentage)}
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                // Allow empty string during editing
-                                if (value === "") {
-                                  updateAndScalePercentages(activity.id, 0);
-                                } else {
-                                  updateAndScalePercentages(
+                              value={activity.name}
+                              onChange={(e) =>
+                                updateActivityName(activity.id, e.target.value)
+                              }
+                              onBlur={(e) => {
+                                // If name is empty on blur, set default
+                                if (!e.target.value.trim()) {
+                                  updateActivityName(
                                     activity.id,
-                                    Number.parseFloat(value) || 0,
+                                    "New Activity",
                                   );
                                 }
                               }}
-                              onBlur={(e) => {
-                                // Ensure valid value on blur
-                                const value =
-                                  Number.parseFloat(e.target.value) || 0;
-                                updateAndScalePercentages(
-                                  activity.id,
-                                  Math.max(0, Math.min(100, value)),
-                                );
-                              }}
-                              className="w-20 h-9 text-sm text-center"
-                              disabled={activity.isLocked || activity.countUp}
+                              className="flex-1 h-9 text-sm"
+                              placeholder="Activity name"
                             />
-                            <span className="text-sm text-gray-600 font-medium">
-                              %
-                            </span>
+
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => toggleLockActivity(activity.id)}
+                              className="h-9 w-9 p-0 flex-shrink-0"
+                            >
+                              <Icon
+                                name={activity.isLocked ? "lock" : "unlock"}
+                                className={`h-4 w-4 ${activity.isLocked ? "text-red-500" : ""}`}
+                              />
+                            </Button>
+
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => removeActivity(activity.id)}
+                              disabled={activities.length === 1}
+                              className="h-9 w-9 p-0 flex-shrink-0"
+                            >
+                              <Icon name="trash2" className="h-4 w-4" />
+                            </Button>
                           </div>
 
-                          <div className="flex items-center gap-2">
-                            <Input
-                              aria-label={`${activity.name} minutes`}
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={
-                                (activity as any).durationDraft !== undefined
-                                  ? (activity as any).durationDraft
-                                  : activity.duration
-                              }
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                if (val === "") {
+                          {/* Second Row: Percentage + Minutes */}
+                          <div className="flex items-center justify-center gap-6">
+                            <div className="flex items-center gap-2">
+                              <Input
+                                aria-label={`${activity.name} percentage`}
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="1"
+                                value={Math.round(activity.percentage)}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  // Allow empty string during editing
+                                  if (value === "") {
+                                    updateAndScalePercentages(activity.id, 0);
+                                  } else {
+                                    updateAndScalePercentages(
+                                      activity.id,
+                                      Number.parseFloat(value) || 0,
+                                    );
+                                  }
+                                }}
+                                onBlur={(e) => {
+                                  // Ensure valid value on blur
+                                  const value =
+                                    Number.parseFloat(e.target.value) || 0;
+                                  updateAndScalePercentages(
+                                    activity.id,
+                                    Math.max(0, Math.min(100, value)),
+                                  );
+                                }}
+                                className="w-20 h-9 text-sm text-center"
+                                disabled={activity.isLocked || activity.countUp}
+                              />
+                              <span className="text-sm text-gray-600 font-medium">
+                                %
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <Input
+                                aria-label={`${activity.name} minutes`}
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={
+                                  (activity as any).durationDraft !== undefined
+                                    ? (activity as any).durationDraft
+                                    : activity.duration
+                                }
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === "") {
+                                    setActivities((prev) =>
+                                      prev.map((a) =>
+                                        a.id === activity.id
+                                          ? { ...a, durationDraft: "" }
+                                          : a,
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  const num = Number.parseInt(val);
+                                  if (Number.isNaN(num) || num < 0) return;
+                                  // Store draft for user editing
                                   setActivities((prev) =>
                                     prev.map((a) =>
                                       a.id === activity.id
-                                        ? { ...a, durationDraft: "" }
+                                        ? { ...a, durationDraft: num }
                                         : a,
                                     ),
                                   );
-                                  return;
-                                }
-                                const num = Number.parseInt(val);
-                                if (Number.isNaN(num) || num < 0) return;
-                                // Store draft for user editing
-                                setActivities((prev) =>
-                                  prev.map((a) =>
-                                    a.id === activity.id
-                                      ? { ...a, durationDraft: num }
-                                      : a,
-                                  ),
-                                );
-                                // Instant rebalance (pre-session only). Use draft minutes.
-                                rebalanceAfterManualMinutes(activity.id, num);
-                              }}
-                              onBlur={(e) => {
-                                const draft = (activity as any).durationDraft;
-                                if (draft === "" || draft === undefined) {
-                                  // nothing to commit
-                                  setActivities((prev) =>
-                                    prev.map((a) => {
-                                      if (a.id === activity.id) {
-                                        const { durationDraft, ...rest } =
-                                          a as any;
-                                        return rest;
-                                      }
-                                      return a;
-                                    }),
-                                  );
-                                  return;
-                                }
-                                const totalMins =
-                                  calculateTotalSessionMinutes();
-                                const newDur = Math.max(
-                                  0,
-                                  Math.min(draft, totalMins || draft),
-                                );
-                                rebalanceAfterManualMinutes(
-                                  activity.id,
-                                  newDur,
-                                );
-                                setActivities((prev) =>
-                                  prev.map((a) =>
-                                    a.id === activity.id
-                                      ? (() => {
+                                  // Instant rebalance (pre-session only). Use draft minutes.
+                                  rebalanceAfterManualMinutes(activity.id, num);
+                                }}
+                                onBlur={(e) => {
+                                  const draft = (activity as any).durationDraft;
+                                  if (draft === "" || draft === undefined) {
+                                    // nothing to commit
+                                    setActivities((prev) =>
+                                      prev.map((a) => {
+                                        if (a.id === activity.id) {
                                           const { durationDraft, ...rest } =
                                             a as any;
                                           return rest;
-                                        })()
-                                      : a,
-                                  ),
-                                );
-                              }}
-                              className="w-20 h-9 text-sm text-center"
-                              disabled={activity.isLocked || activity.countUp}
+                                        }
+                                        return a;
+                                      }),
+                                    );
+                                    return;
+                                  }
+                                  const totalMins =
+                                    calculateTotalSessionMinutes();
+                                  const newDur = Math.max(
+                                    0,
+                                    Math.min(draft, totalMins || draft),
+                                  );
+                                  rebalanceAfterManualMinutes(
+                                    activity.id,
+                                    newDur,
+                                  );
+                                  setActivities((prev) =>
+                                    prev.map((a) =>
+                                      a.id === activity.id
+                                        ? (() => {
+                                            const { durationDraft, ...rest } =
+                                              a as any;
+                                            return rest;
+                                          })()
+                                        : a,
+                                    ),
+                                  );
+                                }}
+                                className="w-20 h-9 text-sm text-center"
+                                disabled={activity.isLocked || activity.countUp}
+                              />
+                              <span className="text-sm text-gray-600 font-medium">
+                                min
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex justify-start">
+                            <ActivityTagButton
+                              activityName={activity.name}
+                              assignedTags={activity.tags}
+                              tags={canonicalTags}
+                              onClick={() =>
+                                setTagPickerTarget({
+                                  mode: "session",
+                                  activityId: activity.id,
+                                })
+                              }
                             />
-                            <span className="text-sm text-gray-600 font-medium">
-                              min
-                            </span>
+                          </div>
+
+                          {/* Third Row: Count Up Timer Checkbox */}
+                          <div className="flex items-center justify-center gap-2 mt-3">
+                            <input
+                              type="checkbox"
+                              id={`countup-${activity.id}`}
+                              className="w-4 h-4"
+                              checked={activity.countUp || false}
+                              onChange={() =>
+                                toggleCountUpActivity(activity.id)
+                              }
+                            />
+                            <label
+                              htmlFor={`countup-${activity.id}`}
+                              className="text-sm text-gray-600 font-medium"
+                            >
+                              Count up
+                            </label>
+                            {activity.countUp && (
+                              <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full ml-2">
+                                Excluded from % calculation
+                              </span>
+                            )}
                           </div>
                         </div>
-
-                        <div className="mt-3 flex justify-start">
-                          <ActivityTagButton
-                            activityName={activity.name}
-                            assignedTags={activity.tags}
-                            tags={canonicalTags}
-                            onClick={() =>
-                              setTagPickerTarget({
-                                mode: "session",
-                                activityId: activity.id,
-                              })
-                            }
-                          />
-                        </div>
-
-                        {/* Third Row: Count Up Timer Checkbox */}
-                        <div className="flex items-center justify-center gap-2 mt-3">
-                          <input
-                            type="checkbox"
-                            id={`countup-${activity.id}`}
-                            className="w-4 h-4"
-                            checked={activity.countUp || false}
-                            onChange={() => toggleCountUpActivity(activity.id)}
-                          />
-                          <label
-                            htmlFor={`countup-${activity.id}`}
-                            className="text-sm text-gray-600 font-medium"
-                          >
-                            Count up
-                          </label>
-                          {activity.countUp && (
-                            <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full ml-2">
-                              Excluded from % calculation
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                      ))}
                   </div>
                   <Button
                     variant="outline"
@@ -18939,6 +19167,131 @@ export default function App() {
           return committed;
         }}
       />
+      {bankedRestDialogOpen && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target)
+              setBankedRestDialogOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="banked-rest-dialog-title"
+            className="w-full rounded-t-2xl bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] shadow-xl sm:max-w-md sm:rounded-xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2
+                  id="banked-rest-dialog-title"
+                  className="text-lg font-semibold"
+                >
+                  Add banked Reward Rest
+                </h2>
+                <p className="mt-1 text-sm text-gray-600">
+                  Available:{" "}
+                  <strong>
+                    {formatTime(flowmodoroState.relaxationVaultSeconds || 0)}
+                  </strong>
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-11 w-11 p-0"
+                aria-label="Close"
+                onClick={() => setBankedRestDialogOpen(false)}
+              >
+                <Icon name="x" className="h-5 w-5" />
+              </Button>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <label className="text-sm font-medium">
+                Rest minutes
+                <Input
+                  autoFocus
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  value={bankedRestMinutesDraft}
+                  onChange={(event) =>
+                    setBankedRestMinutesDraft(event.target.value)
+                  }
+                  className="mt-1 h-12 text-lg"
+                />
+              </label>
+              <label className="text-sm font-medium">
+                Rest seconds
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min="0"
+                  max="59"
+                  value={bankedRestSecondsDraft}
+                  onChange={(event) =>
+                    setBankedRestSecondsDraft(event.target.value)
+                  }
+                  className="mt-1 h-12 text-lg"
+                />
+              </label>
+            </div>
+            <p className="mt-3 text-xs text-gray-600">
+              Non-starred countdown tasks donate proportionally. Locked tasks
+              may donate; starred tasks remain protected.
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <Button
+                variant="outline"
+                className="h-11"
+                onClick={() => setBankedRestDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="h-11"
+                disabled={
+                  (Number.parseInt(bankedRestMinutesDraft || "0", 10) || 0) *
+                    60 +
+                    Math.min(
+                      59,
+                      Number.parseInt(bankedRestSecondsDraft || "0", 10) || 0,
+                    ) <=
+                    0 ||
+                  !activities.some(
+                    (activity) =>
+                      !activity.isRewardRest &&
+                      !activity.countUp &&
+                      !activity.isCompleted &&
+                      !activity.priority &&
+                      (activity.percentage || 0) > 0,
+                  )
+                }
+                onClick={() => {
+                  const requestedSeconds =
+                    Math.max(
+                      0,
+                      Number.parseInt(bankedRestMinutesDraft || "0", 10) || 0,
+                    ) *
+                      60 +
+                    Math.max(
+                      0,
+                      Math.min(
+                        59,
+                        Number.parseInt(bankedRestSecondsDraft || "0", 10) || 0,
+                      ),
+                    );
+                  if (scheduleBankedRest(requestedSeconds) > 0)
+                    setBankedRestDialogOpen(false);
+                }}
+              >
+                Schedule rest
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {addActivityModalState.isOpen && (
         <AddActivityModal
           isOpen={addActivityModalState.isOpen}

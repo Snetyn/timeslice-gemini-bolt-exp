@@ -26,12 +26,14 @@ export type PersistedSessionActivity = {
   color: string;
   duration: number;
   timeRemaining: number;
+  originalPlannedSeconds?: number;
   percentage?: number;
   countUp?: boolean;
   isCompleted?: boolean;
   completedElapsedSeconds?: number;
   isLocked?: boolean;
   priority?: boolean;
+  isRewardRest?: boolean;
   showOnBar?: boolean;
   sharedId?: string;
   templateId?: string;
@@ -150,6 +152,10 @@ export const normalizePersistedSessionActivity = (
     value.completedElapsedSeconds,
     Number.NaN,
   );
+  const originalPlannedSeconds = finiteNumber(
+    value.originalPlannedSeconds,
+    Number.NaN,
+  );
 
   return {
     ...value,
@@ -169,8 +175,12 @@ export const normalizePersistedSessionActivity = (
     completedElapsedSeconds: Number.isFinite(completedElapsedSeconds)
       ? Math.max(0, completedElapsedSeconds)
       : undefined,
+    originalPlannedSeconds: Number.isFinite(originalPlannedSeconds)
+      ? Math.max(0, originalPlannedSeconds)
+      : undefined,
     isLocked: Boolean(value.isLocked),
     priority: Boolean(value.priority),
+    isRewardRest: Boolean(value.isRewardRest),
     showOnBar: value.showOnBar !== false,
     tags: Array.isArray(value.tags)
       ? value.tags.filter((tag): tag is string => typeof tag === "string")
