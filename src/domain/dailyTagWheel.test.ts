@@ -30,6 +30,33 @@ describe("Daily tag wheel model", () => {
     expect(resolveTagId("Health", tags)).toBe("health");
   });
 
+  it("ignores malformed runtime tag values", () => {
+    const malformed = [
+      ...tags,
+      { id: null, name: "Broken", color: "#000" },
+      { id: "bad", name: undefined, color: "#000" },
+    ] as unknown as typeof tags;
+    expect(resolveTagId(null, malformed)).toBe("");
+    expect(
+      buildDailyTagWheels({
+        activities: [
+          {
+            id: "a",
+            name: "A",
+            color: "#000",
+            tagIds: null as unknown as string[],
+            plannedSeconds: 10,
+            actualSeconds: 5,
+          },
+        ],
+        tags: malformed,
+        selectedTagIds: ["bad"],
+        metric: "plan",
+        layout: "per-tag",
+      }),
+    ).toEqual([{ id: "bad", title: "bad", totalSeconds: 0, segments: [] }]);
+  });
+
   it("builds one activity wheel for each selected tag", () => {
     const wheels = buildDailyTagWheels({
       activities,

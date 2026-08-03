@@ -34,17 +34,19 @@ export type DailyTagWheelModel = {
 const safeSeconds = (value: number) =>
   Number.isFinite(value) ? Math.max(0, value) : 0;
 
-const normalized = (value: string) => value.trim().toLocaleLowerCase();
+const normalized = (value: unknown) =>
+  typeof value === "string" ? value.trim().toLocaleLowerCase() : "";
 
 export function resolveTagId(
-  value: string,
+  value: unknown,
   tags: readonly TagWheelTag[],
 ): string {
   const token = normalized(value);
+  if (!token) return "";
   return (
     tags.find(
-      (tag) => normalized(tag.id) === token || normalized(tag.name) === token,
-    )?.id || value
+      (tag) => normalized(tag?.id) === token || normalized(tag?.name) === token,
+    )?.id || (typeof value === "string" ? value.trim() : "")
   );
 }
 
@@ -80,12 +82,18 @@ export function buildDailyTagWheels({
 }): DailyTagWheelModel[] {
   const selected = selectedTagIds
     .map((id) => resolveTagId(id, tags))
+    .filter(Boolean)
     .filter((id, index, all) => all.indexOf(id) === index);
   if (selected.length === 0) return [];
-  const tagById = new Map(tags.map((tag) => [tag.id, tag]));
+  const safeTags = tags.filter(
+    (tag) => normalized(tag?.id) && normalized(tag?.name),
+  );
+  const tagById = new Map(safeTags.map((tag) => [tag.id, tag]));
   const normalizedActivities = activities.map((activity) => ({
     ...activity,
-    tagIds: activity.tagIds.map((id) => resolveTagId(id, tags)),
+    tagIds: (Array.isArray(activity.tagIds) ? activity.tagIds : [])
+      .map((id) => resolveTagId(id, safeTags))
+      .filter(Boolean),
     value:
       metric === "plan"
         ? safeSeconds(activity.plannedSeconds)

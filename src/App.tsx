@@ -19,8 +19,26 @@ import { InsightsSheet } from "./components/InsightsSheet";
 import { ActivityManager } from "./components/ActivityManager";
 import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
 import { DailyTagWheels } from "./components/DailyTagWheels";
+import {
+  ActivityTagButton,
+  ActivityTagPicker,
+} from "./components/ActivityTagPicker";
+import { TagSectionBoundary } from "./components/TagSectionBoundary";
 import { confirmAllocation } from "./domain/timeAllocation";
 import { buildDailyTagWheels, resolveTagId } from "./domain/dailyTagWheel";
+import {
+  buildCanonicalTags,
+  applyTagsToLinkedActivities,
+  isTagAssigned,
+  normalizeAssignedTags,
+  normalizeTagName,
+  setTagAssignment,
+} from "./domain/tags";
+import {
+  bulkActivityColor,
+  createBulkActivityId,
+  parseBulkActivities,
+} from "./domain/bulkActivities";
 import { predictedScheduleSeconds } from "./domain/sessionSchedule";
 import { displayActivityColor } from "./domain/activityColor";
 import { resolveVaultPredictionMode } from "./domain/workspaceSettings";
@@ -698,6 +716,72 @@ const RPGStatsChart = ({
     [stats, dailyActivities, activities, getRangeBounds],
   );
 
+  const levels = stats.map((stat) => Math.max(0, Number(stat?.level) || 0));
+  const minLevel = levels.length ? Math.min(...levels) : 0;
+  const maxLevel = levels.length ? Math.max(...levels) : 1;
+  const effectiveMaxLevel = Math.max(1, maxLevel);
+  const scalingFactor = effectiveMaxLevel < 5 ? 5 / effectiveMaxLevel : 1;
+  const rings = 5;
+  const angleStep = (2 * Math.PI) / Math.max(1, stats.length);
+  const ringPaths = Array.from({ length: rings }, (_, index) => ({
+    radius: (maxRadius * (index + 1)) / rings,
+    level: Math.round((effectiveMaxLevel * (index + 1)) / rings),
+  }));
+  const todayTaskData = stats.map((stat) => {
+    const matchingDaily = dailyActivities.filter((activity) =>
+      normalizeAssignedTags(activity.tags).some(
+        (tag) =>
+          tag === stat.tagId ||
+          normalizeTagName(tag) === normalizeTagName(stat.tagName),
+      ),
+    );
+    const matchingSession = activities.filter((activity) =>
+      normalizeAssignedTags(activity.tags).some(
+        (tag) =>
+          tag === stat.tagId ||
+          normalizeTagName(tag) === normalizeTagName(stat.tagName),
+      ),
+    );
+    const plannedToday = [
+      ...matchingDaily.map((activity) => Number(activity.duration) || 0),
+      ...matchingSession.map((activity) => Number(activity.duration) || 0),
+    ].reduce((sum, minutes) => sum + Math.max(0, minutes), 0);
+    const completedToday = matchingDaily.reduce(
+      (sum, activity) => sum + Math.max(0, Number(activity.timeSpent) || 0),
+      0,
+    );
+    const sessionProgress = matchingSession.reduce((sum, activity) => {
+      const plannedSeconds = Math.max(0, Number(activity.duration) * 60 || 0);
+      const remaining = Number(activity.timeRemaining);
+      return (
+        sum +
+        (Number.isFinite(remaining)
+          ? Math.max(0, plannedSeconds - Math.max(0, remaining)) / 60
+          : 0)
+      );
+    }, 0);
+    return {
+      plannedToday,
+      completedToday,
+      progressToday: completedToday + sessionProgress,
+    };
+  });
+
+  const getDisplayColor = () => {
+    switch (displayMode) {
+      case "today-tasks":
+        return "#2563eb";
+      case "daily-view":
+        return "#16a34a";
+      case "progress":
+        return "#7c3aed";
+      case "balance":
+        return "#f59e0b";
+      default:
+        return "#0f766e";
+    }
+  };
+
   // (renderOuterRing belongs to CircularProgress later; stray fragment removed)
 
   const getDisplayLabel = () => {
@@ -807,7 +891,6 @@ const RPGStatsChart = ({
 
     return branches;
   };
-
   const subCategoryBranches = generateSubCategoryBranches();
 
   // Yesterday overlay path (Overview only)
@@ -877,6 +960,41 @@ const RPGStatsChart = ({
     });
     return `M ${points.join(" L ")} Z`;
   })();
+
+  const displayPath = stats.map((stat, index) => {
+    const angle = index * angleStep - Math.PI / 2;
+    const data = todayTaskData[index];
+    let ratio = 0;
+    if (displayMode === "today-tasks") {
+      const maximum = Math.max(
+        1,
+        ...todayTaskData.map((item) => item.plannedToday),
+      );
+      ratio = data.plannedToday / maximum;
+    } else if (displayMode === "daily-view") {
+      ratio =
+        data.plannedToday > 0 ? data.completedToday / data.plannedToday : 0;
+    } else if (displayMode === "progress") {
+      const maximum = Math.max(
+        1,
+        ...todayTaskData.map((item) => item.progressToday),
+      );
+      ratio = data.progressToday / maximum;
+    } else if (displayMode === "balance") {
+      ratio =
+        Math.max(0, Number(suggestedStats[index]?.level) || 0) /
+        effectiveMaxLevel;
+    } else {
+      const rangeStat = buildOverviewRangeStats(timeRange)[index] || stat;
+      ratio =
+        (Math.max(0, Number(rangeStat?.level) || 0) * scalingFactor) /
+        effectiveMaxLevel;
+    }
+    const radius = maxRadius * Math.min(1, Math.max(0, ratio));
+    return `${center + Math.cos(angle) * radius},${
+      center + Math.sin(angle) * radius
+    }`;
+  });
 
   return (
     <div className="flex flex-col items-center w-full">
@@ -3837,6 +3955,8 @@ interface AddActivityModalProps {
   onAddRPGTag: (name: string, color?: string) => void; // kept for compatibility
   // Also add to Manage Activity tags (string list)
   onAddCustomTag?: (name: string) => void;
+  onBulkAdd: (names: string[]) => void;
+  existingNames: string[];
 }
 
 const AddActivityModal = ({
@@ -3852,6 +3972,8 @@ const AddActivityModal = ({
   rpgTags = [],
   onAddRPGTag,
   onAddCustomTag,
+  onBulkAdd,
+  existingNames = [],
 }: AddActivityModalProps) => {
   // Utility: generate a color far from existing hues (avoid collisions)
   const pickUniqueColor = (existing: string[]) => {
@@ -3895,6 +4017,12 @@ const AddActivityModal = ({
   );
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [newTagText, setNewTagText] = useState<string>("");
+  const [entryMode, setEntryMode] = useState<"single" | "bulk">("single");
+  const [bulkText, setBulkText] = useState("");
+  const bulkResult = React.useMemo(
+    () => parseBulkActivities(bulkText, existingNames),
+    [bulkText, existingNames],
+  );
 
   // Predefined color palette (same as quickAddDailyActivity) - for reference only
   const colorPalette = [
@@ -3979,19 +4107,49 @@ const AddActivityModal = ({
     setUseCountUp(false);
     setSelectedCategory(undefined);
     setSelectedTagIds([]);
+    setBulkText("");
+    setEntryMode("single");
+    onClose();
+  };
+
+  const handleBulkAdd = () => {
+    if (!bulkResult.names.length) return;
+    onBulkAdd(bulkResult.names);
+    setBulkText("");
+    setEntryMode("single");
     onClose();
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <Card className="w-full max-w-md mx-4">
+      <Card className="max-h-[92dvh] w-full max-w-md mx-4 overflow-y-auto">
         <CardHeader>
           <CardTitle className="text-lg text-center">
             Add New Activity
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-3">
+          <div
+            className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
+            aria-label="Activity entry mode"
+          >
+            {(["single", "bulk"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={entryMode === mode}
+                onClick={() => setEntryMode(mode)}
+                className={`min-h-11 rounded-md text-sm font-semibold capitalize ${
+                  entryMode === mode
+                    ? "bg-white text-indigo-700 shadow-sm"
+                    : "text-slate-600"
+                }`}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+          <div className={entryMode === "single" ? "space-y-3" : "hidden"}>
             {/* Template Selection */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -4287,22 +4445,62 @@ const AddActivityModal = ({
               </p>
             )}
           </div>
+          {entryMode === "bulk" && (
+            <div className="space-y-3">
+              <div>
+                <Label className="text-base">Activity names</Label>
+                <p className="mt-1 text-xs text-slate-500">
+                  Separate names with commas, dashes, or new lines. Put a name
+                  in quotes to keep a dash inside it.
+                </p>
+              </div>
+              <textarea
+                autoFocus
+                value={bulkText}
+                onChange={(event) => setBulkText(event.target.value)}
+                aria-label="Bulk activity names"
+                placeholder={
+                  'cleaning, walking the dog - gaming\n"pre-work planning"'
+                }
+                className="min-h-40 w-full resize-y rounded-lg border border-slate-300 p-3 text-base outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+              />
+              <div
+                className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                role="status"
+              >
+                <span className="font-semibold">{bulkResult.names.length}</span>{" "}
+                {bulkResult.names.length === 1 ? "activity" : "activities"} will
+                be added.
+                {bulkResult.duplicateCount > 0 && (
+                  <span className="block text-xs text-slate-500">
+                    {bulkResult.duplicateCount} duplicate
+                    {bulkResult.duplicateCount === 1 ? "" : "s"} ignored.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="flex justify-end space-x-3 pt-2">
             <Button variant="outline" onClick={handleClose} className="px-6">
               Cancel
             </Button>
             <Button
-              onClick={handleAdd}
-              disabled={!selectedTemplate && !activityName.trim()}
+              onClick={entryMode === "bulk" ? handleBulkAdd : handleAdd}
+              disabled={
+                entryMode === "bulk"
+                  ? bulkResult.names.length === 0
+                  : !selectedTemplate && !activityName.trim()
+              }
               className="px-6"
             >
-              Add{" "}
-              {selectedTemplate
-                ? `"${selectedTemplate.name}"`
-                : activityName.trim()
-                  ? `"${activityName.trim()}"`
-                  : ""}
+              {entryMode === "bulk" ? `Add ${bulkResult.names.length}` : "Add"}{" "}
+              {entryMode === "single" &&
+                (selectedTemplate
+                  ? `"${selectedTemplate.name}"`
+                  : activityName.trim()
+                    ? `"${activityName.trim()}"`
+                    : "")}
             </Button>
           </div>
         </CardContent>
@@ -4351,24 +4549,26 @@ const ActivityManagementPage = ({
     // Categories and tags are provided by parent and persisted globally
 
     // Only custom categories now
-    const allCategories = [...customCategories];
+    const allCategories = normalizeAssignedTags(customCategories);
 
     // Get all unique tags from templates and custom tags
-    const allTags = [
-      ...new Set([
-        ...customTags,
-        ...activityTemplates.flatMap((template) => template.tags || []),
+    const allTags = Array.from(
+      new Set([
+        ...normalizeAssignedTags(customTags).map(normalizeTagName),
+        ...activityTemplates.flatMap((template) =>
+          normalizeAssignedTags(template?.tags).map(normalizeTagName),
+        ),
       ]),
-    ].sort();
+    ).sort((left, right) => left.localeCompare(right));
 
     // Filter templates based on search query and category
     const filteredTemplates = activityTemplates.filter((template) => {
+      if (!template || typeof template.name !== "string") return false;
       const matchesSearch =
         template.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (template.tags &&
-          template.tags.some((tag) =>
-            tag.toLowerCase().includes(searchQuery.toLowerCase()),
-          ));
+        normalizeAssignedTags(template.tags).some((tag) =>
+          normalizeTagName(tag).includes(normalizeTagName(searchQuery)),
+        );
       const matchesCategory =
         categoryFilter === "all" || template.category === categoryFilter;
       return matchesSearch && matchesCategory;
@@ -8492,14 +8692,32 @@ export default function App() {
 
     try {
       const saved = localStorage.getItem("timeSliceRPGTags");
-      return saved
-        ? JSON.parse(saved).map((tag) => ({
-            ...tag,
-            createdAt: new Date(tag.createdAt),
-            overallProgress: tag.overallProgress || 0,
-            totalLifetimeMinutes: tag.totalLifetimeMinutes || 0,
-          }))
-        : defaultTags;
+      if (!saved) return defaultTags;
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return defaultTags;
+      const normalized = parsed
+        .filter(
+          (tag) =>
+            tag &&
+            typeof tag === "object" &&
+            typeof tag.id === "string" &&
+            tag.id.trim() &&
+            typeof tag.name === "string" &&
+            tag.name.trim(),
+        )
+        .map((tag) => ({
+          ...tag,
+          id: tag.id.trim(),
+          name: tag.name.trim(),
+          color:
+            typeof tag.color === "string" && tag.color.trim()
+              ? tag.color
+              : "#64748b",
+          createdAt: new Date(tag.createdAt || Date.now()),
+          overallProgress: Number(tag.overallProgress) || 0,
+          totalLifetimeMinutes: Number(tag.totalLifetimeMinutes) || 0,
+        }));
+      return normalized.length ? normalized : defaultTags;
     } catch (e) {
       return defaultTags;
     }
@@ -8519,7 +8737,30 @@ export default function App() {
 
     try {
       const saved = localStorage.getItem("timeSliceActivityTemplates");
-      return saved ? JSON.parse(saved) : defaultTemplates;
+      if (!saved) return defaultTemplates;
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return defaultTemplates;
+      return parsed
+        .filter(
+          (template) =>
+            template &&
+            typeof template === "object" &&
+            typeof template.name === "string" &&
+            template.name.trim(),
+        )
+        .map((template) => ({
+          ...template,
+          id:
+            typeof template.id === "string" && template.id
+              ? template.id
+              : crypto.randomUUID(),
+          name: template.name.trim(),
+          color:
+            typeof template.color === "string" && template.color
+              ? template.color
+              : "#64748b",
+          tags: normalizeAssignedTags(template.tags),
+        }));
     } catch (e) {
       return defaultTemplates;
     }
@@ -8551,7 +8792,7 @@ export default function App() {
     try {
       const saved = localStorage.getItem("timeSliceCustomTags");
       const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
+      return normalizeAssignedTags(parsed).map(normalizeTagName);
     } catch {
       return [];
     }
@@ -8587,6 +8828,117 @@ export default function App() {
     return Array.from(new Set(merged));
   }, [customTags, activityTemplates, activities]);
 
+  const [tagPickerTarget, setTagPickerTarget] = useState<{
+    mode: "session" | "daily";
+    activityId: string;
+  } | null>(null);
+  const canonicalTags = React.useMemo(
+    () =>
+      buildCanonicalTags({
+        rpgTags,
+        customTags,
+        templates: activityTemplates,
+        activities: [...activities, ...dailyActivities],
+      }),
+    [rpgTags, customTags, activityTemplates, activities, dailyActivities],
+  );
+  const canonicalTagWheelTags = React.useMemo(
+    () =>
+      canonicalTags.map((tag) => ({
+        id: tag.storageValue,
+        name: tag.name,
+        color: tag.color,
+      })),
+    [canonicalTags],
+  );
+  const tagPickerActivity = tagPickerTarget
+    ? (tagPickerTarget.mode === "session" ? activities : dailyActivities).find(
+        (activity) => activity.id === tagPickerTarget.activityId,
+      ) || null
+    : null;
+
+  const applyQuickTags = useCallback(
+    (mode: "session" | "daily", activityId: string, nextTags: string[]) => {
+      const source = (mode === "session" ? activities : dailyActivities).find(
+        (activity) => activity.id === activityId,
+      );
+      if (!source) return;
+      if (mode === "session") {
+        setActivities((current) =>
+          applyTagsToLinkedActivities(
+            current,
+            activityId,
+            source.sharedId,
+            nextTags,
+          ),
+        );
+        if (source.sharedId) {
+          setDailyActivities((current) =>
+            applyTagsToLinkedActivities(current, "", source.sharedId, nextTags),
+          );
+        }
+      } else {
+        setDailyActivities((current) =>
+          applyTagsToLinkedActivities(
+            current,
+            activityId,
+            source.sharedId,
+            nextTags,
+          ),
+        );
+        if (source.sharedId) {
+          setActivities((current) =>
+            applyTagsToLinkedActivities(current, "", source.sharedId, nextTags),
+          );
+        }
+      }
+      const sourceName = normalizeTagName(source.name);
+      setActivityTemplates((current) =>
+        current.map((template) =>
+          normalizeTagName(template.name) === sourceName
+            ? { ...template, tags: nextTags }
+            : template,
+        ),
+      );
+    },
+    [activities, dailyActivities],
+  );
+
+  const toggleQuickTag = useCallback(
+    (tag, selected: boolean) => {
+      if (!tagPickerTarget || !tagPickerActivity) return;
+      applyQuickTags(
+        tagPickerTarget.mode,
+        tagPickerTarget.activityId,
+        setTagAssignment(tagPickerActivity.tags, tag, selected),
+      );
+    },
+    [applyQuickTags, tagPickerActivity, tagPickerTarget],
+  );
+
+  const createQuickTag = useCallback(
+    (name: string) => {
+      if (!tagPickerTarget || !tagPickerActivity) return;
+      const normalizedName = normalizeTagName(name);
+      if (!normalizedName) return;
+      setCustomTags((current) =>
+        current.some((tag) => normalizeTagName(tag) === normalizedName)
+          ? current
+          : [...current, normalizedName],
+      );
+      applyQuickTags(
+        tagPickerTarget.mode,
+        tagPickerTarget.activityId,
+        setTagAssignment(
+          tagPickerActivity.tags,
+          { name: normalizedName, storageValue: normalizedName },
+          true,
+        ),
+      );
+    },
+    [applyQuickTags, tagPickerActivity, tagPickerTarget],
+  );
+
   // Helpers
   const upsertCategory = useCallback((name: string) => {
     const v = name.trim().toLowerCase();
@@ -8608,11 +8960,23 @@ export default function App() {
   );
   const updateActivityTags = useCallback(
     (activityId: string, tags: string[]) => {
+      const nextTags = normalizeAssignedTags(tags);
+      const source = activities.find((activity) => activity.id === activityId);
       setActivities((prev) =>
-        prev.map((a) => (a.id === activityId ? { ...a, tags } : a)),
+        prev.map((a) => (a.id === activityId ? { ...a, tags: nextTags } : a)),
       );
+      if (source) {
+        const sourceName = normalizeTagName(source.name);
+        setActivityTemplates((prev) =>
+          prev.map((template) =>
+            normalizeTagName(template.name) === sourceName
+              ? { ...template, tags: nextTags }
+              : template,
+          ),
+        );
+      }
     },
-    [setActivities],
+    [activities, setActivities, setActivityTemplates],
   );
 
   const applyTagSuggestion = useCallback(
@@ -8638,30 +9002,6 @@ export default function App() {
     [tagDraft, updateActivityTags],
   );
 
-  // Any time an activity gains category/tags, ensure there's a matching template for later reuse
-  useEffect(() => {
-    activities.forEach((a) => {
-      if ((a.category && a.category.length) || (a.tags && a.tags.length)) {
-        const existing = activityTemplates.find(
-          (t) => t.name.toLowerCase() === a.name.toLowerCase(),
-        );
-        const payload: ActivityTemplate = {
-          id: existing?.id || `tpl-${a.name.toLowerCase()}`,
-          name: a.name,
-          color: a.color,
-          category: a.category,
-          tags: a.tags || [],
-        };
-        if (existing) {
-          setActivityTemplates((prev) =>
-            prev.map((t) => (t.id === existing.id ? { ...t, ...payload } : t)),
-          );
-        } else {
-          setActivityTemplates((prev) => [...prev, payload]);
-        }
-      }
-    });
-  }, [activities]);
   const saveActivityQuick = useCallback(
     (activityId: string) => {
       const a = activities.find((x) => x.id === activityId);
@@ -11659,6 +11999,88 @@ export default function App() {
     }
   };
 
+  const handleBulkAddActivities = useCallback(
+    (names: string[]) => {
+      if (!names.length) return;
+      if (currentMode === "daily") {
+        setDailyActivities((current) => {
+          const existing = new Set(
+            current.map((activity) => normalizeTagName(activity.name)),
+          );
+          const additions = names
+            .filter((name) => !existing.has(normalizeTagName(name)))
+            .map((name, index) => ({
+              id: createBulkActivityId("daily", index),
+              name,
+              color: bulkActivityColor(name, current.length + index),
+              duration: 60,
+              percentage: Math.round((60 / (24 * 60)) * 1000) / 10,
+              status: "scheduled" as const,
+              isActive: false,
+              timeSpent: 0,
+              timeSpentSeconds: 0,
+              startedAt: null,
+              subtasks: [],
+              tags: [],
+              scheduledDate: getLocalDateStr(),
+              rolledOverFromYesterday: false,
+            }));
+          return additions.length ? [...current, ...additions] : current;
+        });
+        return;
+      }
+
+      setActivities((current) => {
+        const existing = new Set(
+          current.map((activity) => normalizeTagName(activity.name)),
+        );
+        const additions = names
+          .filter((name) => !existing.has(normalizeTagName(name)))
+          .map((name, index) => ({
+            id: createBulkActivityId("session", index),
+            name,
+            color: bulkActivityColor(name, current.length + index),
+            percentage: 0,
+            duration: 0,
+            timeRemaining: 0,
+            isCompleted: false,
+            isLocked: false,
+            countUp: false,
+            tags: [],
+          }));
+        if (!additions.length) return current;
+        const combined = [...current, ...additions];
+        if (isTimerActive) return combined;
+
+        const eligible = combined.filter(
+          (activity) => !activity.isLocked && !activity.countUp,
+        );
+        const lockedTotal = combined
+          .filter((activity) => activity.isLocked && !activity.countUp)
+          .reduce((sum, activity) => sum + Number(activity.percentage || 0), 0);
+        const equal = eligible.length
+          ? Math.max(0, 100 - lockedTotal) / eligible.length
+          : 0;
+        const rebalanced = combined.map((activity) =>
+          activity.isLocked || activity.countUp
+            ? activity
+            : { ...activity, percentage: equal },
+        );
+        return applyPlannedDurations(
+          rebalanced,
+          calculateTotalSessionMinutes() * 60,
+        );
+      });
+    },
+    [
+      calculateTotalSessionMinutes,
+      currentMode,
+      isTimerActive,
+      setActivities,
+      setDailyActivities,
+    ],
+  );
+
   // Daily Mode Functions (Step 2: Quick Add)
   const quickAddDailyActivity = (name) => {
     if (!name || !name.trim()) return;
@@ -13801,22 +14223,27 @@ export default function App() {
 
   const mainContent =
     currentPage === "manage-activities" ? (
-      <ActivityManagementPage
-        activityTemplates={activityTemplates}
-        setActivityTemplates={setActivityTemplates}
-        activities={activities}
-        setActivities={setActivities}
-        onBackToTimer={() => setCurrentPage("timer")}
-        onAddToSession={handleAddToCurrentSession}
-        onAddToDaily={handleAddToDaily}
-        onAddToBoth={handleAddToBoth}
-        customCategories={customCategories}
-        setCustomCategories={setCustomCategories}
-        customTags={customTags}
-        setCustomTags={setCustomTags}
-        settings={settings}
-        rpgTags={rpgTags}
-      />
+      <TagSectionBoundary
+        resetKey="activity-management"
+        onReset={() => setCurrentPage("timer")}
+      >
+        <ActivityManagementPage
+          activityTemplates={activityTemplates}
+          setActivityTemplates={setActivityTemplates}
+          activities={activities}
+          setActivities={setActivities}
+          onBackToTimer={() => setCurrentPage("timer")}
+          onAddToSession={handleAddToCurrentSession}
+          onAddToDaily={handleAddToDaily}
+          onAddToBoth={handleAddToBoth}
+          customCategories={customCategories}
+          setCustomCategories={setCustomCategories}
+          customTags={customTags}
+          setCustomTags={setCustomTags}
+          settings={settings}
+          rpgTags={rpgTags}
+        />
+      </TagSectionBoundary>
     ) : currentPage === "spider" ? (
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex items-center justify-between mb-4">
@@ -14399,6 +14826,17 @@ export default function App() {
                           >
                             <span className="text-xs">★</span>
                           </Button>
+                          <ActivityTagButton
+                            activityName={activity.name}
+                            assignedTags={activity.tags}
+                            tags={canonicalTags}
+                            onClick={() =>
+                              setTagPickerTarget({
+                                mode: "session",
+                                activityId: activity.id,
+                              })
+                            }
+                          />
                           {settings.showActivityTime && !percentOnly && (
                             <span className="text-xs font-mono z-10">
                               {activity.isCompleted
@@ -16880,48 +17318,17 @@ export default function App() {
 
                     {/* Tag filter and radial feedback */}
                     {(() => {
-                      const colorForTag = (name: string) => {
-                        let hash = 0;
-                        for (let index = 0; index < name.length; index += 1)
-                          hash = name.charCodeAt(index) + ((hash << 5) - hash);
-                        return `hsl(${Math.abs(hash) % 360}, 65%, 48%)`;
-                      };
-                      const knownIds = new Set(rpgTags.map((tag) => tag.id));
-                      const rawTags = Array.from(
-                        new Set(
-                          dailyActivities.flatMap((activity) =>
-                            (activity.tags || []).map(String),
+                      const availableTags = canonicalTags
+                        .filter((tag) =>
+                          dailyActivities.some((activity) =>
+                            isTagAssigned(activity.tags, tag),
                           ),
-                        ),
-                      );
-                      const availableTags = [
-                        ...rpgTags.map((tag) => ({
-                          id: tag.id,
+                        )
+                        .map((tag) => ({
+                          id: tag.storageValue,
                           name: tag.name,
                           color: tag.color,
-                        })),
-                        ...rawTags
-                          .filter(
-                            (value) =>
-                              !knownIds.has(value) &&
-                              !rpgTags.some(
-                                (tag) =>
-                                  tag.name.toLowerCase() ===
-                                  value.toLowerCase(),
-                              ),
-                          )
-                          .map((value) => ({
-                            id: value,
-                            name: value,
-                            color: colorForTag(value),
-                          })),
-                      ].filter((tag) =>
-                        rawTags.some(
-                          (value) =>
-                            resolveTagId(value, rpgTags) === tag.id ||
-                            value.toLowerCase() === tag.name.toLowerCase(),
-                        ),
-                      );
+                        }));
                       const wheelActivities = dailyActivities.map(
                         (activity) => {
                           const actualSeconds =
@@ -16934,7 +17341,7 @@ export default function App() {
                               /^(#|rgb|hsl)/.test(activity.color)
                                 ? activity.color
                                 : "#3b82f6",
-                            tagIds: (activity.tags || []).map(String),
+                            tagIds: normalizeAssignedTags(activity.tags),
                             plannedSeconds: Math.max(
                               0,
                               Number(activity.duration || 0) * 60 -
@@ -17081,10 +17488,15 @@ export default function App() {
                                   ))}
                                 </div>
                               </div>
-                              <DailyTagWheels
-                                models={wheelModels}
-                                metric={settings.dailyTagWheelMetric}
-                              />
+                              <TagSectionBoundary
+                                resetKey={`${settings.dailyTagWheelMetric}:${settings.dailyTagWheelLayout}:${tagFilter.join(",")}`}
+                                onReset={() => setTagFilter([])}
+                              >
+                                <DailyTagWheels
+                                  models={wheelModels}
+                                  metric={settings.dailyTagWheelMetric}
+                                />
+                              </TagSectionBoundary>
                             </>
                           )}
                         </div>
@@ -17097,7 +17509,10 @@ export default function App() {
                           ? dailyActivities.filter((a) =>
                               (a.tags || []).some((t) =>
                                 tagFilter.includes(
-                                  resolveTagId(String(t), rpgTags),
+                                  resolveTagId(
+                                    String(t),
+                                    canonicalTagWheelTags,
+                                  ),
                                 ),
                               ),
                             )
@@ -17324,6 +17739,17 @@ export default function App() {
                                 </div>
 
                                 <div className="flex items-center gap-1 flex-shrink-0">
+                                  <ActivityTagButton
+                                    activityName={activity.name}
+                                    assignedTags={activity.tags}
+                                    tags={canonicalTags}
+                                    onClick={() =>
+                                      setTagPickerTarget({
+                                        mode: "daily",
+                                        activityId: activity.id,
+                                      })
+                                    }
+                                  />
                                   {/* Status badge */}
                                   <Badge
                                     variant={
@@ -17675,7 +18101,9 @@ export default function App() {
                       <div className="border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 p-3 hover:bg-gray-100 cursor-pointer transition-colors">
                         <div className="flex items-center gap-3 mb-2">
                           <button
-                            onClick={openDailyActivityAdd}
+                            onClick={() =>
+                              setAddActivityModalState({ isOpen: true })
+                            }
                             className="w-6 h-6 rounded-full border-2 border-dashed border-gray-400 flex items-center justify-center hover:border-blue-500 hover:bg-blue-50 transition-colors"
                             title="Add Activity"
                           >
@@ -18301,7 +18729,19 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Category/Tags/Save controls removed; use Add New Activity modal instead */}
+                        <div className="mt-3 flex justify-start">
+                          <ActivityTagButton
+                            activityName={activity.name}
+                            assignedTags={activity.tags}
+                            tags={canonicalTags}
+                            onClick={() =>
+                              setTagPickerTarget({
+                                mode: "session",
+                                activityId: activity.id,
+                              })
+                            }
+                          />
+                        </div>
 
                         {/* Third Row: Count Up Timer Checkbox */}
                         <div className="flex items-center justify-center gap-2 mt-3">
@@ -18419,6 +18859,20 @@ export default function App() {
         }
         onStart={handleDecisionStart}
       />
+      <TagSectionBoundary
+        resetKey={`${tagPickerTarget?.mode || "none"}:${tagPickerTarget?.activityId || "none"}`}
+        onReset={() => setTagPickerTarget(null)}
+      >
+        <ActivityTagPicker
+          open={Boolean(tagPickerTarget && tagPickerActivity)}
+          activityName={tagPickerActivity?.name || "Activity"}
+          assignedTags={tagPickerActivity?.tags || []}
+          tags={canonicalTags}
+          onToggle={toggleQuickTag}
+          onCreate={createQuickTag}
+          onClose={() => setTagPickerTarget(null)}
+        />
+      </TagSectionBoundary>
       {/* Removed ColorPicker - using simple random colors instead */}
       <TimeAllocationDialog
         open={borrowModalState.isOpen}
@@ -18507,6 +18961,11 @@ export default function App() {
             addRPGTag(name, c);
           }}
           onAddCustomTag={(nm) => upsertTag(nm)}
+          onBulkAdd={handleBulkAddActivities}
+          existingNames={(currentMode === "daily"
+            ? dailyActivities
+            : activities
+          ).map((activity) => activity.name)}
         />
       )}
 
