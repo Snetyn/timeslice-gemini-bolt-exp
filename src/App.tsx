@@ -18,6 +18,9 @@ import { SessionSubActivitySheet } from "./components/SessionSubActivitySheet";
 import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
 import { InsightsSheet } from "./components/InsightsSheet";
 import { ActivityManager } from "./components/ActivityManager";
+import { TasksHub } from "./components/TasksHub";
+import { DailyPlanner } from "./components/DailyPlanner";
+import { SessionTaskPicker } from "./components/SessionTaskPicker";
 import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
 import { DailyTagWheels } from "./components/DailyTagWheels";
 import {
@@ -91,6 +94,11 @@ import {
 import { deleteSessionRun, saveSessionRun } from "./data/sessionRunRepository";
 import { listRecentActivityDefinitions } from "./data/activityCatalogRepository";
 import {
+  completeTaskOccurrence,
+  updateTaskOccurrence,
+} from "./data/taskPlanningRepository";
+import type { TaskOccurrenceRecord } from "./domain/taskPlanning";
+import {
   applyFlowRewardExpiry,
   awardFocusedFlowTime,
   completeFlowBreak,
@@ -145,6 +153,7 @@ interface Activity {
   templateId?: string;
   sharedId?: string; // For linking session and daily activities
   activityDefinitionId?: string;
+  taskOccurrenceId?: string;
   showOnBar?: boolean; // Visual inclusion toggle for session progress bars
   // Daily activity specific properties
   status?: "scheduled" | "active" | "completed" | "overtime";
@@ -185,6 +194,7 @@ const sessionRecordingContext = (
   activityName: activity.name,
   activityColor: activity.color,
   activityDefinitionId: activity.activityDefinitionId,
+  taskOccurrenceId: activity.taskOccurrenceId,
   sourceKey: activity.sharedId
     ? `shared:${activity.sharedId}`
     : `session:${activity.id}`,
@@ -203,6 +213,7 @@ const dailyRecordingContext = (activity: Activity): ActivitySessionContext => ({
   activityName: activity.name,
   activityColor: activity.color,
   activityDefinitionId: activity.activityDefinitionId,
+  taskOccurrenceId: activity.taskOccurrenceId,
   sourceKey: activity.sharedId
     ? `shared:${activity.sharedId}`
     : `daily:${activity.id}`,
@@ -7169,7 +7180,9 @@ const FlowmodoroMode = ({
                         }}
                       />
                     </div>
-                    <div className={`mt-1 text-[11px] ${goalReached ? "font-semibold text-emerald-700" : "text-gray-500"}`}>
+                    <div
+                      className={`mt-1 text-[11px] ${goalReached ? "font-semibold text-emerald-700" : "text-gray-500"}`}
+                    >
                       {goalReached
                         ? `Goal reached · ${formatTime(bankGoal)}`
                         : `${formatTime(bankTotalSeconds)} / ${formatTime(bankGoal)} goal`}
@@ -8085,6 +8098,7 @@ export default function App() {
   const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [catalogManagerOpen, setCatalogManagerOpen] = useState(false);
+  const [tasksHubOpen, setTasksHubOpen] = useState(false);
   const [decisionCheckpoint, setDecisionCheckpoint] = useState({
     open: false,
     reason: "manual",
@@ -8356,6 +8370,7 @@ export default function App() {
       dailyHideCompleted: false, // hide completed items from the daily timeline view
       dailyTagWheelLayout: "per-tag",
       dailyTagWheelMetric: "plan",
+      dailyPlannerVersion: "legacy",
       // Auto-schedule settings
       autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
       // UI toggles
@@ -9602,14 +9617,14 @@ export default function App() {
         if (shouldReset) {
           return normalizeFlowRewardFields(
             {
-                ...defaultState,
-                ...parsed,
-                availableRestTime: 0,
-                totalEarnedToday: 0,
-                cycleCount: 0,
-                accumulatedFractionalTime: 0,
-                lastResetDate: now.toDateString(),
-              },
+              ...defaultState,
+              ...parsed,
+              availableRestTime: 0,
+              totalEarnedToday: 0,
+              cycleCount: 0,
+              accumulatedFractionalTime: 0,
+              lastResetDate: now.toDateString(),
+            },
             now,
             expiry,
             resetTime,
@@ -10099,65 +10114,62 @@ export default function App() {
   };
 
   const removeScheduledRewardRest = useCallback(
-    (
-      returnToBank: boolean,
-      flowState = flowmodoroStateRef.current,
-    ) => {
-    const restIndex = activitiesRef.current.findIndex(
-      (activity) => activity.isRewardRest,
-    );
-    const totalSessionSeconds = activitiesRef.current.reduce(
-      (sum, activity) =>
-        sum +
-        Math.max(
-          0,
-          Number(
-            activity.originalPlannedSeconds ??
-              (activity.countUp ? 0 : activity.duration * 60),
-          ) || 0,
-        ),
-      0,
-    );
-    const restoration = restoreBankedRest<Activity>({
-      activities: activitiesRef.current,
-      totalSessionSeconds,
-      sessionVaultSeconds: vaultTimeRef.current,
-    });
-    if (!restoration.removedRewardRest) return flowState;
-
-    activitiesRef.current = restoration.activities;
-    vaultTimeRef.current = restoration.sessionVaultSeconds;
-    setActivities(restoration.activities);
-    setVaultTime(restoration.sessionVaultSeconds);
-    if (restIndex >= 0) {
-      const nextIndex =
-        currentActivityIndexRef.current > restIndex
-          ? currentActivityIndexRef.current - 1
-          : Math.min(
-              currentActivityIndexRef.current,
-              Math.max(0, restoration.activities.length - 1),
-            );
-      currentActivityIndexRef.current = nextIndex;
-      setCurrentActivityIndex(nextIndex);
-    }
-    localStorage.setItem(
-      "timeSliceActivities",
-      JSON.stringify(restoration.activities),
-    );
-    const nextFlowState = {
-      ...flowState,
-      relaxationVaultSeconds:
-        Math.max(0, Number(flowState.relaxationVaultSeconds) || 0) +
-        (returnToBank ? restoration.restoredSeconds : 0),
-    };
-    if (isTimerActive) {
-      void persistSessionRunSnapshot("running", {
-        activities: restoration.activities,
-        currentActivityIndex: currentActivityIndexRef.current,
-        vaultSeconds: restoration.sessionVaultSeconds,
-        flowmodoroState: nextFlowState,
+    (returnToBank: boolean, flowState = flowmodoroStateRef.current) => {
+      const restIndex = activitiesRef.current.findIndex(
+        (activity) => activity.isRewardRest,
+      );
+      const totalSessionSeconds = activitiesRef.current.reduce(
+        (sum, activity) =>
+          sum +
+          Math.max(
+            0,
+            Number(
+              activity.originalPlannedSeconds ??
+                (activity.countUp ? 0 : activity.duration * 60),
+            ) || 0,
+          ),
+        0,
+      );
+      const restoration = restoreBankedRest<Activity>({
+        activities: activitiesRef.current,
+        totalSessionSeconds,
+        sessionVaultSeconds: vaultTimeRef.current,
       });
-    }
+      if (!restoration.removedRewardRest) return flowState;
+
+      activitiesRef.current = restoration.activities;
+      vaultTimeRef.current = restoration.sessionVaultSeconds;
+      setActivities(restoration.activities);
+      setVaultTime(restoration.sessionVaultSeconds);
+      if (restIndex >= 0) {
+        const nextIndex =
+          currentActivityIndexRef.current > restIndex
+            ? currentActivityIndexRef.current - 1
+            : Math.min(
+                currentActivityIndexRef.current,
+                Math.max(0, restoration.activities.length - 1),
+              );
+        currentActivityIndexRef.current = nextIndex;
+        setCurrentActivityIndex(nextIndex);
+      }
+      localStorage.setItem(
+        "timeSliceActivities",
+        JSON.stringify(restoration.activities),
+      );
+      const nextFlowState = {
+        ...flowState,
+        relaxationVaultSeconds:
+          Math.max(0, Number(flowState.relaxationVaultSeconds) || 0) +
+          (returnToBank ? restoration.restoredSeconds : 0),
+      };
+      if (isTimerActive) {
+        void persistSessionRunSnapshot("running", {
+          activities: restoration.activities,
+          currentActivityIndex: currentActivityIndexRef.current,
+          vaultSeconds: restoration.sessionVaultSeconds,
+          flowmodoroState: nextFlowState,
+        });
+      }
       return nextFlowState;
     },
     [isTimerActive, persistSessionRunSnapshot],
@@ -10465,10 +10477,7 @@ export default function App() {
       if (expired) next = removeScheduledRewardRest(false, next);
       flowmodoroStateRef.current = next;
       setFlowmodoroState(next);
-      localStorage.setItem(
-        "timeSliceFlowmodoro",
-        JSON.stringify(next),
-      );
+      localStorage.setItem("timeSliceFlowmodoro", JSON.stringify(next));
       void flushAppStorage();
       const nextReset = nextFlowRewardResetAt(now, expiry, resetTime);
       if (nextReset) {
@@ -10832,6 +10841,37 @@ export default function App() {
   const totalPercentage = activities
     .filter((activity) => !activity.countUp)
     .reduce((sum, activity) => sum + activity.percentage, 0);
+  const sharedSessionOccurrenceState = activities
+    .filter((activity) => activity.taskOccurrenceId)
+    .map(
+      (activity, index) =>
+        `${activity.taskOccurrenceId}:${activity.isCompleted ? "done" : index === currentActivityIndex && isTimerActive ? "active" : "planned"}`,
+    )
+    .join("|");
+  useEffect(() => {
+    if (!sharedSessionOccurrenceState) return;
+    activities.forEach((activity, index) => {
+      if (!activity.taskOccurrenceId) return;
+      if (activity.isCompleted) {
+        void completeTaskOccurrence(activity.taskOccurrenceId).catch((error) =>
+          console.error("Failed to complete shared Session occurrence", error),
+        );
+        return;
+      }
+      const status =
+        index === currentActivityIndex && isTimerActive ? "active" : "planned";
+      void updateTaskOccurrence(activity.taskOccurrenceId, { status }).catch(
+        (error) =>
+          console.error(
+            "Failed to synchronize shared Session occurrence",
+            error,
+          ),
+      );
+    });
+    // The serialized key intentionally changes only on semantic Session state
+    // transitions, not on timer ticks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedSessionOccurrenceState]);
 
   // Time window helpers
   const isWithinWindow = useCallback(
@@ -11029,10 +11069,9 @@ export default function App() {
       (settings.flowmodoroBankGoalMinutes || 0) * 60,
     );
     const scheduledSeconds = scheduledRewardRestSeconds(activitiesRef.current);
-    const room = goalSeconds > 0 ? Math.max(0, goalSeconds - scheduledSeconds) : Infinity;
-    scheduleBankedRest(
-      Math.min(flowmodoroState.relaxationVaultSeconds, room),
-    );
+    const room =
+      goalSeconds > 0 ? Math.max(0, goalSeconds - scheduledSeconds) : Infinity;
+    scheduleBankedRest(Math.min(flowmodoroState.relaxationVaultSeconds, room));
   }, [
     flowmodoroState.relaxationVaultSeconds,
     isTimerActive,
@@ -11097,15 +11136,15 @@ export default function App() {
       );
       if (shouldReset) {
         setFlowmodoroState((prev) => ({
-              ...prev,
-              availableRestTime: 0,
-              availableRestMinutes: 0,
-              totalEarnedToday: 0,
-              cycleCount: 0,
-              accumulatedFractionalTime: 0,
-              pendingCatchup: undefined,
-              lastResetDate: now.toDateString(),
-            }));
+          ...prev,
+          availableRestTime: 0,
+          availableRestMinutes: 0,
+          totalEarnedToday: 0,
+          cycleCount: 0,
+          accumulatedFractionalTime: 0,
+          pendingCatchup: undefined,
+          lastResetDate: now.toDateString(),
+        }));
       }
 
       if (elapsedSeconds <= 0) return;
@@ -12437,7 +12476,11 @@ export default function App() {
     console.log("Smart scheduled daily activity:", newActivity);
   };
 
-  const startDailyActivity = (activityId, momentum) => {
+  const startDailyActivity = (
+    activityId,
+    momentum,
+    activityOverride = null,
+  ) => {
     console.log("Starting daily activity:", activityId);
     const now = new Date();
     ensuredDailyRecordingRef.current = activityId;
@@ -12483,9 +12526,9 @@ export default function App() {
       return activities;
     });
     const previousActiveId = activeDailyActivity;
-    const selectedDaily = dailyActivities.find(
-      (activity) => activity.id === activityId,
-    );
+    const selectedDaily =
+      activityOverride ||
+      dailyActivities.find((activity) => activity.id === activityId);
     const dailyTargetMs = selectedDaily
       ? Math.max(
           0,
@@ -12586,6 +12629,19 @@ export default function App() {
     const selected = dailyActivities.find(
       (activity) => activity.id === activityId,
     );
+    if (selected?.taskOccurrenceId) {
+      const occurrenceMutation =
+        selected.status === "completed"
+          ? updateTaskOccurrence(selected.taskOccurrenceId, {
+              status: "planned",
+              completedAtMs: null,
+              completionSnapshot: null,
+            })
+          : completeTaskOccurrence(selected.taskOccurrenceId, nowMs);
+      void occurrenceMutation.catch((error) =>
+        console.error("Failed to update shared task occurrence", error),
+      );
+    }
     void persistModeTimer(
       `daily:${activityId}`,
       selected?.status === "completed" ? "reset" : "complete",
@@ -12595,6 +12651,62 @@ export default function App() {
     ).catch((error) =>
       console.error("Failed to persist Daily completion", error),
     );
+  };
+
+  const occurrenceToDailyActivity = (
+    occurrence: TaskOccurrenceRecord,
+  ): Activity => ({
+    id: `task-occurrence:${occurrence.id}`,
+    name: occurrence.title,
+    color: occurrence.color,
+    duration: Math.max(1, Math.round(occurrence.plannedDurationSeconds / 60)),
+    percentage: 0,
+    status:
+      occurrence.status === "completed"
+        ? "completed"
+        : occurrence.status === "active"
+          ? "active"
+          : "scheduled",
+    isActive: occurrence.status === "active",
+    timeSpent: Math.floor(occurrence.actualFocusedSeconds / 60),
+    timeSpentSeconds: occurrence.actualFocusedSeconds,
+    startedAt: null,
+    subtasks: [],
+    tags: occurrence.tagIds,
+    sharedId: `task-occurrence:${occurrence.id}`,
+    activityDefinitionId: occurrence.activityDefinitionId || undefined,
+    taskOccurrenceId: occurrence.id,
+    scheduledDate: occurrence.localDate || getLocalDateStr(),
+  });
+
+  const startPlannedOccurrence = (occurrence: TaskOccurrenceRecord) => {
+    const projected = occurrenceToDailyActivity(occurrence);
+    setDailyActivities((previous) => [
+      projected,
+      ...previous.filter(
+        (activity) => activity.taskOccurrenceId !== occurrence.id,
+      ),
+    ]);
+    startDailyActivity(projected.id, undefined, projected);
+  };
+
+  const completePlannedOccurrence = (occurrence: TaskOccurrenceRecord) => {
+    const projected = occurrenceToDailyActivity({
+      ...occurrence,
+      status: "completed",
+    });
+    setDailyActivities((previous) => [
+      projected,
+      ...previous.filter(
+        (activity) => activity.taskOccurrenceId !== occurrence.id,
+      ),
+    ]);
+    if (activeDailyActivity === projected.id) {
+      setActiveDailyActivity(null);
+      void persistModeTimer(`daily:${projected.id}`, "complete", undefined, {
+        endReason: "completed",
+      });
+    }
   };
 
   const stopDailyActivity = () => {
@@ -13300,8 +13412,7 @@ export default function App() {
         normalized[nextCurrentIndex]?.ownTimerCompleted
       ) {
         nextCurrentIndex = normalized.findIndex(
-          (activity) =>
-            !activity.isCompleted && !activity.ownTimerCompleted,
+          (activity) => !activity.isCompleted && !activity.ownTimerCompleted,
         );
       }
       nextCurrentIndex = Math.max(0, nextCurrentIndex);
@@ -13330,7 +13441,8 @@ export default function App() {
       const parentId = subActivityDialog.parentId;
       try {
         const childId = subActivityDialog.childId;
-        const id = childId ||
+        const id =
+          childId ||
           `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const result = childId
           ? increaseSessionSubActivity({
@@ -13364,6 +13476,69 @@ export default function App() {
     ],
   );
 
+  const addTaskOccurrenceToSession = (occurrence: TaskOccurrenceRecord) => {
+    setActivities((previous: Activity[]) => {
+      if (
+        previous.some((activity) => activity.taskOccurrenceId === occurrence.id)
+      )
+        return previous;
+      const totalSeconds = Math.max(60, calculateTotalSessionMinutes() * 60);
+      const requestedSeconds = Math.min(
+        totalSeconds,
+        Math.max(
+          60,
+          occurrence.plannedDurationSeconds - occurrence.actualFocusedSeconds,
+        ),
+      );
+      const requestedPercentage = Math.min(
+        100,
+        (requestedSeconds / totalSeconds) * 100,
+      );
+      const scalable = previous.filter((activity) => !activity.countUp);
+      const currentTotal = scalable.reduce(
+        (sum, activity) => sum + Math.max(0, Number(activity.percentage || 0)),
+        0,
+      );
+      const remainingPercentage = Math.max(0, 100 - requestedPercentage);
+      const scaled = previous.map((activity) => {
+        if (activity.countUp) return activity;
+        const percentage =
+          currentTotal > 0
+            ? (Math.max(0, Number(activity.percentage || 0)) / currentTotal) *
+              remainingPercentage
+            : scalable.length > 0
+              ? remainingPercentage / scalable.length
+              : 0;
+        const seconds = Math.round((percentage / 100) * totalSeconds);
+        return {
+          ...activity,
+          percentage,
+          duration: Math.round(seconds / 60),
+          timeRemaining: seconds,
+        };
+      });
+      return [
+        ...scaled,
+        {
+          id: `task-occurrence:${occurrence.id}`,
+          name: occurrence.title,
+          color: occurrence.color,
+          percentage: requestedPercentage,
+          duration: Math.round(requestedSeconds / 60),
+          timeRemaining: requestedSeconds,
+          originalPlannedSeconds: requestedSeconds,
+          isCompleted: false,
+          isLocked: false,
+          countUp: false,
+          tags: occurrence.tagIds,
+          sharedId: `task-occurrence:${occurrence.id}`,
+          activityDefinitionId: occurrence.activityDefinitionId || undefined,
+          taskOccurrenceId: occurrence.id,
+        },
+      ];
+    });
+  };
+
   const removeActivity = (id) => {
     const source = activitiesRef.current;
     const selected = source.find((activity) => activity.id === id);
@@ -13373,7 +13548,10 @@ export default function App() {
         childId: id,
         vaultSeconds: vaultTimeRef.current,
       });
-      commitSessionActivities(result.activities as Activity[], result.vaultSeconds);
+      commitSessionActivities(
+        result.activities as Activity[],
+        result.vaultSeconds,
+      );
       return;
     }
     const children = source.filter(
@@ -13626,8 +13804,8 @@ export default function App() {
   }, []);
   const reorderActivities = useCallback((dragId: string, targetId: string) => {
     if (dragId === targetId) return;
-    setActivities((prev) =>
-      reorderSessionHierarchy(prev, dragId, targetId) as Activity[],
+    setActivities(
+      (prev) => reorderSessionHierarchy(prev, dragId, targetId) as Activity[],
     );
   }, []);
 
@@ -13690,9 +13868,7 @@ export default function App() {
         !activities[requestedIndex].isCompleted &&
         !activities[requestedIndex].ownTimerCompleted
           ? requestedIndex
-          : activities.findIndex(
-              (a) => !a.isCompleted && !a.ownTimerCompleted,
-            );
+          : activities.findIndex((a) => !a.isCompleted && !a.ownTimerCompleted);
       const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
       const startingContext = sessionRecordingContext(activities[newIndex]);
       ensuredSessionRecordingRef.current = `${startingContext.activityId}:${startingContext.kind}`;
@@ -13892,7 +14068,9 @@ export default function App() {
 
   const handleCompleteActivity = (activityId: string) => {
     const completedAtMs = Date.now();
-    const requestedActivity = activities.find((activity) => activity.id === activityId);
+    const requestedActivity = activities.find(
+      (activity) => activity.id === activityId,
+    );
     if (
       requestedActivity &&
       !requestedActivity.parentActivityId &&
@@ -13966,7 +14144,10 @@ export default function App() {
       if (allChildrenCompleted) {
         updatedActivities = updatedActivities.map((activity) => {
           if (activity.id !== parentId || activity.isCompleted) return activity;
-          const planned = Math.max(0, Math.round(Number(activity.duration || 0) * 60));
+          const planned = Math.max(
+            0,
+            Math.round(Number(activity.duration || 0) * 60),
+          );
           const remaining = Math.max(0, Number(activity.timeRemaining || 0));
           timeToVault += remaining;
           return {
@@ -14015,6 +14196,17 @@ export default function App() {
       reordered = [...remaining, completedActivity];
     }
     setActivities(reordered);
+
+    if (requestedActivity?.taskOccurrenceId) {
+      window.setTimeout(() => {
+        void completeTaskOccurrence(
+          requestedActivity.taskOccurrenceId!,
+          completedAtMs,
+        ).catch((error) =>
+          console.error("Failed to complete shared Session task", error),
+        );
+      }, 100);
+    }
 
     // Shared progress sync will be handled by useEffect
 
@@ -14701,8 +14893,7 @@ export default function App() {
   const rewardBankGoalReached =
     rewardBankGoalSeconds > 0 &&
     rewardBank.totalSeconds >= rewardBankGoalSeconds;
-  const rewardBankDisplayMode =
-    settings.flowmodoroBankDisplayMode || "split";
+  const rewardBankDisplayMode = settings.flowmodoroBankDisplayMode || "split";
 
   const mainContent =
     currentPage === "manage-activities" ? (
@@ -15074,10 +15265,10 @@ export default function App() {
                             ? "Break in progress – click settings to adjust"
                             : flowmodoroState.availableRestTime > 0
                               ? "Click to start break with earned Flow time"
-                            : rewardBank.totalSeconds > 0
-                              ? `Reward Bank ${formatTime(
-                                  rewardBank.totalSeconds,
-                                )} total; ${formatTime(rewardBank.availableSeconds)} available to spend.`
+                              : rewardBank.totalSeconds > 0
+                                ? `Reward Bank ${formatTime(
+                                    rewardBank.totalSeconds,
+                                  )} total; ${formatTime(rewardBank.availableSeconds)} available to spend.`
                                 : "No Flow time yet – click to adjust settings"
                         }
                         className="relative overflow-hidden flex items-center justify-between w-full text-left p-2 rounded-lg border bg-purple-50 border-purple-200 hover:bg-purple-100 focus:outline-none focus:ring-2 focus:ring-purple-400 transition-colors"
@@ -15267,7 +15458,8 @@ export default function App() {
                             aria-label={`Complete ${activity.name}`}
                             checked={activity.isCompleted}
                             disabled={
-                              activity.isCompleted || unfinishedChildren.length > 0
+                              activity.isCompleted ||
+                              unfinishedChildren.length > 0
                             }
                             title={
                               unfinishedChildren.length > 0
@@ -15295,7 +15487,8 @@ export default function App() {
                           {activity.ownTimerCompleted &&
                             !activity.isCompleted && (
                               <span className="text-[10px] font-medium text-slate-500">
-                                own timer done · {unfinishedChildren.length} left
+                                own timer done · {unfinishedChildren.length}{" "}
+                                left
                               </span>
                             )}
                           {percentOnly && settings.showActivityProgress && (
@@ -15489,11 +15682,12 @@ export default function App() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setCatalogManagerOpen(true)}
+                  onClick={() => setTasksHubOpen(true)}
+                  aria-label="Manage Activities and Tasks"
                   className="flex-1 sm:flex-none h-9 text-sm"
                 >
                   <Icon name="settings" className="h-4 w-4 mr-2" />
-                  Manage Activities
+                  Tasks
                 </Button>
                 <Button
                   variant="outline"
@@ -16716,7 +16910,8 @@ export default function App() {
                               <p className="text-xs text-gray-500 mt-1">
                                 Reward earned above Quick Reserve capacity is
                                 banked here. Available and scheduled Reward Rest
-                                are one shared holding and never change Predicted End.
+                                are one shared holding and never change
+                                Predicted End.
                               </p>
                             </div>
                             <label className="flex items-start gap-3 rounded-md border border-violet-200 bg-violet-50 p-3">
@@ -16748,7 +16943,10 @@ export default function App() {
                             </label>
                             <div className="grid gap-3 sm:grid-cols-2">
                               <div className="space-y-1">
-                                <Label htmlFor="flow-quick-cap" className="text-sm">
+                                <Label
+                                  htmlFor="flow-quick-cap"
+                                  className="text-sm"
+                                >
                                   Quick Reserve capacity
                                 </Label>
                                 <div className="flex items-center gap-2">
@@ -16758,23 +16956,33 @@ export default function App() {
                                     inputMode="numeric"
                                     min={0}
                                     max={1440}
-                                    value={settings.flowmodoroQuickReserveMinutes}
+                                    value={
+                                      settings.flowmodoroQuickReserveMinutes
+                                    }
                                     onChange={(event) =>
                                       setSettings((previous) => ({
                                         ...previous,
                                         flowmodoroQuickReserveMinutes: Math.max(
                                           0,
-                                          Math.min(1440, Number(event.target.value) || 0),
+                                          Math.min(
+                                            1440,
+                                            Number(event.target.value) || 0,
+                                          ),
                                         ),
                                       }))
                                     }
                                     className="w-24"
                                   />
-                                  <span className="text-xs text-gray-500">minutes</span>
+                                  <span className="text-xs text-gray-500">
+                                    minutes
+                                  </span>
                                 </div>
                               </div>
                               <div className="space-y-1">
-                                <Label htmlFor="flow-bank-goal" className="text-sm">
+                                <Label
+                                  htmlFor="flow-bank-goal"
+                                  className="text-sm"
+                                >
                                   Reward Bank goal
                                 </Label>
                                 <div className="flex items-center gap-2">
@@ -16790,7 +16998,10 @@ export default function App() {
                                         ...previous,
                                         flowmodoroBankGoalMinutes: Math.max(
                                           0,
-                                          Math.min(10080, Number(event.target.value) || 0),
+                                          Math.min(
+                                            10080,
+                                            Number(event.target.value) || 0,
+                                          ),
                                         ),
                                       }))
                                     }
@@ -16869,16 +17080,19 @@ export default function App() {
                             <div className="space-y-2">
                               <Label className="text-sm">Bank display</Label>
                               <div className="grid grid-cols-3 gap-2">
-                                {([
-                                  ["split", "Total + split"],
-                                  ["available", "Available"],
-                                  ["mirrored", "Mirrored total"],
-                                ] as const).map(([value, label]) => (
+                                {(
+                                  [
+                                    ["split", "Total + split"],
+                                    ["available", "Available"],
+                                    ["mirrored", "Mirrored total"],
+                                  ] as const
+                                ).map(([value, label]) => (
                                   <Button
                                     key={value}
                                     size="sm"
                                     variant={
-                                      settings.flowmodoroBankDisplayMode === value
+                                      settings.flowmodoroBankDisplayMode ===
+                                      value
                                         ? "default"
                                         : "outline"
                                     }
@@ -16940,17 +17154,13 @@ export default function App() {
                               <span className="text-sm text-violet-800">
                                 Bank total:{" "}
                                 <strong>
-                                  {formatTime(
-                                    rewardBank.totalSeconds,
-                                  )}
+                                  {formatTime(rewardBank.totalSeconds)}
                                 </strong>
                               </span>
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={
-                                  rewardBank.totalSeconds <= 0
-                                }
+                                disabled={rewardBank.totalSeconds <= 0}
                                 onClick={() => {
                                   if (
                                     window.confirm(
@@ -17274,519 +17484,245 @@ export default function App() {
                   </div>
                 </>
               ) : currentMode === "daily" ? (
-                // Daily Mode Content
-                <>
-                  <h2 className="text-lg sm:text-xl font-semibold">
-                    Daily Progress
-                  </h2>
-
-                  {/* Current Time Display */}
-                  <div className="text-center p-3 bg-blue-50 rounded-lg">
-                    <div className="text-lg font-semibold text-blue-800">
-                      Current Time:{" "}
-                      {currentTime.toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        hour12: false,
-                      })}
+                settings.dailyPlannerVersion === "tasks-v1" ? (
+                  <DailyPlanner
+                    onStart={startPlannedOccurrence}
+                    onComplete={completePlannedOccurrence}
+                    onUseLegacy={() =>
+                      setSettings((previous) => ({
+                        ...previous,
+                        dailyPlannerVersion: "legacy",
+                      }))
+                    }
+                    onOnboarded={() =>
+                      setSettings((previous) => ({
+                        ...previous,
+                        dailyPlannerVersion: "tasks-v1",
+                      }))
+                    }
+                  />
+                ) : (
+                  // Legacy Daily Mode Content
+                  <>
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <strong className="text-indigo-950">
+                            Shared Tasks planner
+                          </strong>
+                          <p className="text-xs text-slate-600">
+                            Try the occurrence-based Inbox, recurrence and
+                            capacity planner. Existing Daily data stays
+                            untouched.
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() =>
+                            setSettings((previous) => ({
+                              ...previous,
+                              dailyPlannerVersion: "tasks-v1",
+                            }))
+                          }
+                          className="min-h-11 shrink-0 bg-indigo-600"
+                        >
+                          Set up
+                        </Button>
+                      </div>
                     </div>
-                    <div className="text-sm text-blue-600">
-                      Until Reset (00:30):{" "}
-                      {Math.floor(
-                        (24 * 60 -
+                    <h2 className="text-lg sm:text-xl font-semibold">
+                      Daily Progress
+                    </h2>
+
+                    {/* Current Time Display */}
+                    <div className="text-center p-3 bg-blue-50 rounded-lg">
+                      <div className="text-lg font-semibold text-blue-800">
+                        Current Time:{" "}
+                        {currentTime.toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          hour12: false,
+                        })}
+                      </div>
+                      <div className="text-sm text-blue-600">
+                        Until Reset (00:30):{" "}
+                        {Math.floor(
+                          (24 * 60 -
+                            (currentTime.getHours() * 60 +
+                              currentTime.getMinutes()) +
+                            30) /
+                            60,
+                        )}
+                        h{" "}
+                        {(24 * 60 -
                           (currentTime.getHours() * 60 +
                             currentTime.getMinutes()) +
-                          30) /
-                          60,
-                      )}
-                      h{" "}
-                      {(24 * 60 -
-                        (currentTime.getHours() * 60 +
-                          currentTime.getMinutes()) +
-                        30) %
-                        60}
-                      m remaining
-                    </div>
-                  </div>
-
-                  {/* Flowmodoro Rest Timer for Daily Mode */}
-                  {settings.flowmodoroEnabled && (
-                    <FlowmodoroActivity
-                      flowState={flowmodoroState}
-                      settings={settings}
-                      onTakeBreak={takeFlowmodoroBreak}
-                      onSkipBreak={skipFlowmodoroBreak}
-                      onReset={resetFlowmodoroState}
-                      isTimerActive={!!activeDailyActivity}
-                      formatTime={formatTime}
-                    />
-                  )}
-
-                  {/* Dynamic Timeline Bar */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3
-                        className="text-md font-semibold"
-                        title="Red line = now • Darker segment = elapsed portion of the day"
-                      >
-                        Daily Timeline
-                      </h3>
-                      <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-1 text-xs text-gray-600 select-none cursor-pointer">
-                          <input
-                            type="checkbox"
-                            className="h-3 w-3"
-                            checked={!!settings.dailyHideCompleted}
-                            onChange={(e) =>
-                              setSettings((s) => ({
-                                ...s,
-                                dailyHideCompleted: e.target.checked,
-                              }))
-                            }
-                          />
-                          Hide completed
-                        </label>
-                        <div className="text-sm text-gray-600">
-                          <span className="font-medium text-emerald-600">
-                            {Math.round(getDailyOverallProgress())}%
-                          </span>
-                          <span className="ml-1">complete</span>
-                        </div>
+                          30) %
+                          60}
+                        m remaining
                       </div>
                     </div>
 
-                    {/* Improved Timeline Bar - Clickable */}
-                    <div
-                      className="relative h-24 bg-gray-50 rounded-lg overflow-hidden border-2 border-gray-200 cursor-pointer hover:border-gray-300 transition-colors"
-                      onClick={() =>
-                        setTimelineViewMode((prev) =>
-                          prev === "scheduled" ? "full" : "scheduled",
-                        )
-                      }
-                      title={`Click to toggle view: ${timelineViewMode === "scheduled" ? "Show full day with unscheduled time" : "Show only scheduled activities"}`}
-                    >
-                      {/* Overall Progress Overlay */}
-                      <div
-                        className={`absolute top-0 left-0 h-full timeline-progress-overlay z-10 ${
-                          activeDailyActivity ? "active" : ""
-                        }`}
-                        style={{
-                          width: `${getDailyOverallProgress()}%`,
-                        }}
-                        title={`Daily Progress: ${Math.round(getDailyOverallProgress())}% complete`}
+                    {/* Flowmodoro Rest Timer for Daily Mode */}
+                    {settings.flowmodoroEnabled && (
+                      <FlowmodoroActivity
+                        flowState={flowmodoroState}
+                        settings={settings}
+                        onTakeBreak={takeFlowmodoroBreak}
+                        onSkipBreak={skipFlowmodoroBreak}
+                        onReset={resetFlowmodoroState}
+                        isTimerActive={!!activeDailyActivity}
+                        formatTime={formatTime}
                       />
+                    )}
 
-                      {/* Elapsed Day Overlay (full-day view): subtle darker segment from 00:30 to now */}
-                      {timelineViewMode === "full" &&
-                        settings.dailyShowElapsedDayOverlay &&
-                        (() => {
+                    {/* Dynamic Timeline Bar */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3
+                          className="text-md font-semibold"
+                          title="Red line = now • Darker segment = elapsed portion of the day"
+                        >
+                          Daily Timeline
+                        </h3>
+                        <div className="flex items-center gap-3">
+                          <label className="flex items-center gap-1 text-xs text-gray-600 select-none cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="h-3 w-3"
+                              checked={!!settings.dailyHideCompleted}
+                              onChange={(e) =>
+                                setSettings((s) => ({
+                                  ...s,
+                                  dailyHideCompleted: e.target.checked,
+                                }))
+                              }
+                            />
+                            Hide completed
+                          </label>
+                          <div className="text-sm text-gray-600">
+                            <span className="font-medium text-emerald-600">
+                              {Math.round(getDailyOverallProgress())}%
+                            </span>
+                            <span className="ml-1">complete</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Improved Timeline Bar - Clickable */}
+                      <div
+                        className="relative h-24 bg-gray-50 rounded-lg overflow-hidden border-2 border-gray-200 cursor-pointer hover:border-gray-300 transition-colors"
+                        onClick={() =>
+                          setTimelineViewMode((prev) =>
+                            prev === "scheduled" ? "full" : "scheduled",
+                          )
+                        }
+                        title={`Click to toggle view: ${timelineViewMode === "scheduled" ? "Show full day with unscheduled time" : "Show only scheduled activities"}`}
+                      >
+                        {/* Overall Progress Overlay */}
+                        <div
+                          className={`absolute top-0 left-0 h-full timeline-progress-overlay z-10 ${
+                            activeDailyActivity ? "active" : ""
+                          }`}
+                          style={{
+                            width: `${getDailyOverallProgress()}%`,
+                          }}
+                          title={`Daily Progress: ${Math.round(getDailyOverallProgress())}% complete`}
+                        />
+
+                        {/* Elapsed Day Overlay (full-day view): subtle darker segment from 00:30 to now */}
+                        {timelineViewMode === "full" &&
+                          settings.dailyShowElapsedDayOverlay &&
+                          (() => {
+                            const now = currentTime;
+                            const minutesNow =
+                              now.getHours() * 60 + now.getMinutes();
+                            let minutesSinceStart = minutesNow - 30; // day starts at 00:30
+                            if (minutesSinceStart < 0)
+                              minutesSinceStart += 24 * 60; // wrap
+                            const elapsedPct = Math.min(
+                              100,
+                              Math.max(
+                                0,
+                                (minutesSinceStart / (24 * 60)) * 100,
+                              ),
+                            );
+                            return (
+                              <div
+                                className="absolute top-0 left-0 h-full bg-slate-400/20 z-0 pointer-events-none"
+                                style={{ width: `${elapsedPct}%` }}
+                                title="Elapsed today"
+                              />
+                            );
+                          })()}
+
+                        {/* NOW Indicator (dynamic) */}
+                        {(() => {
+                          if (timelineViewMode !== "full") return null; // Only meaningful in full-day view
                           const now = currentTime;
                           const minutesNow =
                             now.getHours() * 60 + now.getMinutes();
                           let minutesSinceStart = minutesNow - 30; // day starts at 00:30
                           if (minutesSinceStart < 0)
-                            minutesSinceStart += 24 * 60; // wrap
-                          const elapsedPct = Math.min(
+                            minutesSinceStart += 24 * 60; // wrap to previous day start
+                          const nowLeftPercent = Math.min(
                             100,
                             Math.max(0, (minutesSinceStart / (24 * 60)) * 100),
                           );
                           return (
                             <div
-                              className="absolute top-0 left-0 h-full bg-slate-400/20 z-0 pointer-events-none"
-                              style={{ width: `${elapsedPct}%` }}
-                              title="Elapsed today"
-                            />
+                              className="absolute top-0 w-1 h-full bg-red-500 z-30 shadow-lg"
+                              style={{ left: `${nowLeftPercent}%` }}
+                              title="NOW"
+                            >
+                              <div className="absolute -top-7 -left-3 text-xs font-bold text-red-600 bg-white px-1 rounded shadow">
+                                NOW
+                              </div>
+                            </div>
                           );
                         })()}
 
-                      {/* NOW Indicator (dynamic) */}
-                      {(() => {
-                        if (timelineViewMode !== "full") return null; // Only meaningful in full-day view
-                        const now = currentTime;
-                        const minutesNow =
-                          now.getHours() * 60 + now.getMinutes();
-                        let minutesSinceStart = minutesNow - 30; // day starts at 00:30
-                        if (minutesSinceStart < 0) minutesSinceStart += 24 * 60; // wrap to previous day start
-                        const nowLeftPercent = Math.min(
-                          100,
-                          Math.max(0, (minutesSinceStart / (24 * 60)) * 100),
-                        );
-                        return (
+                        {/* Flowmodoro Rest Time Bar (if enabled) */}
+                        {settings.flowmodoroEnabled && (
                           <div
-                            className="absolute top-0 w-1 h-full bg-red-500 z-30 shadow-lg"
-                            style={{ left: `${nowLeftPercent}%` }}
-                            title="NOW"
+                            className="absolute bottom-0 left-0 h-2 bg-gradient-to-r from-purple-400 to-purple-600 z-15 rounded-b-lg"
+                            style={{
+                              width: `${(() => {
+                                const now = new Date();
+                                const totalRemainingMinutes =
+                                  24 * 60 -
+                                  (now.getHours() * 60 + now.getMinutes()) +
+                                  30;
+                                const availableRestPercentage =
+                                  (flowmodoroState.availableRestMinutes /
+                                    totalRemainingMinutes) *
+                                  100;
+                                return Math.min(availableRestPercentage, 100);
+                              })()}%`,
+                            }}
+                            title={`Available Rest Time: ${Math.floor(flowmodoroState.availableRestTime / 60)}m ${flowmodoroState.availableRestTime % 60}s earned`}
                           >
-                            <div className="absolute -top-7 -left-3 text-xs font-bold text-red-600 bg-white px-1 rounded shadow">
-                              NOW
+                            <div className="absolute -top-5 left-2 text-xs text-purple-600 font-medium">
+                              {Math.floor(
+                                flowmodoroState.availableRestTime / 60,
+                              )}
+                              m {flowmodoroState.availableRestTime % 60}s rest
+                              earned
                             </div>
                           </div>
-                        );
-                      })()}
+                        )}
 
-                      {/* Flowmodoro Rest Time Bar (if enabled) */}
-                      {settings.flowmodoroEnabled && (
-                        <div
-                          className="absolute bottom-0 left-0 h-2 bg-gradient-to-r from-purple-400 to-purple-600 z-15 rounded-b-lg"
-                          style={{
-                            width: `${(() => {
-                              const now = new Date();
-                              const totalRemainingMinutes =
-                                24 * 60 -
-                                (now.getHours() * 60 + now.getMinutes()) +
-                                30;
-                              const availableRestPercentage =
-                                (flowmodoroState.availableRestMinutes /
-                                  totalRemainingMinutes) *
-                                100;
-                              return Math.min(availableRestPercentage, 100);
-                            })()}%`,
-                          }}
-                          title={`Available Rest Time: ${Math.floor(flowmodoroState.availableRestTime / 60)}m ${flowmodoroState.availableRestTime % 60}s earned`}
-                        >
-                          <div className="absolute -top-5 left-2 text-xs text-purple-600 font-medium">
-                            {Math.floor(flowmodoroState.availableRestTime / 60)}
-                            m {flowmodoroState.availableRestTime % 60}s rest
-                            earned
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Timeline Content */}
-                      {(() => {
-                        const now = new Date();
-                        const totalRemainingMinutes =
-                          24 * 60 -
-                          (now.getHours() * 60 + now.getMinutes()) +
-                          30;
-                        const allPlannedMinutes = dailyActivities.reduce(
-                          (sum, a) => sum + a.duration,
-                          0,
-                        );
-                        const timelineActivitiesBase =
-                          settings.dailyHideCompleted
-                            ? dailyActivities.filter(
-                                (a) => a.status !== "completed",
-                              )
-                            : dailyActivities;
-                        const timelineActivities =
-                          timelineViewMode === "scheduled"
-                            ? timelineActivitiesBase.filter((a) => {
-                                if (!settings.enableTimeWindowFiltering)
-                                  return true;
-                                const tpl = getTemplateById(a.templateId);
-                                const s = a.startTime ?? tpl?.startTime;
-                                const e = a.endTime ?? tpl?.endTime;
-                                return isWithinWindow(s, e);
-                              })
-                            : timelineActivitiesBase;
-                        const visiblePlannedMinutes = Math.max(
-                          1,
-                          timelineActivities.reduce(
-                            (sum, a) => sum + a.duration,
-                            0,
-                          ),
-                        );
-
-                        if (timelineViewMode === "scheduled") {
-                          // Show only scheduled activities, filling the entire bar (darker = past, thin red line = now)
-                          // Always show consistent view regardless of active state
-                          let currentPosition = 0;
-                          return timelineActivities.map((activity) => {
-                            const activityWidth =
-                              (activity.duration / visiblePlannedMinutes) * 100;
-                            const isActive =
-                              activity.status === "active" ||
-                              activity.status === "overtime";
-                            const realTimeSpent = getRealTimeSpent(activity);
-                            const urgency =
-                              getSoftDeadlineUrgencyFactor(activity);
-                            // Visual-only: increase progress subtly when urgency > 1 and cap at 100; treat early-completed as 100
-                            const basePct =
-                              activity.duration > 0
-                                ? (realTimeSpent / activity.duration) * 100
-                                : 0;
-                            const boosted = Math.min(
-                              100,
-                              basePct *
-                                (urgency > 1 ? 1 + (urgency - 1) * 0.2 : 1),
-                            );
-                            const progress =
-                              activity.status === "completed" &&
-                              activity.earlyCompleted
-                                ? 100
-                                : boosted;
-
-                            const element = (
-                              <div
-                                key={activity.id}
-                                className={`absolute top-0 h-full border-r border-white z-15 ${
-                                  isActive ? "ring-2 ring-yellow-300" : ""
-                                }`}
-                                style={{
-                                  left: `${currentPosition}%`,
-                                  width: `${activityWidth}%`,
-                                }}
-                                title={`${activity.name} - ${activity.duration}m planned${isActive ? " (ACTIVE)" : ""}`}
-                              >
-                                {/* Background segment with reduced opacity */}
-                                <div
-                                  style={{ backgroundColor: activity.color }}
-                                  className="h-full opacity-30"
-                                />
-
-                                {/* Progress fill with full activity color */}
-                                <div
-                                  className={`absolute top-0 left-0 h-full smooth-progress ${
-                                    isActive ? "real-time-active" : ""
-                                  } ${settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled && urgency > 1 ? "ring-2 ring-red-300" : ""}`}
-                                  style={{
-                                    width: `${progress}%`,
-                                    backgroundColor: activity.color,
-                                  }}
-                                />
-
-                                {/* Activity label */}
-                                <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium z-10">
-                                  <div className="truncate px-1">
-                                    {activity.name}
-                                  </div>
-                                  <div className="text-xs opacity-75">
-                                    {isActive && activity.status === "overtime"
-                                      ? "OVERTIME"
-                                      : isActive
-                                        ? "ACTIVE"
-                                        : `${activity.duration}m`}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                            currentPosition += activityWidth;
-                            return element;
-                          });
-                        } else {
-                          // Show full day view with unscheduled time (darker = past, thin red line = now)
-                          const plannedPercentageOfDay = Math.min(
-                            ((allPlannedMinutes || 0) / totalRemainingMinutes) *
-                              100,
-                            95,
-                          );
-                          const unscheduledPercentage = Math.max(
-                            100 - plannedPercentageOfDay,
-                            5,
-                          );
-
-                          return (
-                            <>
-                              {/* Planned Activities Section */}
-                              <div
-                                className="absolute top-0 h-full bg-blue-50 border-r-2 border-blue-300 z-5"
-                                style={{
-                                  left: "0%",
-                                  width: `${plannedPercentageOfDay}%`,
-                                }}
-                                title={`Planned activities: ${Math.floor(allPlannedMinutes / 60)}h ${allPlannedMinutes % 60}m`}
-                              >
-                                <div className="absolute top-1 left-1 text-xs font-medium text-blue-700">
-                                  Scheduled (
-                                  {formatMinutesHM(allPlannedMinutes)})
-                                </div>
-                              </div>
-
-                              {/* Activities within planned section */}
-                              {(() => {
-                                // Always show consistent view regardless of active state
-                                let currentPosition = 0;
-                                return timelineActivities.map((activity) => {
-                                  const activityWidth =
-                                    visiblePlannedMinutes > 0
-                                      ? (activity.duration /
-                                          visiblePlannedMinutes) *
-                                        plannedPercentageOfDay
-                                      : 0;
-                                  const isActive =
-                                    activity.status === "active" ||
-                                    activity.status === "overtime";
-                                  const realTimeSpent =
-                                    getRealTimeSpent(activity);
-                                  const urgency =
-                                    getSoftDeadlineUrgencyFactor(activity);
-                                  const visualProgressBase =
-                                    activity.duration > 0
-                                      ? (realTimeSpent / activity.duration) *
-                                        100
-                                      : 0;
-                                  const progress = Math.min(
-                                    100,
-                                    visualProgressBase *
-                                      (urgency > 1
-                                        ? 1 + (urgency - 1) * 0.2
-                                        : 1),
-                                  );
-
-                                  const element = (
-                                    <div
-                                      key={activity.id}
-                                      className={`absolute top-0 h-full z-15 ${
-                                        isActive ? "ring-2 ring-yellow-300" : ""
-                                      }`}
-                                      style={{
-                                        left: `${currentPosition}%`,
-                                        width: `${activityWidth}%`,
-                                      }}
-                                      title={`${activity.name} - ${activity.duration}m planned${isActive ? " (ACTIVE)" : ""}`}
-                                    >
-                                      {/* Background segment with reduced opacity */}
-                                      <div
-                                        style={{
-                                          backgroundColor: activity.color,
-                                        }}
-                                        className="h-full opacity-30"
-                                      />
-
-                                      {/* Progress fill with full activity color */}
-                                      <div
-                                        className={`absolute top-0 left-0 h-full smooth-progress ${
-                                          isActive ? "real-time-active" : ""
-                                        } ${settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled && urgency > 1 ? "ring-2 ring-red-300" : ""}`}
-                                        style={{
-                                          width: `${progress}%`,
-                                          backgroundColor: activity.color,
-                                        }}
-                                      />
-
-                                      {/* Activity label */}
-                                      <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium z-10">
-                                        <div className="font-medium">
-                                          {activity.name}
-                                        </div>
-                                        <div className="text-xs">
-                                          {isActive &&
-                                          activity.status === "overtime"
-                                            ? "OVERTIME"
-                                            : isActive
-                                              ? "ACTIVE"
-                                              : `${activity.duration}m`}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                  currentPosition += activityWidth;
-                                  return element;
-                                });
-                              })()}
-
-                              {/* Overlay hard time windows (if any) as thin bars across full timeline */}
-                              {(() => {
-                                // Use activityTemplates to find time windows
-                                const windows = activityTemplates
-                                  .filter((t) => t.startTime && t.endTime)
-                                  .map((t) => {
-                                    const [sh, sm] = t
-                                      .startTime!.split(":")
-                                      .map(Number);
-                                    const [eh, em] = t
-                                      .endTime!.split(":")
-                                      .map(Number);
-                                    const startMin = sh * 60 + sm;
-                                    const endMin = eh * 60 + em;
-                                    const dayStart = 30; // 00:30
-                                    const dayEnd = 24 * 60 + 30; // next day 00:30
-                                    // Normalize to [dayStart, dayEnd]
-                                    const normalize = (m: number) => {
-                                      let x = m - dayStart;
-                                      if (x < 0) x += 24 * 60;
-                                      return x;
-                                    };
-                                    let start = normalize(startMin);
-                                    let end = normalize(endMin);
-                                    let spansMidnight = false;
-                                    if (t.startTime! > t.endTime!)
-                                      spansMidnight = true;
-                                    return {
-                                      name: t.name,
-                                      color: t.color,
-                                      start,
-                                      end,
-                                      spansMidnight,
-                                    };
-                                  });
-                                return windows.map((w, i) => {
-                                  const total = 24 * 60; // minutes from 00:30 to next 00:30
-                                  const leftPct = (w.start / total) * 100;
-                                  const widthPct = w.spansMidnight
-                                    ? ((total - w.start) / total) * 100
-                                    : ((w.end - w.start) / total) * 100;
-                                  return (
-                                    <div
-                                      key={`win-${i}`}
-                                      className="absolute top-0 h-full z-10 pointer-events-none"
-                                      style={{
-                                        left: `${leftPct}%`,
-                                        width: `${widthPct}%`,
-                                      }}
-                                    >
-                                      <div
-                                        className="h-full opacity-10"
-                                        style={{ backgroundColor: w.color }}
-                                        title={`${w.name} window`}
-                                      />
-                                      <div
-                                        className="absolute -top-5 left-0 text-[10px] text-slate-700 bg-white/80 px-1 rounded border border-slate-200 shadow-sm"
-                                        title={`${w.name} time window`}
-                                      >
-                                        {w.name}
-                                      </div>
-                                    </div>
-                                  );
-                                });
-                              })()}
-
-                              {/* Unscheduled Free Time Section */}
-                              <div
-                                className="absolute top-0 h-full bg-gradient-to-r from-gray-200 to-gray-300 flex items-center justify-center text-gray-600 text-sm font-medium z-5"
-                                style={{
-                                  left: `${plannedPercentageOfDay}%`,
-                                  width: `${unscheduledPercentage}%`,
-                                }}
-                                title={`Free time: ${Math.round((Math.max(0, totalRemainingMinutes - allPlannedMinutes) / 60) * 10) / 10}h until 00:30`}
-                              >
-                                <div className="text-center">
-                                  <div className="font-medium">Free Time</div>
-                                  <div className="text-xs opacity-75">
-                                    {Math.round(
-                                      (Math.max(
-                                        0,
-                                        totalRemainingMinutes -
-                                          allPlannedMinutes,
-                                      ) /
-                                        60) *
-                                        10,
-                                    ) / 10}
-                                    h unscheduled
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* Visual separator between planned and free time */}
-                              <div
-                                className="absolute top-0 w-1 h-full bg-blue-400 z-25"
-                                style={{ left: `${plannedPercentageOfDay}%` }}
-                                title="Scheduled | Free time boundary"
-                              />
-                            </>
-                          );
-                        }
-                      })()}
-
-                      {/* Overall Progress Overlay when animation is disabled - show individual activity progress */}
-                      {!settings.dailyTimelineAnimation &&
-                        (() => {
+                        {/* Timeline Content */}
+                        {(() => {
                           const now = new Date();
                           const totalRemainingMinutes =
                             24 * 60 -
                             (now.getHours() * 60 + now.getMinutes()) +
                             30;
+                          const allPlannedMinutes = dailyActivities.reduce(
+                            (sum, a) => sum + a.duration,
+                            0,
+                          );
                           const timelineActivitiesBase =
                             settings.dailyHideCompleted
                               ? dailyActivities.filter(
@@ -17811,1098 +17747,1448 @@ export default function App() {
                               0,
                             ),
                           );
-                          const plannedPercentageOfDay =
-                            (visiblePlannedMinutes / totalRemainingMinutes) *
-                            100;
-                          let currentPosition = 0;
 
-                          return timelineActivities.map((activity) => {
-                            const activityWidth =
-                              (activity.duration / visiblePlannedMinutes) *
-                              plannedPercentageOfDay;
-                            const realTimeSpent = getRealTimeSpent(activity);
-                            let progress =
-                              activity.duration > 0
-                                ? Math.min(
-                                    100,
-                                    (realTimeSpent / activity.duration) * 100,
-                                  )
-                                : 0;
-                            if (
-                              activity.status === "completed" &&
-                              activity.earlyCompleted
-                            )
-                              progress = 100;
-                            const progressWidth =
-                              (progress / 100) * activityWidth;
+                          if (timelineViewMode === "scheduled") {
+                            // Show only scheduled activities, filling the entire bar (darker = past, thin red line = now)
+                            // Always show consistent view regardless of active state
+                            let currentPosition = 0;
+                            return timelineActivities.map((activity) => {
+                              const activityWidth =
+                                (activity.duration / visiblePlannedMinutes) *
+                                100;
+                              const isActive =
+                                activity.status === "active" ||
+                                activity.status === "overtime";
+                              const realTimeSpent = getRealTimeSpent(activity);
+                              const urgency =
+                                getSoftDeadlineUrgencyFactor(activity);
+                              // Visual-only: increase progress subtly when urgency > 1 and cap at 100; treat early-completed as 100
+                              const basePct =
+                                activity.duration > 0
+                                  ? (realTimeSpent / activity.duration) * 100
+                                  : 0;
+                              const boosted = Math.min(
+                                100,
+                                basePct *
+                                  (urgency > 1 ? 1 + (urgency - 1) * 0.2 : 1),
+                              );
+                              const progress =
+                                activity.status === "completed" &&
+                                activity.earlyCompleted
+                                  ? 100
+                                  : boosted;
 
-                            const element = (
-                              <div
-                                key={`progress-${activity.id}`}
-                                className="absolute top-0 h-full z-20 transition-all duration-1000"
-                                style={{
-                                  left: `${currentPosition}%`,
-                                  width: `${progressWidth}%`,
-                                  backgroundColor: activity.color,
-                                  opacity: 0.8,
-                                }}
-                                title={`${activity.name}: ${Math.round(progress)}% complete`}
-                              />
+                              const element = (
+                                <div
+                                  key={activity.id}
+                                  className={`absolute top-0 h-full border-r border-white z-15 ${
+                                    isActive ? "ring-2 ring-yellow-300" : ""
+                                  }`}
+                                  style={{
+                                    left: `${currentPosition}%`,
+                                    width: `${activityWidth}%`,
+                                  }}
+                                  title={`${activity.name} - ${activity.duration}m planned${isActive ? " (ACTIVE)" : ""}`}
+                                >
+                                  {/* Background segment with reduced opacity */}
+                                  <div
+                                    style={{ backgroundColor: activity.color }}
+                                    className="h-full opacity-30"
+                                  />
+
+                                  {/* Progress fill with full activity color */}
+                                  <div
+                                    className={`absolute top-0 left-0 h-full smooth-progress ${
+                                      isActive ? "real-time-active" : ""
+                                    } ${settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled && urgency > 1 ? "ring-2 ring-red-300" : ""}`}
+                                    style={{
+                                      width: `${progress}%`,
+                                      backgroundColor: activity.color,
+                                    }}
+                                  />
+
+                                  {/* Activity label */}
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium z-10">
+                                    <div className="truncate px-1">
+                                      {activity.name}
+                                    </div>
+                                    <div className="text-xs opacity-75">
+                                      {isActive &&
+                                      activity.status === "overtime"
+                                        ? "OVERTIME"
+                                        : isActive
+                                          ? "ACTIVE"
+                                          : `${activity.duration}m`}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                              currentPosition += activityWidth;
+                              return element;
+                            });
+                          } else {
+                            // Show full day view with unscheduled time (darker = past, thin red line = now)
+                            const plannedPercentageOfDay = Math.min(
+                              ((allPlannedMinutes || 0) /
+                                totalRemainingMinutes) *
+                                100,
+                              95,
                             );
-                            currentPosition += activityWidth;
-                            return element;
-                          });
-                        })()}
-                    </div>
+                            const unscheduledPercentage = Math.max(
+                              100 - plannedPercentageOfDay,
+                              5,
+                            );
 
-                    {/* Time Display below Timeline */}
-                    <div className="flex justify-between items-center text-sm font-medium">
-                      <div className="text-blue-600">
-                        Current:{" "}
-                        {currentTime.toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          hour12: false,
-                        })}
-                      </div>
-                      <div className="text-gray-600">
-                        {timelineViewMode === "scheduled"
-                          ? (() => {
-                              // For scheduled only mode: show predicted end time based on remaining activities
-                              const remainingMinutes =
-                                getRemainingPlannedMinutes();
-                              const endTime = new Date(
-                                currentTime.getTime() +
-                                  remainingMinutes * 60000,
-                              );
-                              return `Predicted End: ${endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`;
-                            })()
-                          : (() => {
-                              // For full day mode: show end of activities and end of day
-                              const remainingMinutes =
-                                getRemainingPlannedMinutes();
-                              const activitiesEndTime = new Date(
-                                currentTime.getTime() +
-                                  remainingMinutes * 60000,
-                              );
-                              const endOfDay = new Date();
-                              endOfDay.setHours(0, 30, 0, 0);
-                              endOfDay.setDate(endOfDay.getDate() + 1);
-                              return `Activities End: ${activitiesEndTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })} | Day End: ${endOfDay.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`;
-                            })()}
-                      </div>
-                    </div>
+                            return (
+                              <>
+                                {/* Planned Activities Section */}
+                                <div
+                                  className="absolute top-0 h-full bg-blue-50 border-r-2 border-blue-300 z-5"
+                                  style={{
+                                    left: "0%",
+                                    width: `${plannedPercentageOfDay}%`,
+                                  }}
+                                  title={`Planned activities: ${Math.floor(allPlannedMinutes / 60)}h ${allPlannedMinutes % 60}m`}
+                                >
+                                  <div className="absolute top-1 left-1 text-xs font-medium text-blue-700">
+                                    Scheduled (
+                                    {formatMinutesHM(allPlannedMinutes)})
+                                  </div>
+                                </div>
 
-                    {/* Timeline Info */}
-                    <div className="flex justify-between items-center text-xs text-gray-500 bg-blue-50 p-2 rounded">
-                      <span>
-                        {activeDailyActivity
-                          ? (() => {
-                              const activeActivity = dailyActivities.find(
-                                (a) => a.id === activeDailyActivity,
-                              );
-                              const timelineData =
-                                getActiveActivityTimelinePosition();
-                              return `▶ ${activeActivity?.name || "Activity"} - ${timelineData.timeRemaining}m left (${Math.round(timelineData.consumed)}% done)`;
-                            })()
-                          : `▶ Click "Start" to begin timeline tracking`}
-                      </span>
-                      <div className="flex items-center gap-4">
-                        <span
-                          className="bg-blue-100 px-2 py-1 rounded text-blue-700 font-medium cursor-pointer"
-                          onClick={() =>
-                            setTimelineViewMode((prev) =>
-                              prev === "scheduled" ? "full" : "scheduled",
-                            )
+                                {/* Activities within planned section */}
+                                {(() => {
+                                  // Always show consistent view regardless of active state
+                                  let currentPosition = 0;
+                                  return timelineActivities.map((activity) => {
+                                    const activityWidth =
+                                      visiblePlannedMinutes > 0
+                                        ? (activity.duration /
+                                            visiblePlannedMinutes) *
+                                          plannedPercentageOfDay
+                                        : 0;
+                                    const isActive =
+                                      activity.status === "active" ||
+                                      activity.status === "overtime";
+                                    const realTimeSpent =
+                                      getRealTimeSpent(activity);
+                                    const urgency =
+                                      getSoftDeadlineUrgencyFactor(activity);
+                                    const visualProgressBase =
+                                      activity.duration > 0
+                                        ? (realTimeSpent / activity.duration) *
+                                          100
+                                        : 0;
+                                    const progress = Math.min(
+                                      100,
+                                      visualProgressBase *
+                                        (urgency > 1
+                                          ? 1 + (urgency - 1) * 0.2
+                                          : 1),
+                                    );
+
+                                    const element = (
+                                      <div
+                                        key={activity.id}
+                                        className={`absolute top-0 h-full z-15 ${
+                                          isActive
+                                            ? "ring-2 ring-yellow-300"
+                                            : ""
+                                        }`}
+                                        style={{
+                                          left: `${currentPosition}%`,
+                                          width: `${activityWidth}%`,
+                                        }}
+                                        title={`${activity.name} - ${activity.duration}m planned${isActive ? " (ACTIVE)" : ""}`}
+                                      >
+                                        {/* Background segment with reduced opacity */}
+                                        <div
+                                          style={{
+                                            backgroundColor: activity.color,
+                                          }}
+                                          className="h-full opacity-30"
+                                        />
+
+                                        {/* Progress fill with full activity color */}
+                                        <div
+                                          className={`absolute top-0 left-0 h-full smooth-progress ${
+                                            isActive ? "real-time-active" : ""
+                                          } ${settings.dailySoftDeadlineVisuals && activity.softDeadlineEnabled && urgency > 1 ? "ring-2 ring-red-300" : ""}`}
+                                          style={{
+                                            width: `${progress}%`,
+                                            backgroundColor: activity.color,
+                                          }}
+                                        />
+
+                                        {/* Activity label */}
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-medium z-10">
+                                          <div className="font-medium">
+                                            {activity.name}
+                                          </div>
+                                          <div className="text-xs">
+                                            {isActive &&
+                                            activity.status === "overtime"
+                                              ? "OVERTIME"
+                                              : isActive
+                                                ? "ACTIVE"
+                                                : `${activity.duration}m`}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    );
+                                    currentPosition += activityWidth;
+                                    return element;
+                                  });
+                                })()}
+
+                                {/* Overlay hard time windows (if any) as thin bars across full timeline */}
+                                {(() => {
+                                  // Use activityTemplates to find time windows
+                                  const windows = activityTemplates
+                                    .filter((t) => t.startTime && t.endTime)
+                                    .map((t) => {
+                                      const [sh, sm] = t
+                                        .startTime!.split(":")
+                                        .map(Number);
+                                      const [eh, em] = t
+                                        .endTime!.split(":")
+                                        .map(Number);
+                                      const startMin = sh * 60 + sm;
+                                      const endMin = eh * 60 + em;
+                                      const dayStart = 30; // 00:30
+                                      const dayEnd = 24 * 60 + 30; // next day 00:30
+                                      // Normalize to [dayStart, dayEnd]
+                                      const normalize = (m: number) => {
+                                        let x = m - dayStart;
+                                        if (x < 0) x += 24 * 60;
+                                        return x;
+                                      };
+                                      let start = normalize(startMin);
+                                      let end = normalize(endMin);
+                                      let spansMidnight = false;
+                                      if (t.startTime! > t.endTime!)
+                                        spansMidnight = true;
+                                      return {
+                                        name: t.name,
+                                        color: t.color,
+                                        start,
+                                        end,
+                                        spansMidnight,
+                                      };
+                                    });
+                                  return windows.map((w, i) => {
+                                    const total = 24 * 60; // minutes from 00:30 to next 00:30
+                                    const leftPct = (w.start / total) * 100;
+                                    const widthPct = w.spansMidnight
+                                      ? ((total - w.start) / total) * 100
+                                      : ((w.end - w.start) / total) * 100;
+                                    return (
+                                      <div
+                                        key={`win-${i}`}
+                                        className="absolute top-0 h-full z-10 pointer-events-none"
+                                        style={{
+                                          left: `${leftPct}%`,
+                                          width: `${widthPct}%`,
+                                        }}
+                                      >
+                                        <div
+                                          className="h-full opacity-10"
+                                          style={{ backgroundColor: w.color }}
+                                          title={`${w.name} window`}
+                                        />
+                                        <div
+                                          className="absolute -top-5 left-0 text-[10px] text-slate-700 bg-white/80 px-1 rounded border border-slate-200 shadow-sm"
+                                          title={`${w.name} time window`}
+                                        >
+                                          {w.name}
+                                        </div>
+                                      </div>
+                                    );
+                                  });
+                                })()}
+
+                                {/* Unscheduled Free Time Section */}
+                                <div
+                                  className="absolute top-0 h-full bg-gradient-to-r from-gray-200 to-gray-300 flex items-center justify-center text-gray-600 text-sm font-medium z-5"
+                                  style={{
+                                    left: `${plannedPercentageOfDay}%`,
+                                    width: `${unscheduledPercentage}%`,
+                                  }}
+                                  title={`Free time: ${Math.round((Math.max(0, totalRemainingMinutes - allPlannedMinutes) / 60) * 10) / 10}h until 00:30`}
+                                >
+                                  <div className="text-center">
+                                    <div className="font-medium">Free Time</div>
+                                    <div className="text-xs opacity-75">
+                                      {Math.round(
+                                        (Math.max(
+                                          0,
+                                          totalRemainingMinutes -
+                                            allPlannedMinutes,
+                                        ) /
+                                          60) *
+                                          10,
+                                      ) / 10}
+                                      h unscheduled
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Visual separator between planned and free time */}
+                                <div
+                                  className="absolute top-0 w-1 h-full bg-blue-400 z-25"
+                                  style={{ left: `${plannedPercentageOfDay}%` }}
+                                  title="Scheduled | Free time boundary"
+                                />
+                              </>
+                            );
                           }
-                          title="Click timeline bar or here to toggle view"
-                        >
-                          📊 View:{" "}
-                          {timelineViewMode === "scheduled"
-                            ? "Scheduled Only"
-                            : "Full Day + Free Time"}
-                        </span>
-                        <span>
-                          {(() => {
+                        })()}
+
+                        {/* Overall Progress Overlay when animation is disabled - show individual activity progress */}
+                        {!settings.dailyTimelineAnimation &&
+                          (() => {
                             const now = new Date();
                             const totalRemainingMinutes =
                               24 * 60 -
                               (now.getHours() * 60 + now.getMinutes()) +
                               30;
-                            const totalPlannedMinutes = dailyActivities.reduce(
-                              (sum, a) => sum + a.duration,
-                              0,
+                            const timelineActivitiesBase =
+                              settings.dailyHideCompleted
+                                ? dailyActivities.filter(
+                                    (a) => a.status !== "completed",
+                                  )
+                                : dailyActivities;
+                            const timelineActivities =
+                              timelineViewMode === "scheduled"
+                                ? timelineActivitiesBase.filter((a) => {
+                                    if (!settings.enableTimeWindowFiltering)
+                                      return true;
+                                    const tpl = getTemplateById(a.templateId);
+                                    const s = a.startTime ?? tpl?.startTime;
+                                    const e = a.endTime ?? tpl?.endTime;
+                                    return isWithinWindow(s, e);
+                                  })
+                                : timelineActivitiesBase;
+                            const visiblePlannedMinutes = Math.max(
+                              1,
+                              timelineActivities.reduce(
+                                (sum, a) => sum + a.duration,
+                                0,
+                              ),
                             );
-                            const utilizationRate = Math.round(
-                              (totalPlannedMinutes / totalRemainingMinutes) *
-                                100,
-                            );
-                            return `Day Utilization: ${utilizationRate}%`;
-                          })()}
-                        </span>
-                        {settings.flowmodoroEnabled && (
-                          <span className="text-purple-600">
-                            Rest:{" "}
-                            {Math.floor(flowmodoroState.availableRestTime / 60)}
-                            m {flowmodoroState.availableRestTime % 60}s earned
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                            const plannedPercentageOfDay =
+                              (visiblePlannedMinutes / totalRemainingMinutes) *
+                              100;
+                            let currentPosition = 0;
 
-                  {/* Activity Controls - Session Mode Style */}
-                  <div className="space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <h3 className="text-md font-semibold">
-                        Today's Activities
-                      </h3>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 text-xs"
-                        >
-                          Auto-Schedule
-                        </Button>
-                        <Badge variant="default" className="text-xs">
-                          Total:{" "}
-                          {(() => {
-                            const summary = getDailySummary();
-                            return `${summary.totalPlannedHours}h ${summary.totalPlannedMinutes}m (${Math.round(summary.totalPlannedPercentage)}%)`;
-                          })()}
-                        </Badge>
-                      </div>
-                    </div>
-
-                    {/* Tag filter and radial feedback */}
-                    {(() => {
-                      const availableTags = canonicalTags
-                        .filter((tag) =>
-                          dailyActivities.some((activity) =>
-                            isTagAssigned(activity.tags, tag),
-                          ),
-                        )
-                        .map((tag) => ({
-                          id: tag.storageValue,
-                          name: tag.name,
-                          color: tag.color,
-                        }));
-                      const wheelActivities = dailyActivities.map(
-                        (activity) => {
-                          const actualSeconds =
-                            getRealTimeSpentInSeconds(activity);
-                          return {
-                            id: activity.id,
-                            name: activity.name,
-                            color:
-                              typeof activity.color === "string" &&
-                              /^(#|rgb|hsl)/.test(activity.color)
-                                ? activity.color
-                                : "#3b82f6",
-                            tagIds: normalizeAssignedTags(activity.tags),
-                            plannedSeconds: Math.max(
-                              0,
-                              Number(activity.duration || 0) * 60 -
-                                actualSeconds,
-                            ),
-                            actualSeconds,
-                          };
-                        },
-                      );
-                      const wheelModels = buildDailyTagWheels({
-                        activities: wheelActivities,
-                        tags: availableTags,
-                        selectedTagIds: tagFilter,
-                        metric: settings.dailyTagWheelMetric,
-                        layout: settings.dailyTagWheelLayout,
-                      });
-                      return (
-                        <div className="mb-3 space-y-2">
-                          <div className="flex gap-2">
-                            <input
-                              value={tagQuery}
-                              onChange={(event) =>
-                                setTagQuery(event.target.value)
-                              }
-                              placeholder="Filter by tag..."
-                              className="min-h-11 min-w-0 flex-1 rounded-lg border px-2 text-sm"
-                            />
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="min-h-11"
-                              onClick={() => {
-                                const query = tagQuery.trim();
-                                if (!query) return;
-                                const id = resolveTagId(query, availableTags);
-                                if (!tagFilter.includes(id))
-                                  setTagFilter([...tagFilter, id]);
-                                setTagQuery("");
-                              }}
-                            >
-                              Add
-                            </Button>
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {availableTags.map((tag) => {
-                              const selected = tagFilter.includes(tag.id);
-                              return (
-                                <button
-                                  key={tag.id}
-                                  type="button"
-                                  aria-pressed={selected}
-                                  onClick={() =>
-                                    setTagFilter((current) =>
-                                      selected
-                                        ? current.filter((id) => id !== tag.id)
-                                        : [...current, tag.id],
+                            return timelineActivities.map((activity) => {
+                              const activityWidth =
+                                (activity.duration / visiblePlannedMinutes) *
+                                plannedPercentageOfDay;
+                              const realTimeSpent = getRealTimeSpent(activity);
+                              let progress =
+                                activity.duration > 0
+                                  ? Math.min(
+                                      100,
+                                      (realTimeSpent / activity.duration) * 100,
                                     )
-                                  }
-                                  className={`min-h-11 rounded-full border px-3 text-xs font-semibold ${
-                                    selected
-                                      ? "border-indigo-500 bg-indigo-50 text-indigo-800"
-                                      : "border-slate-200 bg-white text-slate-600"
-                                  }`}
-                                >
-                                  <span
-                                    className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full"
-                                    style={{ backgroundColor: tag.color }}
-                                  />
-                                  {tag.name}
-                                </button>
-                              );
-                            })}
-                            {tagFilter.length > 0 && (
-                              <button
-                                className="min-h-11 px-2 text-xs font-semibold text-blue-600"
-                                onClick={() => setTagFilter([])}
-                              >
-                                Clear
-                              </button>
-                            )}
-                          </div>
-                          {tagFilter.length > 0 && (
-                            <>
-                              <div className="grid grid-cols-2 gap-2">
+                                  : 0;
+                              if (
+                                activity.status === "completed" &&
+                                activity.earlyCompleted
+                              )
+                                progress = 100;
+                              const progressWidth =
+                                (progress / 100) * activityWidth;
+
+                              const element = (
                                 <div
-                                  className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
-                                  aria-label="Tag wheel metric"
+                                  key={`progress-${activity.id}`}
+                                  className="absolute top-0 h-full z-20 transition-all duration-1000"
+                                  style={{
+                                    left: `${currentPosition}%`,
+                                    width: `${progressWidth}%`,
+                                    backgroundColor: activity.color,
+                                    opacity: 0.8,
+                                  }}
+                                  title={`${activity.name}: ${Math.round(progress)}% complete`}
+                                />
+                              );
+                              currentPosition += activityWidth;
+                              return element;
+                            });
+                          })()}
+                      </div>
+
+                      {/* Time Display below Timeline */}
+                      <div className="flex justify-between items-center text-sm font-medium">
+                        <div className="text-blue-600">
+                          Current:{" "}
+                          {currentTime.toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            hour12: false,
+                          })}
+                        </div>
+                        <div className="text-gray-600">
+                          {timelineViewMode === "scheduled"
+                            ? (() => {
+                                // For scheduled only mode: show predicted end time based on remaining activities
+                                const remainingMinutes =
+                                  getRemainingPlannedMinutes();
+                                const endTime = new Date(
+                                  currentTime.getTime() +
+                                    remainingMinutes * 60000,
+                                );
+                                return `Predicted End: ${endTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+                              })()
+                            : (() => {
+                                // For full day mode: show end of activities and end of day
+                                const remainingMinutes =
+                                  getRemainingPlannedMinutes();
+                                const activitiesEndTime = new Date(
+                                  currentTime.getTime() +
+                                    remainingMinutes * 60000,
+                                );
+                                const endOfDay = new Date();
+                                endOfDay.setHours(0, 30, 0, 0);
+                                endOfDay.setDate(endOfDay.getDate() + 1);
+                                return `Activities End: ${activitiesEndTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })} | Day End: ${endOfDay.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}`;
+                              })()}
+                        </div>
+                      </div>
+
+                      {/* Timeline Info */}
+                      <div className="flex justify-between items-center text-xs text-gray-500 bg-blue-50 p-2 rounded">
+                        <span>
+                          {activeDailyActivity
+                            ? (() => {
+                                const activeActivity = dailyActivities.find(
+                                  (a) => a.id === activeDailyActivity,
+                                );
+                                const timelineData =
+                                  getActiveActivityTimelinePosition();
+                                return `▶ ${activeActivity?.name || "Activity"} - ${timelineData.timeRemaining}m left (${Math.round(timelineData.consumed)}% done)`;
+                              })()
+                            : `▶ Click "Start" to begin timeline tracking`}
+                        </span>
+                        <div className="flex items-center gap-4">
+                          <span
+                            className="bg-blue-100 px-2 py-1 rounded text-blue-700 font-medium cursor-pointer"
+                            onClick={() =>
+                              setTimelineViewMode((prev) =>
+                                prev === "scheduled" ? "full" : "scheduled",
+                              )
+                            }
+                            title="Click timeline bar or here to toggle view"
+                          >
+                            📊 View:{" "}
+                            {timelineViewMode === "scheduled"
+                              ? "Scheduled Only"
+                              : "Full Day + Free Time"}
+                          </span>
+                          <span>
+                            {(() => {
+                              const now = new Date();
+                              const totalRemainingMinutes =
+                                24 * 60 -
+                                (now.getHours() * 60 + now.getMinutes()) +
+                                30;
+                              const totalPlannedMinutes =
+                                dailyActivities.reduce(
+                                  (sum, a) => sum + a.duration,
+                                  0,
+                                );
+                              const utilizationRate = Math.round(
+                                (totalPlannedMinutes / totalRemainingMinutes) *
+                                  100,
+                              );
+                              return `Day Utilization: ${utilizationRate}%`;
+                            })()}
+                          </span>
+                          {settings.flowmodoroEnabled && (
+                            <span className="text-purple-600">
+                              Rest:{" "}
+                              {Math.floor(
+                                flowmodoroState.availableRestTime / 60,
+                              )}
+                              m {flowmodoroState.availableRestTime % 60}s earned
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Activity Controls - Session Mode Style */}
+                    <div className="space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <h3 className="text-md font-semibold">
+                          Today's Activities
+                        </h3>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 text-xs"
+                          >
+                            Auto-Schedule
+                          </Button>
+                          <Badge variant="default" className="text-xs">
+                            Total:{" "}
+                            {(() => {
+                              const summary = getDailySummary();
+                              return `${summary.totalPlannedHours}h ${summary.totalPlannedMinutes}m (${Math.round(summary.totalPlannedPercentage)}%)`;
+                            })()}
+                          </Badge>
+                        </div>
+                      </div>
+
+                      {/* Tag filter and radial feedback */}
+                      {(() => {
+                        const availableTags = canonicalTags
+                          .filter((tag) =>
+                            dailyActivities.some((activity) =>
+                              isTagAssigned(activity.tags, tag),
+                            ),
+                          )
+                          .map((tag) => ({
+                            id: tag.storageValue,
+                            name: tag.name,
+                            color: tag.color,
+                          }));
+                        const wheelActivities = dailyActivities.map(
+                          (activity) => {
+                            const actualSeconds =
+                              getRealTimeSpentInSeconds(activity);
+                            return {
+                              id: activity.id,
+                              name: activity.name,
+                              color:
+                                typeof activity.color === "string" &&
+                                /^(#|rgb|hsl)/.test(activity.color)
+                                  ? activity.color
+                                  : "#3b82f6",
+                              tagIds: normalizeAssignedTags(activity.tags),
+                              plannedSeconds: Math.max(
+                                0,
+                                Number(activity.duration || 0) * 60 -
+                                  actualSeconds,
+                              ),
+                              actualSeconds,
+                            };
+                          },
+                        );
+                        const wheelModels = buildDailyTagWheels({
+                          activities: wheelActivities,
+                          tags: availableTags,
+                          selectedTagIds: tagFilter,
+                          metric: settings.dailyTagWheelMetric,
+                          layout: settings.dailyTagWheelLayout,
+                        });
+                        return (
+                          <div className="mb-3 space-y-2">
+                            <div className="flex gap-2">
+                              <input
+                                value={tagQuery}
+                                onChange={(event) =>
+                                  setTagQuery(event.target.value)
+                                }
+                                placeholder="Filter by tag..."
+                                className="min-h-11 min-w-0 flex-1 rounded-lg border px-2 text-sm"
+                              />
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="min-h-11"
+                                onClick={() => {
+                                  const query = tagQuery.trim();
+                                  if (!query) return;
+                                  const id = resolveTagId(query, availableTags);
+                                  if (!tagFilter.includes(id))
+                                    setTagFilter([...tagFilter, id]);
+                                  setTagQuery("");
+                                }}
+                              >
+                                Add
+                              </Button>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {availableTags.map((tag) => {
+                                const selected = tagFilter.includes(tag.id);
+                                return (
+                                  <button
+                                    key={tag.id}
+                                    type="button"
+                                    aria-pressed={selected}
+                                    onClick={() =>
+                                      setTagFilter((current) =>
+                                        selected
+                                          ? current.filter(
+                                              (id) => id !== tag.id,
+                                            )
+                                          : [...current, tag.id],
+                                      )
+                                    }
+                                    className={`min-h-11 rounded-full border px-3 text-xs font-semibold ${
+                                      selected
+                                        ? "border-indigo-500 bg-indigo-50 text-indigo-800"
+                                        : "border-slate-200 bg-white text-slate-600"
+                                    }`}
+                                  >
+                                    <span
+                                      className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full"
+                                      style={{ backgroundColor: tag.color }}
+                                    />
+                                    {tag.name}
+                                  </button>
+                                );
+                              })}
+                              {tagFilter.length > 0 && (
+                                <button
+                                  className="min-h-11 px-2 text-xs font-semibold text-blue-600"
+                                  onClick={() => setTagFilter([])}
                                 >
-                                  {(["plan", "actual"] as const).map(
-                                    (metric) => (
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                            {tagFilter.length > 0 && (
+                              <>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div
+                                    className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
+                                    aria-label="Tag wheel metric"
+                                  >
+                                    {(["plan", "actual"] as const).map(
+                                      (metric) => (
+                                        <button
+                                          key={metric}
+                                          type="button"
+                                          aria-pressed={
+                                            settings.dailyTagWheelMetric ===
+                                            metric
+                                          }
+                                          onClick={() =>
+                                            setSettings((current) => ({
+                                              ...current,
+                                              dailyTagWheelMetric: metric,
+                                            }))
+                                          }
+                                          className={`min-h-11 rounded-md text-xs font-semibold capitalize ${
+                                            settings.dailyTagWheelMetric ===
+                                            metric
+                                              ? "bg-white text-indigo-700 shadow-sm"
+                                              : "text-slate-600"
+                                          }`}
+                                        >
+                                          {metric}
+                                        </button>
+                                      ),
+                                    )}
+                                  </div>
+                                  <div
+                                    className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
+                                    aria-label="Tag wheel layout"
+                                  >
+                                    {[
+                                      ["per-tag", "Per tag"],
+                                      ["combined", "Combined"],
+                                    ].map(([layout, label]) => (
                                       <button
-                                        key={metric}
+                                        key={layout}
                                         type="button"
                                         aria-pressed={
-                                          settings.dailyTagWheelMetric ===
-                                          metric
+                                          settings.dailyTagWheelLayout ===
+                                          layout
                                         }
                                         onClick={() =>
                                           setSettings((current) => ({
                                             ...current,
-                                            dailyTagWheelMetric: metric,
+                                            dailyTagWheelLayout: layout,
                                           }))
                                         }
-                                        className={`min-h-11 rounded-md text-xs font-semibold capitalize ${
-                                          settings.dailyTagWheelMetric ===
-                                          metric
+                                        className={`min-h-11 rounded-md text-xs font-semibold ${
+                                          settings.dailyTagWheelLayout ===
+                                          layout
                                             ? "bg-white text-indigo-700 shadow-sm"
                                             : "text-slate-600"
                                         }`}
                                       >
-                                        {metric}
+                                        {label}
                                       </button>
-                                    ),
-                                  )}
+                                    ))}
+                                  </div>
                                 </div>
-                                <div
-                                  className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
-                                  aria-label="Tag wheel layout"
+                                <TagSectionBoundary
+                                  resetKey={`${settings.dailyTagWheelMetric}:${settings.dailyTagWheelLayout}:${tagFilter.join(",")}`}
+                                  onReset={() => setTagFilter([])}
                                 >
-                                  {[
-                                    ["per-tag", "Per tag"],
-                                    ["combined", "Combined"],
-                                  ].map(([layout, label]) => (
-                                    <button
-                                      key={layout}
-                                      type="button"
-                                      aria-pressed={
-                                        settings.dailyTagWheelLayout === layout
-                                      }
-                                      onClick={() =>
-                                        setSettings((current) => ({
-                                          ...current,
-                                          dailyTagWheelLayout: layout,
-                                        }))
-                                      }
-                                      className={`min-h-11 rounded-md text-xs font-semibold ${
-                                        settings.dailyTagWheelLayout === layout
-                                          ? "bg-white text-indigo-700 shadow-sm"
-                                          : "text-slate-600"
-                                      }`}
-                                    >
-                                      {label}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                              <TagSectionBoundary
-                                resetKey={`${settings.dailyTagWheelMetric}:${settings.dailyTagWheelLayout}:${tagFilter.join(",")}`}
-                                onReset={() => setTagFilter([])}
-                              >
-                                <DailyTagWheels
-                                  models={wheelModels}
-                                  metric={settings.dailyTagWheelMetric}
-                                />
-                              </TagSectionBoundary>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    {/* Dynamic Activity Cards */}
-                    <div className="space-y-2">
-                      {(() => {
-                        const base = tagFilter.length
-                          ? dailyActivities.filter((a) =>
-                              (a.tags || []).some((t) =>
-                                tagFilter.includes(
-                                  resolveTagId(
-                                    String(t),
-                                    canonicalTagWheelTags,
+                                  <DailyTagWheels
+                                    models={wheelModels}
+                                    metric={settings.dailyTagWheelMetric}
+                                  />
+                                </TagSectionBoundary>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
+                      {/* Dynamic Activity Cards */}
+                      <div className="space-y-2">
+                        {(() => {
+                          const base = tagFilter.length
+                            ? dailyActivities.filter((a) =>
+                                (a.tags || []).some((t) =>
+                                  tagFilter.includes(
+                                    resolveTagId(
+                                      String(t),
+                                      canonicalTagWheelTags,
+                                    ),
                                   ),
                                 ),
-                              ),
-                            )
-                          : dailyActivities;
-                        const visible = settings.dailyHideCompleted
-                          ? base.filter((a) => a.status !== "completed")
-                          : base;
-                        return visible;
-                      })().map((activity) => {
-                        // Calculate activity progress for daily mode with real-time updates
-                        const realTimeSpent = getRealTimeSpent(activity);
+                              )
+                            : dailyActivities;
+                          const visible = settings.dailyHideCompleted
+                            ? base.filter((a) => a.status !== "completed")
+                            : base;
+                          return visible;
+                        })().map((activity) => {
+                          // Calculate activity progress for daily mode with real-time updates
+                          const realTimeSpent = getRealTimeSpent(activity);
 
-                        // Enhanced progress calculation with better persistence
-                        let actualProgress = 0;
-                        if (activity.duration > 0) {
-                          if (
-                            activity.status === "active" &&
-                            activity.startedAt
-                          ) {
-                            // For active activities, include real-time seconds
-                            const currentSessionSeconds = Math.floor(
-                              (currentTime.getTime() - activity.startedAt) /
-                                1000,
+                          // Enhanced progress calculation with better persistence
+                          let actualProgress = 0;
+                          if (activity.duration > 0) {
+                            if (
+                              activity.status === "active" &&
+                              activity.startedAt
+                            ) {
+                              // For active activities, include real-time seconds
+                              const currentSessionSeconds = Math.floor(
+                                (currentTime.getTime() - activity.startedAt) /
+                                  1000,
+                              );
+                              const totalSecondsSpent =
+                                currentSessionSeconds + activity.timeSpent * 60;
+                              actualProgress =
+                                (totalSecondsSpent / (activity.duration * 60)) *
+                                100;
+                            } else {
+                              // For paused/completed activities, use accumulated timeSpent
+                              actualProgress =
+                                (realTimeSpent / activity.duration) * 100;
+                            }
+                            actualProgress = Math.min(
+                              100,
+                              Math.max(0, actualProgress),
                             );
-                            const totalSecondsSpent =
-                              currentSessionSeconds + activity.timeSpent * 60;
-                            actualProgress =
-                              (totalSecondsSpent / (activity.duration * 60)) *
-                              100;
-                          } else {
-                            // For paused/completed activities, use accumulated timeSpent
-                            actualProgress =
-                              (realTimeSpent / activity.duration) * 100;
+                            if (
+                              activity.status === "completed" &&
+                              activity.earlyCompleted
+                            ) {
+                              actualProgress = 100;
+                            }
                           }
-                          actualProgress = Math.min(
-                            100,
-                            Math.max(0, actualProgress),
-                          );
-                          if (
-                            activity.status === "completed" &&
-                            activity.earlyCompleted
-                          ) {
-                            actualProgress = 100;
-                          }
-                        }
 
-                        // Fix: For drain mode, show remaining progress (100 - filled percentage)
-                        const displayProgress =
-                          settings.dailyActivityProgressType === "fill"
-                            ? actualProgress
-                            : Math.max(0, 100 - actualProgress);
+                          // Fix: For drain mode, show remaining progress (100 - filled percentage)
+                          const displayProgress =
+                            settings.dailyActivityProgressType === "fill"
+                              ? actualProgress
+                              : Math.max(0, 100 - actualProgress);
 
-                        // Calculate earned rest time for this activity (if flowmodoro enabled)
-                        const earnedRestMinutes = settings.flowmodoroEnabled
-                          ? Math.floor(realTimeSpent / settings.flowmodoroRatio)
-                          : 0;
-                        const isVisuallyInactive =
-                          activity.status === "completed" ||
-                          Number(activity.duration || 0) === 0;
+                          // Calculate earned rest time for this activity (if flowmodoro enabled)
+                          const earnedRestMinutes = settings.flowmodoroEnabled
+                            ? Math.floor(
+                                realTimeSpent / settings.flowmodoroRatio,
+                              )
+                            : 0;
+                          const isVisuallyInactive =
+                            activity.status === "completed" ||
+                            Number(activity.duration || 0) === 0;
 
-                        return (
-                          <div
-                            key={activity.id}
-                            className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
-                              activity.status === "completed"
-                                ? "border-slate-200 cursor-pointer"
-                                : activity.status === "overtime"
-                                  ? "border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer"
-                                  : activity.status === "active"
-                                    ? "border-blue-400 shadow-md ring-1 ring-blue-200 cursor-pointer"
-                                    : "bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer"
-                            } ${
-                              // Add animation effects when enabled and activity is active
-                              settings.dailyTimelineAnimation &&
-                              activity.status === "active"
-                                ? "transform scale-90 -translate-x-4 shadow-xl transition-all duration-500"
-                                : "transition-all duration-300"
-                            } ${settings.showRolloverIndicators && activity.rolledOverFromYesterday ? "border-dashed border-2" : ""} ${
-                              isVisuallyInactive
-                                ? "opacity-40 saturate-[.35]"
-                                : "opacity-100"
-                            }`}
-                            style={{
-                              backgroundColor:
+                          return (
+                            <div
+                              key={activity.id}
+                              className={`relative overflow-hidden border rounded-lg p-3 transition-all duration-200 ${
                                 activity.status === "completed"
-                                  ? "#f8fafc"
+                                  ? "border-slate-200 cursor-pointer"
                                   : activity.status === "overtime"
-                                    ? "#fef2f2"
+                                    ? "border-red-300 shadow-md ring-1 ring-red-200 cursor-pointer"
                                     : activity.status === "active"
-                                      ? "#eff6ff"
-                                      : activity.rolledOverFromYesterday
-                                        ? "#fafafa"
-                                        : "#ffffff",
-                              boxShadow:
-                                activity.status === "completed"
-                                  ? "none"
-                                  : undefined,
-                            }}
-                            onClick={() => {
-                              if (activity.status === "scheduled") {
-                                startDailyActivity(activity.id);
-                              } else if (
-                                activity.status === "active" ||
-                                activity.status === "overtime"
-                              ) {
-                                stopDailyActivity();
-                              }
-                            }}
-                          >
-                            {/* Enhanced Real-time Progress Bar */}
-                            {settings.dailyShowActivityProgress && (
-                              <div
-                                className={`absolute top-0 left-0 h-full rounded-lg smooth-progress ${
-                                  activity.status === "active"
-                                    ? "real-time-fill progress-pulse"
-                                    : activity.status === "completed"
-                                      ? "completion-glow"
-                                      : ""
-                                }`}
-                                style={{
-                                  width: `${Math.max(3, Math.min(100, activity.status === "completed" ? 100 : displayProgress))}%`,
-                                  backgroundColor:
-                                    activity.status === "completed"
-                                      ? "#22c55e"
-                                      : activity.color,
-                                  opacity:
-                                    activity.status === "completed"
-                                      ? 0.9
+                                      ? "border-blue-400 shadow-md ring-1 ring-blue-200 cursor-pointer"
+                                      : "bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer"
+                              } ${
+                                // Add animation effects when enabled and activity is active
+                                settings.dailyTimelineAnimation &&
+                                activity.status === "active"
+                                  ? "transform scale-90 -translate-x-4 shadow-xl transition-all duration-500"
+                                  : "transition-all duration-300"
+                              } ${settings.showRolloverIndicators && activity.rolledOverFromYesterday ? "border-dashed border-2" : ""} ${
+                                isVisuallyInactive
+                                  ? "opacity-40 saturate-[.35]"
+                                  : "opacity-100"
+                              }`}
+                              style={{
+                                backgroundColor:
+                                  activity.status === "completed"
+                                    ? "#f8fafc"
+                                    : activity.status === "overtime"
+                                      ? "#fef2f2"
                                       : activity.status === "active"
-                                        ? 0.85
-                                        : 0.8,
-                                  transition:
-                                    activity.status === "active"
-                                      ? "width 0.1s linear, opacity 0.3s ease"
-                                      : "all 0.3s ease",
-                                }}
-                              />
-                            )}
-
-                            {/* Completion burst effect */}
-                            {activity.status === "completed" &&
-                              settings.dailyShowActivityProgress && (
+                                        ? "#eff6ff"
+                                        : activity.rolledOverFromYesterday
+                                          ? "#fafafa"
+                                          : "#ffffff",
+                                boxShadow:
+                                  activity.status === "completed"
+                                    ? "none"
+                                    : undefined,
+                              }}
+                              onClick={() => {
+                                if (activity.status === "scheduled") {
+                                  startDailyActivity(activity.id);
+                                } else if (
+                                  activity.status === "active" ||
+                                  activity.status === "overtime"
+                                ) {
+                                  stopDailyActivity();
+                                }
+                              }}
+                            >
+                              {/* Enhanced Real-time Progress Bar */}
+                              {settings.dailyShowActivityProgress && (
                                 <div
-                                  className="absolute inset-0 completion-burst rounded-lg pointer-events-none"
+                                  className={`absolute top-0 left-0 h-full rounded-lg smooth-progress ${
+                                    activity.status === "active"
+                                      ? "real-time-fill progress-pulse"
+                                      : activity.status === "completed"
+                                        ? "completion-glow"
+                                        : ""
+                                  }`}
                                   style={{
-                                    backgroundColor: "transparent",
-                                    border: "2px solid #22c55e",
+                                    width: `${Math.max(3, Math.min(100, activity.status === "completed" ? 100 : displayProgress))}%`,
+                                    backgroundColor:
+                                      activity.status === "completed"
+                                        ? "#22c55e"
+                                        : activity.color,
+                                    opacity:
+                                      activity.status === "completed"
+                                        ? 0.9
+                                        : activity.status === "active"
+                                          ? 0.85
+                                          : 0.8,
+                                    transition:
+                                      activity.status === "active"
+                                        ? "width 0.1s linear, opacity 0.3s ease"
+                                        : "all 0.3s ease",
                                   }}
                                 />
                               )}
 
-                            {/* Real-time progress indicator for active activities */}
-                            {activity.status === "active" &&
-                              activity.startedAt && (
-                                <div className="absolute top-1 right-1 z-20">
-                                  <div className="flex items-center gap-1 bg-blue-600 bg-opacity-90 text-white text-xs px-2 py-1 rounded-md">
-                                    <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
-                                    <span className="font-mono">
-                                      {(() => {
-                                        const currentSessionSeconds =
-                                          Math.floor(
-                                            (currentTime.getTime() -
-                                              activity.startedAt) /
-                                              1000,
-                                          );
-                                        const totalSecondsSpent =
-                                          currentSessionSeconds +
-                                          activity.timeSpent * 60;
-                                        const base = Math.min(
-                                          100,
-                                          (totalSecondsSpent /
-                                            (activity.duration * 60)) *
+                              {/* Completion burst effect */}
+                              {activity.status === "completed" &&
+                                settings.dailyShowActivityProgress && (
+                                  <div
+                                    className="absolute inset-0 completion-burst rounded-lg pointer-events-none"
+                                    style={{
+                                      backgroundColor: "transparent",
+                                      border: "2px solid #22c55e",
+                                    }}
+                                  />
+                                )}
+
+                              {/* Real-time progress indicator for active activities */}
+                              {activity.status === "active" &&
+                                activity.startedAt && (
+                                  <div className="absolute top-1 right-1 z-20">
+                                    <div className="flex items-center gap-1 bg-blue-600 bg-opacity-90 text-white text-xs px-2 py-1 rounded-md">
+                                      <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></div>
+                                      <span className="font-mono">
+                                        {(() => {
+                                          const currentSessionSeconds =
+                                            Math.floor(
+                                              (currentTime.getTime() -
+                                                activity.startedAt) /
+                                                1000,
+                                            );
+                                          const totalSecondsSpent =
+                                            currentSessionSeconds +
+                                            activity.timeSpent * 60;
+                                          const base = Math.min(
                                             100,
-                                        );
-                                        const urgency =
-                                          getSoftDeadlineUrgencyFactor(
-                                            activity,
+                                            (totalSecondsSpent /
+                                              (activity.duration * 60)) *
+                                              100,
                                           );
-                                        const visual = Math.min(
-                                          100,
-                                          base *
-                                            (urgency > 1
-                                              ? 1 + (urgency - 1) * 0.2
-                                              : 1),
-                                        );
-                                        return `${Math.round(visual)}%`;
-                                      })()}
+                                          const urgency =
+                                            getSoftDeadlineUrgencyFactor(
+                                              activity,
+                                            );
+                                          const visual = Math.min(
+                                            100,
+                                            base *
+                                              (urgency > 1
+                                                ? 1 + (urgency - 1) * 0.2
+                                                : 1),
+                                          );
+                                          return `${Math.round(visual)}%`;
+                                        })()}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+
+                              {/* Compact Card Content */}
+                              <div className="relative z-10">
+                                {/* Top row: Activity name, status badge, and action buttons */}
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <div
+                                      className="w-4 h-4 rounded-full flex-shrink-0"
+                                      style={{
+                                        backgroundColor: activity.color,
+                                      }}
+                                    ></div>
+                                    <span className="font-medium text-sm truncate flex-1">
+                                      {activity.name}
                                     </span>
+                                    {activity.sharedId && (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">
+                                        <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-pulse"></div>
+                                        Shared
+                                      </span>
+                                    )}
+                                    {activity.status === "completed" &&
+                                      activity.earlyCompleted && (
+                                        <span className="inline-flex items-center gap-1 px-1 py-0.5 bg-green-50 text-green-700 text-[10px] rounded border border-green-200">
+                                          ✓ Early
+                                        </span>
+                                      )}
+                                    {settings.dailySoftDeadlineVisuals &&
+                                      activity.softDeadlineEnabled &&
+                                      activity.softDeadlineTime && (
+                                        <span className="inline-flex items-center gap-1 px-1 py-0.5 bg-red-50 text-red-700 text-[10px] rounded border border-red-200">
+                                          ⏰ {activity.softDeadlineTime}
+                                        </span>
+                                      )}
+                                  </div>
+
+                                  <div className="flex items-center gap-1 flex-shrink-0">
+                                    <ActivityTagButton
+                                      activityName={activity.name}
+                                      assignedTags={activity.tags}
+                                      tags={canonicalTags}
+                                      onClick={() =>
+                                        setTagPickerTarget({
+                                          mode: "daily",
+                                          activityId: activity.id,
+                                        })
+                                      }
+                                    />
+                                    {/* Status badge */}
+                                    <Badge
+                                      variant={
+                                        activity.status === "completed"
+                                          ? "default"
+                                          : activity.status === "overtime"
+                                            ? "destructive"
+                                            : activity.status === "active"
+                                              ? "default"
+                                              : "secondary"
+                                      }
+                                      className={`text-xs px-1.5 py-0.5 ${
+                                        activity.status === "completed"
+                                          ? "bg-green-100 text-green-800 border-green-200"
+                                          : activity.status === "overtime"
+                                            ? "bg-red-100 text-red-800 border-red-200"
+                                            : activity.status === "active"
+                                              ? "bg-blue-100 text-blue-800 border-blue-200"
+                                              : ""
+                                      }`}
+                                    >
+                                      {activity.status === "completed"
+                                        ? "✓"
+                                        : activity.status === "overtime"
+                                          ? "⚠"
+                                          : activity.status === "active"
+                                            ? "▶"
+                                            : "⏸"}
+                                    </Badge>
+
+                                    {/* Quick action buttons */}
+                                    <button
+                                      className="h-6 w-6 text-blue-500 hover:bg-blue-100 rounded-md flex items-center justify-center"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openDailyActivityEdit(activity.id);
+                                      }}
+                                      title="Edit"
+                                    >
+                                      <Icon name="edit" className="h-3 w-3" />
+                                    </button>
+
+                                    <button
+                                      className="h-6 w-6 text-red-500 hover:bg-red-50 rounded-md flex items-center justify-center"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        removeDailyActivity(activity.id);
+                                      }}
+                                      title="Delete"
+                                    >
+                                      <Icon name="x" className="h-3 w-3" />
+                                    </button>
                                   </div>
                                 </div>
-                              )}
 
-                            {/* Compact Card Content */}
-                            <div className="relative z-10">
-                              {/* Top row: Activity name, status badge, and action buttons */}
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2 flex-1 min-w-0">
-                                  <div
-                                    className="w-4 h-4 rounded-full flex-shrink-0"
-                                    style={{ backgroundColor: activity.color }}
-                                  ></div>
-                                  <span className="font-medium text-sm truncate flex-1">
-                                    {activity.name}
-                                  </span>
-                                  {activity.sharedId && (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">
-                                      <div className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-pulse"></div>
-                                      Shared
-                                    </span>
-                                  )}
-                                  {activity.status === "completed" &&
-                                    activity.earlyCompleted && (
-                                      <span className="inline-flex items-center gap-1 px-1 py-0.5 bg-green-50 text-green-700 text-[10px] rounded border border-green-200">
-                                        ✓ Early
-                                      </span>
-                                    )}
-                                  {settings.dailySoftDeadlineVisuals &&
-                                    activity.softDeadlineEnabled &&
-                                    activity.softDeadlineTime && (
-                                      <span className="inline-flex items-center gap-1 px-1 py-0.5 bg-red-50 text-red-700 text-[10px] rounded border border-red-200">
-                                        ⏰ {activity.softDeadlineTime}
-                                      </span>
-                                    )}
-                                </div>
-
-                                <div className="flex items-center gap-1 flex-shrink-0">
-                                  <ActivityTagButton
-                                    activityName={activity.name}
-                                    assignedTags={activity.tags}
-                                    tags={canonicalTags}
-                                    onClick={() =>
-                                      setTagPickerTarget({
-                                        mode: "daily",
-                                        activityId: activity.id,
-                                      })
-                                    }
-                                  />
-                                  {/* Status badge */}
-                                  <Badge
-                                    variant={
-                                      activity.status === "completed"
-                                        ? "default"
-                                        : activity.status === "overtime"
-                                          ? "destructive"
-                                          : activity.status === "active"
-                                            ? "default"
-                                            : "secondary"
-                                    }
-                                    className={`text-xs px-1.5 py-0.5 ${
-                                      activity.status === "completed"
-                                        ? "bg-green-100 text-green-800 border-green-200"
-                                        : activity.status === "overtime"
-                                          ? "bg-red-100 text-red-800 border-red-200"
-                                          : activity.status === "active"
-                                            ? "bg-blue-100 text-blue-800 border-blue-200"
-                                            : ""
-                                    }`}
-                                  >
-                                    {activity.status === "completed"
-                                      ? "✓"
-                                      : activity.status === "overtime"
-                                        ? "⚠"
-                                        : activity.status === "active"
-                                          ? "▶"
-                                          : "⏸"}
-                                  </Badge>
-
-                                  {/* Quick action buttons */}
-                                  <button
-                                    className="h-6 w-6 text-blue-500 hover:bg-blue-100 rounded-md flex items-center justify-center"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openDailyActivityEdit(activity.id);
-                                    }}
-                                    title="Edit"
-                                  >
-                                    <Icon name="edit" className="h-3 w-3" />
-                                  </button>
-
-                                  <button
-                                    className="h-6 w-6 text-red-500 hover:bg-red-50 rounded-md flex items-center justify-center"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      removeDailyActivity(activity.id);
-                                    }}
-                                    title="Delete"
-                                  >
-                                    <Icon name="x" className="h-3 w-3" />
-                                  </button>
-                                </div>
-                              </div>
-
-                              {/* Bottom row: Compact info display */}
-                              <div className="flex items-center justify-between text-xs">
-                                <div className="flex items-center gap-3">
-                                  {/* Tags (chips) */}
-                                  {settings.showTagChips &&
-                                    activity.tags &&
-                                    activity.tags.length > 0 && (
-                                      <div className="flex flex-wrap items-center gap-1">
-                                        {activity.tags.map((t, idx) => {
-                                          const tagObj = rpgTags?.find(
-                                            (rt) => rt.id === t,
-                                          );
-                                          if (tagObj) {
+                                {/* Bottom row: Compact info display */}
+                                <div className="flex items-center justify-between text-xs">
+                                  <div className="flex items-center gap-3">
+                                    {/* Tags (chips) */}
+                                    {settings.showTagChips &&
+                                      activity.tags &&
+                                      activity.tags.length > 0 && (
+                                        <div className="flex flex-wrap items-center gap-1">
+                                          {activity.tags.map((t, idx) => {
+                                            const tagObj = rpgTags?.find(
+                                              (rt) => rt.id === t,
+                                            );
+                                            if (tagObj) {
+                                              return (
+                                                <span
+                                                  key={idx}
+                                                  className={`rounded-full border ${settings.compactTagChips ? "px-1 py-0 text-[10px] leading-none" : "px-1.5 py-0.5 text-[11px] leading-tight"}`}
+                                                  style={{
+                                                    backgroundColor:
+                                                      tagObj.color,
+                                                    color: "#fff",
+                                                    borderColor:
+                                                      "rgba(0,0,0,0.1)",
+                                                  }}
+                                                  title={
+                                                    tagObj.description
+                                                      ? `${tagObj.name} — ${tagObj.description}`
+                                                      : tagObj.name
+                                                  }
+                                                >
+                                                  {tagObj.name}
+                                                </span>
+                                              );
+                                            }
                                             return (
                                               <span
                                                 key={idx}
-                                                className={`rounded-full border ${settings.compactTagChips ? "px-1 py-0 text-[10px] leading-none" : "px-1.5 py-0.5 text-[11px] leading-tight"}`}
-                                                style={{
-                                                  backgroundColor: tagObj.color,
-                                                  color: "#fff",
-                                                  borderColor:
-                                                    "rgba(0,0,0,0.1)",
-                                                }}
-                                                title={
-                                                  tagObj.description
-                                                    ? `${tagObj.name} — ${tagObj.description}`
-                                                    : tagObj.name
-                                                }
+                                                className={`rounded-full bg-slate-100 text-slate-700 border border-slate-200 ${settings.compactTagChips ? "px-1 py-0 text-[10px] leading-none" : "px-1.5 py-0.5 text-[11px] leading-tight"}`}
                                               >
-                                                {tagObj.name}
+                                                #{String(t).toLowerCase()}
                                               </span>
                                             );
+                                          })}
+                                        </div>
+                                      )}
+                                    {/* Duration */}
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-gray-500">
+                                        Duration:
+                                      </span>
+                                      <span className="font-medium">
+                                        {Math.floor(activity.duration / 60)}h{" "}
+                                        {activity.duration % 60}m
+                                      </span>
+                                    </div>
+
+                                    {/* Progress/Time spent */}
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-gray-500">
+                                        Progress:
+                                      </span>
+                                      <span
+                                        className={`font-medium ${
+                                          activity.status === "overtime"
+                                            ? "text-red-600"
+                                            : activity.status === "active"
+                                              ? "text-blue-600"
+                                              : activity.status === "completed"
+                                                ? "text-green-600"
+                                                : "text-gray-600"
+                                        }`}
+                                      >
+                                        {(() => {
+                                          const realTimeSpent =
+                                            getRealTimeSpent(activity);
+                                          if (realTimeSpent > 0) {
+                                            const progress = Math.round(
+                                              (realTimeSpent /
+                                                activity.duration) *
+                                                100,
+                                            );
+                                            return `${Math.floor(realTimeSpent / 60)}h ${realTimeSpent % 60}m (${progress}%)`;
+                                          } else {
+                                            return "0m (0%)";
                                           }
+                                        })()}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Completion checkbox */}
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="checkbox"
+                                      className={`h-3 w-3 rounded text-green-600 focus:ring-green-500 ${
+                                        !areAllSubtasksCompleted(activity)
+                                          ? "opacity-50 cursor-not-allowed"
+                                          : "cursor-pointer"
+                                      }`}
+                                      checked={activity.status === "completed"}
+                                      disabled={
+                                        !areAllSubtasksCompleted(activity)
+                                      }
+                                      onChange={(e) => {
+                                        e.stopPropagation();
+                                        if (areAllSubtasksCompleted(activity)) {
+                                          toggleDailyActivityCompletion(
+                                            activity.id,
+                                          );
+                                        }
+                                      }}
+                                      title={
+                                        !areAllSubtasksCompleted(activity)
+                                          ? "Complete all subtasks first to unlock main task completion"
+                                          : "Mark this activity as completed"
+                                      }
+                                    />
+                                    <span
+                                      className={`text-gray-500 ${!areAllSubtasksCompleted(activity) ? "opacity-50" : ""}`}
+                                    >
+                                      Done{" "}
+                                      {!areAllSubtasksCompleted(activity) &&
+                                      activity.subtasks &&
+                                      activity.subtasks.length > 0
+                                        ? `(${activity.subtasks.filter((s) => s.completed).length}/${activity.subtasks.length} subtasks)`
+                                        : ""}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Real-time countdown for active activities */}
+                                {activity.status === "active" &&
+                                  activity.startedAt && (
+                                    <div className="mt-1 text-xs">
+                                      {(() => {
+                                        const totalSpentSeconds =
+                                          getRealTimeSpentInSeconds(activity);
+                                        const remainingSeconds =
+                                          settings.dailySoftDeadlineVisuals &&
+                                          activity.softDeadlineEnabled
+                                            ? getVisualRemainingSeconds(
+                                                activity,
+                                              )
+                                            : activity.duration * 60 -
+                                              totalSpentSeconds;
+
+                                        if (remainingSeconds > 0) {
                                           return (
-                                            <span
-                                              key={idx}
-                                              className={`rounded-full bg-slate-100 text-slate-700 border border-slate-200 ${settings.compactTagChips ? "px-1 py-0 text-[10px] leading-none" : "px-1.5 py-0.5 text-[11px] leading-tight"}`}
-                                            >
-                                              #{String(t).toLowerCase()}
+                                            <span className="text-blue-600 font-mono">
+                                              Time left:{" "}
+                                              {Math.floor(
+                                                remainingSeconds / 60,
+                                              )}
+                                              :
+                                              {(remainingSeconds % 60)
+                                                .toString()
+                                                .padStart(2, "0")}
                                             </span>
                                           );
-                                        })}
-                                      </div>
-                                    )}
-                                  {/* Duration */}
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-gray-500">
-                                      Duration:
-                                    </span>
-                                    <span className="font-medium">
-                                      {Math.floor(activity.duration / 60)}h{" "}
-                                      {activity.duration % 60}m
-                                    </span>
-                                  </div>
-
-                                  {/* Progress/Time spent */}
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-gray-500">
-                                      Progress:
-                                    </span>
-                                    <span
-                                      className={`font-medium ${
-                                        activity.status === "overtime"
-                                          ? "text-red-600"
-                                          : activity.status === "active"
-                                            ? "text-blue-600"
-                                            : activity.status === "completed"
-                                              ? "text-green-600"
-                                              : "text-gray-600"
-                                      }`}
-                                    >
-                                      {(() => {
-                                        const realTimeSpent =
-                                          getRealTimeSpent(activity);
-                                        if (realTimeSpent > 0) {
-                                          const progress = Math.round(
-                                            (realTimeSpent /
-                                              activity.duration) *
-                                              100,
-                                          );
-                                          return `${Math.floor(realTimeSpent / 60)}h ${realTimeSpent % 60}m (${progress}%)`;
                                         } else {
-                                          return "0m (0%)";
+                                          return (
+                                            <span className="text-red-600 font-bold font-mono animate-pulse">
+                                              OVERTIME: +
+                                              {Math.floor(
+                                                Math.abs(remainingSeconds) / 60,
+                                              )}
+                                              :
+                                              {(Math.abs(remainingSeconds) % 60)
+                                                .toString()
+                                                .padStart(2, "0")}
+                                            </span>
+                                          );
                                         }
                                       })()}
-                                    </span>
-                                  </div>
-                                </div>
-
-                                {/* Completion checkbox */}
-                                <div className="flex items-center gap-1">
-                                  <input
-                                    type="checkbox"
-                                    className={`h-3 w-3 rounded text-green-600 focus:ring-green-500 ${
-                                      !areAllSubtasksCompleted(activity)
-                                        ? "opacity-50 cursor-not-allowed"
-                                        : "cursor-pointer"
-                                    }`}
-                                    checked={activity.status === "completed"}
-                                    disabled={
-                                      !areAllSubtasksCompleted(activity)
-                                    }
-                                    onChange={(e) => {
-                                      e.stopPropagation();
-                                      if (areAllSubtasksCompleted(activity)) {
-                                        toggleDailyActivityCompletion(
-                                          activity.id,
-                                        );
-                                      }
-                                    }}
-                                    title={
-                                      !areAllSubtasksCompleted(activity)
-                                        ? "Complete all subtasks first to unlock main task completion"
-                                        : "Mark this activity as completed"
-                                    }
-                                  />
-                                  <span
-                                    className={`text-gray-500 ${!areAllSubtasksCompleted(activity) ? "opacity-50" : ""}`}
-                                  >
-                                    Done{" "}
-                                    {!areAllSubtasksCompleted(activity) &&
-                                    activity.subtasks &&
-                                    activity.subtasks.length > 0
-                                      ? `(${activity.subtasks.filter((s) => s.completed).length}/${activity.subtasks.length} subtasks)`
-                                      : ""}
-                                  </span>
-                                </div>
-                              </div>
-
-                              {/* Real-time countdown for active activities */}
-                              {activity.status === "active" &&
-                                activity.startedAt && (
-                                  <div className="mt-1 text-xs">
-                                    {(() => {
-                                      const totalSpentSeconds =
-                                        getRealTimeSpentInSeconds(activity);
-                                      const remainingSeconds =
-                                        settings.dailySoftDeadlineVisuals &&
-                                        activity.softDeadlineEnabled
-                                          ? getVisualRemainingSeconds(activity)
-                                          : activity.duration * 60 -
-                                            totalSpentSeconds;
-
-                                      if (remainingSeconds > 0) {
-                                        return (
-                                          <span className="text-blue-600 font-mono">
-                                            Time left:{" "}
-                                            {Math.floor(remainingSeconds / 60)}:
-                                            {(remainingSeconds % 60)
-                                              .toString()
-                                              .padStart(2, "0")}
-                                          </span>
-                                        );
-                                      } else {
-                                        return (
-                                          <span className="text-red-600 font-bold font-mono animate-pulse">
-                                            OVERTIME: +
-                                            {Math.floor(
-                                              Math.abs(remainingSeconds) / 60,
-                                            )}
-                                            :
-                                            {(Math.abs(remainingSeconds) % 60)
-                                              .toString()
-                                              .padStart(2, "0")}
-                                          </span>
-                                        );
-                                      }
-                                    })()}
-                                  </div>
-                                )}
-
-                              {/* Flowmodoro rest indicator */}
-                              {settings.flowmodoroEnabled &&
-                                earnedRestMinutes > 0 && (
-                                  <div className="mt-1 text-xs">
-                                    <span className="text-purple-600 font-medium">
-                                      Rest earned: +{earnedRestMinutes}m
-                                    </span>
-                                  </div>
-                                )}
-
-                              {/* Subtasks Display */}
-                              {activity.subtasks &&
-                                activity.subtasks.length > 0 && (
-                                  <div className="mt-2 space-y-1">
-                                    <div className="text-xs text-gray-500 mb-1">
-                                      Subtasks (
-                                      {
-                                        activity.subtasks.filter(
-                                          (s) => s.completed,
-                                        ).length
-                                      }
-                                      /{activity.subtasks.length})
                                     </div>
-                                    <div className="space-y-1 max-h-20 overflow-y-auto">
-                                      {activity.subtasks.map((subtask) => (
-                                        <div
-                                          key={subtask.id}
-                                          className="flex items-center gap-2 text-xs"
-                                          onClick={(e) => e.stopPropagation()}
-                                        >
-                                          <input
-                                            type="checkbox"
-                                            checked={subtask.completed}
-                                            onChange={(e) => {
-                                              e.stopPropagation();
-                                              toggleSubtaskCompletion(
-                                                activity.id,
-                                                subtask.id,
-                                              );
-                                            }}
-                                            className="h-3 w-3 rounded text-green-600 focus:ring-green-500"
-                                          />
-                                          <span
-                                            className={`flex-1 ${
-                                              subtask.completed
-                                                ? "line-through text-green-600"
-                                                : "text-gray-700"
-                                            }`}
+                                  )}
+
+                                {/* Flowmodoro rest indicator */}
+                                {settings.flowmodoroEnabled &&
+                                  earnedRestMinutes > 0 && (
+                                    <div className="mt-1 text-xs">
+                                      <span className="text-purple-600 font-medium">
+                                        Rest earned: +{earnedRestMinutes}m
+                                      </span>
+                                    </div>
+                                  )}
+
+                                {/* Subtasks Display */}
+                                {activity.subtasks &&
+                                  activity.subtasks.length > 0 && (
+                                    <div className="mt-2 space-y-1">
+                                      <div className="text-xs text-gray-500 mb-1">
+                                        Subtasks (
+                                        {
+                                          activity.subtasks.filter(
+                                            (s) => s.completed,
+                                          ).length
+                                        }
+                                        /{activity.subtasks.length})
+                                      </div>
+                                      <div className="space-y-1 max-h-20 overflow-y-auto">
+                                        {activity.subtasks.map((subtask) => (
+                                          <div
+                                            key={subtask.id}
+                                            className="flex items-center gap-2 text-xs"
+                                            onClick={(e) => e.stopPropagation()}
                                           >
-                                            {subtask.name}
-                                          </span>
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              removeSubtaskFromActivity(
-                                                activity.id,
-                                                subtask.id,
-                                              );
-                                            }}
-                                            className="text-red-500 hover:text-red-700 p-0.5"
-                                            title="Remove subtask"
-                                          >
-                                            <Icon
-                                              name="x"
-                                              className="h-2.5 w-2.5"
+                                            <input
+                                              type="checkbox"
+                                              checked={subtask.completed}
+                                              onChange={(e) => {
+                                                e.stopPropagation();
+                                                toggleSubtaskCompletion(
+                                                  activity.id,
+                                                  subtask.id,
+                                                );
+                                              }}
+                                              className="h-3 w-3 rounded text-green-600 focus:ring-green-500"
                                             />
-                                          </button>
-                                        </div>
-                                      ))}
+                                            <span
+                                              className={`flex-1 ${
+                                                subtask.completed
+                                                  ? "line-through text-green-600"
+                                                  : "text-gray-700"
+                                              }`}
+                                            >
+                                              {subtask.name}
+                                            </span>
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                removeSubtaskFromActivity(
+                                                  activity.id,
+                                                  subtask.id,
+                                                );
+                                              }}
+                                              className="text-red-500 hover:text-red-700 p-0.5"
+                                              title="Remove subtask"
+                                            >
+                                              <Icon
+                                                name="x"
+                                                className="h-2.5 w-2.5"
+                                              />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
+                                  )}
 
-                              {/* Quick Add Subtask */}
-                              <div className="mt-2 text-xs">
-                                <div className="flex gap-1">
-                                  <input
-                                    type="text"
-                                    placeholder="Add subtask..."
-                                    className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                    onKeyPress={(e) => {
-                                      if (e.key === "Enter") {
+                                {/* Quick Add Subtask */}
+                                <div className="mt-2 text-xs">
+                                  <div className="flex gap-1">
+                                    <input
+                                      type="text"
+                                      placeholder="Add subtask..."
+                                      className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                      onKeyPress={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.stopPropagation();
+                                          const target =
+                                            e.target as HTMLInputElement;
+                                          if (target.value.trim()) {
+                                            addSubtaskToActivity(
+                                              activity.id,
+                                              target.value,
+                                            );
+                                            target.value = "";
+                                          }
+                                        }
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                    <button
+                                      onClick={(e) => {
                                         e.stopPropagation();
-                                        const target =
-                                          e.target as HTMLInputElement;
-                                        if (target.value.trim()) {
+                                        const input = e.currentTarget
+                                          .previousElementSibling as HTMLInputElement;
+                                        if (input.value.trim()) {
                                           addSubtaskToActivity(
                                             activity.id,
-                                            target.value,
+                                            input.value,
                                           );
-                                          target.value = "";
+                                          input.value = "";
                                         }
-                                      }
-                                    }}
-                                    onClick={(e) => e.stopPropagation()}
-                                  />
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const input = e.currentTarget
-                                        .previousElementSibling as HTMLInputElement;
-                                      if (input.value.trim()) {
-                                        addSubtaskToActivity(
-                                          activity.id,
-                                          input.value,
-                                        );
-                                        input.value = "";
-                                      }
-                                    }}
-                                    className="px-2 py-1 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded"
-                                    title="Add subtask"
-                                  >
-                                    <Icon name="plus" className="h-3 w-3" />
-                                  </button>
+                                      }}
+                                      className="px-2 py-1 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded"
+                                      title="Add subtask"
+                                    >
+                                      <Icon name="plus" className="h-3 w-3" />
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
 
-                      {/* Quick Add New Activity Card */}
-                      <div className="border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 p-3 hover:bg-gray-100 cursor-pointer transition-colors">
-                        <div className="flex items-center gap-3 mb-2">
-                          <button
-                            onClick={() =>
-                              setAddActivityModalState({ isOpen: true })
-                            }
-                            className="w-6 h-6 rounded-full border-2 border-dashed border-gray-400 flex items-center justify-center hover:border-blue-500 hover:bg-blue-50 transition-colors"
-                            title="Add Activity"
-                          >
-                            <Icon
-                              name="plus"
-                              className="h-3 w-3 text-gray-500 hover:text-blue-500"
-                            />
-                          </button>
-                          <input
-                            type="text"
-                            placeholder="Quick add activity (press Enter)"
-                            className="font-medium bg-transparent border-none outline-none flex-1 text-gray-700 placeholder-gray-500"
-                            onKeyPress={(e) => {
-                              const target = e.target as HTMLInputElement;
-                              if (e.key === "Enter" && target.value.trim()) {
-                                quickAddDailyActivity(target.value);
-                                target.value = "";
+                        {/* Quick Add New Activity Card */}
+                        <div className="border-2 border-dashed border-gray-300 rounded-lg bg-gray-50 p-3 hover:bg-gray-100 cursor-pointer transition-colors">
+                          <div className="flex items-center gap-3 mb-2">
+                            <button
+                              onClick={() =>
+                                setAddActivityModalState({ isOpen: true })
                               }
-                            }}
-                          />
-                          <button
-                            onClick={openDailyActivityAdd}
-                            className="text-blue-500 hover:text-blue-700 transition-colors text-sm"
-                          >
-                            Advanced
-                          </button>
-                          <Badge
-                            variant="outline"
-                            className="text-xs text-gray-500"
-                          >
-                            Smart-schedule
-                          </Badge>
-                        </div>
-                        <div className="text-sm text-gray-500">
-                          Type activity name and press Enter to smart-schedule,
-                          or click Advanced for detailed setup
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Today's Summary */}
-                  <div className="bg-blue-50 rounded-lg p-4">
-                    <h4 className="font-medium text-blue-800 mb-3">
-                      Today's Analytics
-                    </h4>
-                    <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-                      <div>
-                        <div className="text-blue-600">Total Planned</div>
-                        <div className="font-semibold text-blue-800">
-                          {(() => {
-                            const summary = getDailySummary();
-                            return `${summary.totalPlannedHours}h ${summary.totalPlannedMinutes}m (${Math.round(summary.totalPlannedPercentage)}%)`;
-                          })()}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-blue-600">Time Spent</div>
-                        <div className="font-semibold text-blue-800">
-                          {(() => {
-                            const summary = getDailySummary();
-                            const hours = Math.floor(
-                              summary.totalSpentMinutes / 60,
-                            );
-                            const minutes = summary.totalSpentMinutes % 60;
-                            return summary.totalSpentMinutes > 0
-                              ? `${hours}h ${minutes}m`
-                              : "None";
-                          })()}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-blue-600">Completion Rate</div>
-                        <div className="font-semibold text-blue-800">
-                          {(() => {
-                            const summary = getDailySummary();
-                            return `${Math.round(summary.completionRate)}% (${summary.completedActivities}/${summary.totalActivities})`;
-                          })()}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-blue-600">Efficiency</div>
-                        <div className="font-semibold text-blue-800">
-                          {(() => {
-                            const summary = getDailySummary();
-                            return `${Math.round(summary.efficiency)}%`;
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Overtime Warning (if any) */}
-                    {(() => {
-                      const summary = getDailySummary();
-                      if (summary.overtimeActivities > 0) {
-                        return (
-                          <div className="bg-red-100 border border-red-200 rounded-lg p-3 mb-3">
-                            <div className="flex items-center gap-2 text-red-800">
-                              <Icon name="alertTriangle" className="h-4 w-4" />
-                              <span className="font-medium">
-                                Overtime Alert
-                              </span>
-                            </div>
-                            <div className="text-sm text-red-700 mt-1">
-                              {summary.overtimeActivities} activities went
-                              overtime by{" "}
-                              {Math.floor(summary.totalOvertimeMinutes / 60)}h{" "}
-                              {summary.totalOvertimeMinutes % 60}m total
-                            </div>
+                              className="w-6 h-6 rounded-full border-2 border-dashed border-gray-400 flex items-center justify-center hover:border-blue-500 hover:bg-blue-50 transition-colors"
+                              title="Add Activity"
+                            >
+                              <Icon
+                                name="plus"
+                                className="h-3 w-3 text-gray-500 hover:text-blue-500"
+                              />
+                            </button>
+                            <input
+                              type="text"
+                              placeholder="Quick add activity (press Enter)"
+                              className="font-medium bg-transparent border-none outline-none flex-1 text-gray-700 placeholder-gray-500"
+                              onKeyPress={(e) => {
+                                const target = e.target as HTMLInputElement;
+                                if (e.key === "Enter" && target.value.trim()) {
+                                  quickAddDailyActivity(target.value);
+                                  target.value = "";
+                                }
+                              }}
+                            />
+                            <button
+                              onClick={openDailyActivityAdd}
+                              className="text-blue-500 hover:text-blue-700 transition-colors text-sm"
+                            >
+                              Advanced
+                            </button>
+                            <Badge
+                              variant="outline"
+                              className="text-xs text-gray-500"
+                            >
+                              Smart-schedule
+                            </Badge>
                           </div>
-                        );
-                      }
-                      return null;
-                    })()}
-
-                    {/* Progress Bar */}
-                    <div className="space-y-2">
-                      <div className="flex justify-between text-xs text-blue-600">
-                        <span>Daily Progress</span>
-                        <span>
-                          {(() => {
-                            const summary = getDailySummary();
-                            return `${Math.round(summary.efficiency)}%`;
-                          })()}
-                        </span>
-                      </div>
-                      <div className="w-full bg-blue-200 rounded-full h-2">
-                        <div
-                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                          style={{
-                            width: `${(() => {
-                              const summary = getDailySummary();
-                              return Math.min(100, summary.efficiency);
-                            })()}%`,
-                          }}
-                        ></div>
+                          <div className="text-sm text-gray-500">
+                            Type activity name and press Enter to
+                            smart-schedule, or click Advanced for detailed setup
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </>
+
+                    {/* Today's Summary */}
+                    <div className="bg-blue-50 rounded-lg p-4">
+                      <h4 className="font-medium text-blue-800 mb-3">
+                        Today's Analytics
+                      </h4>
+                      <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                        <div>
+                          <div className="text-blue-600">Total Planned</div>
+                          <div className="font-semibold text-blue-800">
+                            {(() => {
+                              const summary = getDailySummary();
+                              return `${summary.totalPlannedHours}h ${summary.totalPlannedMinutes}m (${Math.round(summary.totalPlannedPercentage)}%)`;
+                            })()}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-blue-600">Time Spent</div>
+                          <div className="font-semibold text-blue-800">
+                            {(() => {
+                              const summary = getDailySummary();
+                              const hours = Math.floor(
+                                summary.totalSpentMinutes / 60,
+                              );
+                              const minutes = summary.totalSpentMinutes % 60;
+                              return summary.totalSpentMinutes > 0
+                                ? `${hours}h ${minutes}m`
+                                : "None";
+                            })()}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-blue-600">Completion Rate</div>
+                          <div className="font-semibold text-blue-800">
+                            {(() => {
+                              const summary = getDailySummary();
+                              return `${Math.round(summary.completionRate)}% (${summary.completedActivities}/${summary.totalActivities})`;
+                            })()}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-blue-600">Efficiency</div>
+                          <div className="font-semibold text-blue-800">
+                            {(() => {
+                              const summary = getDailySummary();
+                              return `${Math.round(summary.efficiency)}%`;
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Overtime Warning (if any) */}
+                      {(() => {
+                        const summary = getDailySummary();
+                        if (summary.overtimeActivities > 0) {
+                          return (
+                            <div className="bg-red-100 border border-red-200 rounded-lg p-3 mb-3">
+                              <div className="flex items-center gap-2 text-red-800">
+                                <Icon
+                                  name="alertTriangle"
+                                  className="h-4 w-4"
+                                />
+                                <span className="font-medium">
+                                  Overtime Alert
+                                </span>
+                              </div>
+                              <div className="text-sm text-red-700 mt-1">
+                                {summary.overtimeActivities} activities went
+                                overtime by{" "}
+                                {Math.floor(summary.totalOvertimeMinutes / 60)}h{" "}
+                                {summary.totalOvertimeMinutes % 60}m total
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+
+                      {/* Progress Bar */}
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs text-blue-600">
+                          <span>Daily Progress</span>
+                          <span>
+                            {(() => {
+                              const summary = getDailySummary();
+                              return `${Math.round(summary.efficiency)}%`;
+                            })()}
+                          </span>
+                        </div>
+                        <div className="w-full bg-blue-200 rounded-full h-2">
+                          <div
+                            className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                            style={{
+                              width: `${(() => {
+                                const summary = getDailySummary();
+                                return Math.min(100, summary.efficiency);
+                              })()}%`,
+                            }}
+                          ></div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )
               ) : currentMode === "single" ? (
                 // Single Activity Mode Content
                 <SingleActivityMode
@@ -18999,17 +19285,17 @@ export default function App() {
                         className="min-h-11 border-violet-300 bg-white"
                         disabled={rewardBank.availableSeconds <= 0}
                         onClick={() => {
-                        const banked = Math.max(
-                          0,
-                          Math.floor(
-                            flowmodoroState.relaxationVaultSeconds || 0,
-                          ),
-                        );
-                        setBankedRestMinutesDraft(
-                          String(Math.floor(banked / 60)),
-                        );
-                        setBankedRestSecondsDraft(String(banked % 60));
-                        setBankedRestDialogOpen(true);
+                          const banked = Math.max(
+                            0,
+                            Math.floor(
+                              flowmodoroState.relaxationVaultSeconds || 0,
+                            ),
+                          );
+                          setBankedRestMinutesDraft(
+                            String(Math.floor(banked / 60)),
+                          );
+                          setBankedRestSecondsDraft(String(banked % 60));
+                          setBankedRestDialogOpen(true);
                         }}
                       >
                         Add time
@@ -19027,7 +19313,10 @@ export default function App() {
                     </div>
                   </div>
                   {rewardBankGoalSeconds > 0 && (
-                    <div className="mt-3" aria-label={`Reward Bank goal ${formatTime(rewardBank.totalSeconds)} of ${formatTime(rewardBankGoalSeconds)}`}>
+                    <div
+                      className="mt-3"
+                      aria-label={`Reward Bank goal ${formatTime(rewardBank.totalSeconds)} of ${formatTime(rewardBankGoalSeconds)}`}
+                    >
                       <div className="h-1.5 overflow-hidden rounded-full bg-violet-100">
                         <div
                           className="h-full bg-violet-500"
@@ -19036,7 +19325,9 @@ export default function App() {
                           }}
                         />
                       </div>
-                      <div className={`mt-1 text-xs ${rewardBankGoalReached ? "font-semibold text-emerald-700" : "text-violet-700"}`}>
+                      <div
+                        className={`mt-1 text-xs ${rewardBankGoalReached ? "font-semibold text-emerald-700" : "text-violet-700"}`}
+                      >
                         {rewardBankGoalReached
                           ? `Goal reached · ${formatTime(rewardBankGoalSeconds)}`
                           : `${formatTime(rewardBank.totalSeconds)} / ${formatTime(rewardBankGoalSeconds)} goal`}
@@ -19536,28 +19827,28 @@ export default function App() {
 
                           {/* Third Row: Count Up Timer Checkbox */}
                           {!activity.parentActivityId && (
-                          <div className="flex items-center justify-center gap-2 mt-3">
-                            <input
-                              type="checkbox"
-                              id={`countup-${activity.id}`}
-                              className="w-4 h-4"
-                              checked={activity.countUp || false}
-                              onChange={() =>
-                                toggleCountUpActivity(activity.id)
-                              }
-                            />
-                            <label
-                              htmlFor={`countup-${activity.id}`}
-                              className="text-sm text-gray-600 font-medium"
-                            >
-                              Count up
-                            </label>
-                            {activity.countUp && (
-                              <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full ml-2">
-                                Excluded from % calculation
-                              </span>
-                            )}
-                          </div>
+                            <div className="flex items-center justify-center gap-2 mt-3">
+                              <input
+                                type="checkbox"
+                                id={`countup-${activity.id}`}
+                                className="w-4 h-4"
+                                checked={activity.countUp || false}
+                                onChange={() =>
+                                  toggleCountUpActivity(activity.id)
+                                }
+                              />
+                              <label
+                                htmlFor={`countup-${activity.id}`}
+                                className="text-sm text-gray-600 font-medium"
+                              >
+                                Count up
+                              </label>
+                              {activity.countUp && (
+                                <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full ml-2">
+                                  Excluded from % calculation
+                                </span>
+                              )}
+                            </div>
                           )}
                           {!activity.parentActivityId &&
                             !activity.countUp &&
@@ -19600,6 +19891,13 @@ export default function App() {
                         </div>
                       ))}
                   </div>
+                  <SessionTaskPicker
+                    disabled={isTimerActive}
+                    selectedOccurrenceIds={activities
+                      .map((activity) => activity.taskOccurrenceId)
+                      .filter(Boolean)}
+                    onSelect={addTaskOccurrenceToSession}
+                  />
                   <Button
                     variant="outline"
                     onClick={() => addActivity()}
@@ -19663,6 +19961,18 @@ export default function App() {
         onClose={() => setInsightsOpen(false)}
         onManage={() => {
           setInsightsOpen(false);
+          setTasksHubOpen(true);
+        }}
+      />
+      <TasksHub
+        open={tasksHubOpen}
+        onClose={() => setTasksHubOpen(false)}
+        onOpenLegacy={() => {
+          setTasksHubOpen(false);
+          setCurrentPage("manage-activities");
+        }}
+        onOpenCatalog={() => {
+          setTasksHubOpen(false);
           setCatalogManagerOpen(true);
         }}
       />

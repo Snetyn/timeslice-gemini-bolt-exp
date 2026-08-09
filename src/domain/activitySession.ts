@@ -21,6 +21,7 @@ export type ActivitySessionContext = {
   source: ActivitySessionSource;
   kind: ActivitySessionKind;
   activityDefinitionId?: string;
+  taskOccurrenceId?: string;
   lifeAreaId?: string;
   lifeAreaName?: string;
   lifeAreaColor?: string;
@@ -111,8 +112,14 @@ export function normalizeActivitySessionContext(
     source,
     kind,
     activityDefinitionId:
-      typeof value.activityDefinitionId === "string" && value.activityDefinitionId.trim()
+      typeof value.activityDefinitionId === "string" &&
+      value.activityDefinitionId.trim()
         ? value.activityDefinitionId
+        : undefined,
+    taskOccurrenceId:
+      typeof value.taskOccurrenceId === "string" &&
+      value.taskOccurrenceId.trim()
+        ? value.taskOccurrenceId.trim()
         : undefined,
     lifeAreaId:
       typeof value.lifeAreaId === "string" && value.lifeAreaId.trim()
@@ -127,7 +134,8 @@ export function normalizeActivitySessionContext(
         ? value.lifeAreaColor
         : undefined,
     classificationSource:
-      value.classificationSource === "legacy-adoption" || value.classificationSource === "corrected"
+      value.classificationSource === "legacy-adoption" ||
+      value.classificationSource === "corrected"
         ? value.classificationSource
         : value.classificationSource === "recorded"
           ? "recorded"
@@ -168,22 +176,39 @@ export function normalizeActivitySessionRecord(
         previousDurationMs: finiteInteger(correction.previousDurationMs),
       }))
     : [];
-  const classificationCorrections = Array.isArray(value.classificationCorrections)
+  const classificationCorrections = Array.isArray(
+    value.classificationCorrections,
+  )
     ? value.classificationCorrections.filter(isRecord).map((correction) => ({
         correctedAtMs: finiteInteger(correction.correctedAtMs),
         previousActivityDefinitionId:
-          typeof correction.previousActivityDefinitionId === "string" ? correction.previousActivityDefinitionId : undefined,
+          typeof correction.previousActivityDefinitionId === "string"
+            ? correction.previousActivityDefinitionId
+            : undefined,
         previousLifeAreaId:
-          typeof correction.previousLifeAreaId === "string" ? correction.previousLifeAreaId : undefined,
+          typeof correction.previousLifeAreaId === "string"
+            ? correction.previousLifeAreaId
+            : undefined,
         previousLifeAreaName:
-          typeof correction.previousLifeAreaName === "string" ? correction.previousLifeAreaName : undefined,
+          typeof correction.previousLifeAreaName === "string"
+            ? correction.previousLifeAreaName
+            : undefined,
         nextActivityDefinitionId:
-          typeof correction.nextActivityDefinitionId === "string" ? correction.nextActivityDefinitionId : undefined,
+          typeof correction.nextActivityDefinitionId === "string"
+            ? correction.nextActivityDefinitionId
+            : undefined,
         nextLifeAreaId:
-          typeof correction.nextLifeAreaId === "string" ? correction.nextLifeAreaId : undefined,
+          typeof correction.nextLifeAreaId === "string"
+            ? correction.nextLifeAreaId
+            : undefined,
         nextLifeAreaName:
-          typeof correction.nextLifeAreaName === "string" ? correction.nextLifeAreaName : undefined,
-        reason: correction.reason === "legacy-adoption" ? "legacy-adoption" as const : "correction" as const,
+          typeof correction.nextLifeAreaName === "string"
+            ? correction.nextLifeAreaName
+            : undefined,
+        reason:
+          correction.reason === "legacy-adoption"
+            ? ("legacy-adoption" as const)
+            : ("correction" as const),
       }))
     : [];
 

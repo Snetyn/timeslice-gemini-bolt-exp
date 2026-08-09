@@ -111,10 +111,12 @@ test("a running Session catches up once across an Android reload", async ({
   expect(afterReload).toBeLessThan(afterRecovery);
   expect(afterRecovery - afterReload).toBeLessThanOrEqual(3);
   await expect
-    .poll(async () =>
-      (await activitySessionRecords(page)).filter(
-        (record) => record.sourceTimerId === "session" && record.status === "running",
-      ).length,
+    .poll(
+      async () =>
+        (await activitySessionRecords(page)).filter(
+          (record) =>
+            record.sourceTimerId === "session" && record.status === "running",
+        ).length,
     )
     .toBe(1);
 });
@@ -128,8 +130,8 @@ test("an automatic Session switch closes and orders activity records", async ({
         id: "short",
         name: "Short",
         color: "#2563eb",
-        percentage: 50,
-        duration: 1,
+        percentage: 5,
+        duration: 0.0175,
         timeRemaining: 1,
         isCompleted: false,
         countUp: false,
@@ -138,8 +140,8 @@ test("an automatic Session switch closes and orders activity records", async ({
         id: "next",
         name: "Next",
         color: "#7c3aed",
-        percentage: 50,
-        duration: 1,
+        percentage: 95,
+        duration: 0.3325,
         timeRemaining: 20,
         isCompleted: false,
         countUp: false,
@@ -152,7 +154,7 @@ test("an automatic Session switch closes and orders activity records", async ({
         values: {
           timeSliceActivities: JSON.stringify(activities),
           timeSliceTotalHours: "0",
-          timeSliceTotalMinutes: "0.04",
+          timeSliceTotalMinutes: "0.35",
           timeSliceSettings: JSON.stringify({ overtimeType: "none" }),
         },
       }),
@@ -259,9 +261,7 @@ test("Daily switches ownership instead of running two activities", async ({
 
   await page.reload();
   expect((await timerState(page, "daily:work-1"))?.status).toBe("paused");
-  expect((await timerState(page, "daily:exercise-1"))?.status).toBe(
-    "running",
-  );
+  expect((await timerState(page, "daily:exercise-1"))?.status).toBe("running");
 });
 
 test("a view-only window receives live Session state and can take control", async ({

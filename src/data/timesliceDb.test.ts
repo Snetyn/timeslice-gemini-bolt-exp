@@ -33,7 +33,7 @@ describe("TimeSlice database upgrades", () => {
 
     const upgraded = new TimeSliceDatabase(name);
     await upgraded.open();
-    expect(upgraded.verno).toBe(4);
+    expect(upgraded.verno).toBe(5);
     expect((await upgraded.compatibility.get("timeSliceSettings"))?.value).toBe(
       '{"keep":true}',
     );
@@ -47,6 +47,8 @@ describe("TimeSlice database upgrades", () => {
         "activityDefinitions",
         "decisionOpportunities",
         "decisionMomentum",
+        "taskOccurrences",
+        "dailyPlans",
       ]),
     );
     upgraded.close();

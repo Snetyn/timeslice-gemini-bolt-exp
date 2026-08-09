@@ -11,6 +11,10 @@ import type {
   DecisionMomentumRecord,
   DecisionOpportunityRecord,
 } from "../domain/decisionMomentum";
+import type {
+  DailyPlanRecord,
+  TaskOccurrenceRecord,
+} from "../domain/taskPlanning";
 
 export type VersionedRecord<T> = {
   id: string;
@@ -44,6 +48,8 @@ type TransactionTable = keyof Pick<
   | "activityDefinitions"
   | "decisionOpportunities"
   | "decisionMomentum"
+  | "taskOccurrences"
+  | "dailyPlans"
   | "compatibility"
   | "meta"
 >;
@@ -72,6 +78,8 @@ export class TimeSliceDatabase extends Dexie {
   activityDefinitions!: EntityTable<ActivityDefinitionRecord, "id">;
   decisionOpportunities!: EntityTable<DecisionOpportunityRecord, "id">;
   decisionMomentum!: EntityTable<DecisionMomentumRecord, "id">;
+  taskOccurrences!: EntityTable<TaskOccurrenceRecord, "id">;
+  dailyPlans!: EntityTable<DailyPlanRecord, "id">;
   compatibility!: EntityTable<VersionedRecord<string>, "id">;
   meta!: EntityTable<MetaRecord, "id">;
 
@@ -105,6 +113,13 @@ export class TimeSliceDatabase extends Dexie {
       decisionOpportunities: "id, status, reason, createdAtMs, updatedAtMs",
       decisionMomentum:
         "id, &decisionOpportunityId, activityDefinitionId, lifeAreaId, confirmedAtMs, updatedAtMs",
+    });
+    this.version(5).stores({
+      taskOccurrences:
+        "id, activityDefinitionId, status, localDate, folderId, recurrenceKey, updatedAtMs, [localDate+status]",
+      dailyPlans: "id, &localDate, updatedAtMs",
+      activitySessions:
+        "id, sourceTimerId, status, activityId, activityDefinitionId, taskOccurrenceId, startedAtMs, endedAtMs, updatedAtMs, [sourceTimerId+status], [taskOccurrenceId+status]",
     });
   }
 }
@@ -193,8 +208,7 @@ export async function transactIdempotent<T>(
 
       const current =
         ((await db.meta.get(WORKSPACE_REVISION_ID))?.value as
-          | number
-          | undefined) || 0;
+          number | undefined) || 0;
       const revision = current + 1;
       const value = await mutate(revision);
       const updatedAtMs = Date.now();

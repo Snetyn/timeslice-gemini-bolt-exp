@@ -1,3 +1,5 @@
+import { normalizeRecurrenceRule } from "./taskPlanning";
+
 export type DecisionType = "normal" | "leisure" | "distraction";
 
 type DurableRecord = {
@@ -33,6 +35,17 @@ export type ActivityDefinitionRecord = DurableRecord & {
   order: number;
   protected: boolean;
   decisionType: DecisionType;
+  planningEnabled?: boolean;
+  tagIds?: string[];
+  schedulingMode?: "flexible" | "exact" | "window";
+  exactStartMinutes?: number | null;
+  windowStartMinutes?: number | null;
+  windowEndMinutes?: number | null;
+  durationMode?: "fixed" | "adaptive";
+  baselineDurationSeconds?: number;
+  minimumDurationSeconds?: number;
+  recurrenceRule?: import("./taskPlanning").TaskRecurrenceRule;
+  rolloverPolicy?: "carry" | "skip";
 };
 
 export type FlatFolder = ActivityFolderRecord & {
@@ -51,7 +64,14 @@ const finiteInteger = (value: unknown, fallback = 0) => {
 
 const stringArray = (value: unknown) =>
   Array.isArray(value)
-    ? [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))]
+    ? [
+        ...new Set(
+          value
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.trim())
+            .filter(Boolean),
+        ),
+      ]
     : [];
 
 const baseRecord = (value: Record<string, unknown>) => {
@@ -135,6 +155,32 @@ export const normalizeActivityDefinition = (
     order: finiteInteger(record.order),
     protected: Boolean(record.protected),
     decisionType,
+    planningEnabled: Boolean(record.planningEnabled),
+    tagIds: stringArray(record.tagIds),
+    schedulingMode:
+      record.schedulingMode === "exact" || record.schedulingMode === "window"
+        ? record.schedulingMode
+        : "flexible",
+    exactStartMinutes: Number.isFinite(Number(record.exactStartMinutes))
+      ? Math.min(1439, finiteInteger(record.exactStartMinutes))
+      : null,
+    windowStartMinutes: Number.isFinite(Number(record.windowStartMinutes))
+      ? Math.min(1439, finiteInteger(record.windowStartMinutes))
+      : null,
+    windowEndMinutes: Number.isFinite(Number(record.windowEndMinutes))
+      ? Math.min(1440, finiteInteger(record.windowEndMinutes))
+      : null,
+    durationMode: record.durationMode === "adaptive" ? "adaptive" : "fixed",
+    baselineDurationSeconds: Math.max(
+      60,
+      finiteInteger(record.baselineDurationSeconds, 3600),
+    ),
+    minimumDurationSeconds: Math.max(
+      0,
+      finiteInteger(record.minimumDurationSeconds, 1800),
+    ),
+    recurrenceRule: normalizeRecurrenceRule(record.recurrenceRule),
+    rolloverPolicy: record.rolloverPolicy === "skip" ? "skip" : "carry",
   };
 };
 
@@ -145,30 +191,43 @@ export const flattenFolderTree = (
   const byParent = new Map<string | null, ActivityFolderRecord[]>();
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   for (const folder of folders) {
-    const parent = folder.parentId && byId.has(folder.parentId) ? folder.parentId : null;
+    const parent =
+      folder.parentId && byId.has(folder.parentId) ? folder.parentId : null;
     const siblings = byParent.get(parent) || [];
     siblings.push(folder);
     byParent.set(parent, siblings);
   }
   for (const siblings of byParent.values()) {
-    siblings.sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
+    siblings.sort(
+      (left, right) =>
+        left.order - right.order || left.name.localeCompare(right.name),
+    );
   }
 
   const result: FlatFolder[] = [];
   const visited = new Set<string>();
-  const stack = (byParent.get(null) || []).slice().reverse().map((folder) => ({
-    folder,
-    depth: 0,
-    ancestorArchived: false,
-    invalidParent: Boolean(folder.parentId && !byId.has(folder.parentId)),
-  }));
+  const stack = (byParent.get(null) || [])
+    .slice()
+    .reverse()
+    .map((folder) => ({
+      folder,
+      depth: 0,
+      ancestorArchived: false,
+      invalidParent: Boolean(folder.parentId && !byId.has(folder.parentId)),
+    }));
   while (stack.length) {
     const item = stack.pop()!;
     if (visited.has(item.folder.id)) continue;
     visited.add(item.folder.id);
-    const effectivelyArchived = item.ancestorArchived || item.folder.archivedAtMs !== undefined;
+    const effectivelyArchived =
+      item.ancestorArchived || item.folder.archivedAtMs !== undefined;
     if (includeArchived || !effectivelyArchived) {
-      result.push({ ...item.folder, depth: item.depth, effectivelyArchived, invalidParent: item.invalidParent });
+      result.push({
+        ...item.folder,
+        depth: item.depth,
+        effectivelyArchived,
+        invalidParent: item.invalidParent,
+      });
     }
     const children = byParent.get(item.folder.id) || [];
     for (let index = children.length - 1; index >= 0; index -= 1) {
@@ -182,7 +241,12 @@ export const flattenFolderTree = (
   }
   for (const folder of folders) {
     if (!visited.has(folder.id) && includeArchived) {
-      result.push({ ...folder, depth: 0, effectivelyArchived: true, invalidParent: true });
+      result.push({
+        ...folder,
+        depth: 0,
+        effectivelyArchived: true,
+        invalidParent: true,
+      });
     }
   }
   return result;
@@ -194,7 +258,8 @@ export const canMoveFolder = (
   parentId: string | null,
 ) => {
   if (folderId === parentId) return false;
-  if (parentId === null) return folders.some((folder) => folder.id === folderId);
+  if (parentId === null)
+    return folders.some((folder) => folder.id === folderId);
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   if (!byId.has(folderId) || !byId.has(parentId)) return false;
   const visited = new Set<string>();

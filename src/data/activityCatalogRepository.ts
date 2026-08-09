@@ -31,6 +31,17 @@ type EditableDefinition = Pick<
   | "order"
   | "protected"
   | "decisionType"
+  | "planningEnabled"
+  | "tagIds"
+  | "schedulingMode"
+  | "exactStartMinutes"
+  | "windowStartMinutes"
+  | "windowEndMinutes"
+  | "durationMode"
+  | "baselineDurationSeconds"
+  | "minimumDurationSeconds"
+  | "recurrenceRule"
+  | "rolloverPolicy"
 >;
 
 const cleanName = (value: string) => {
@@ -39,7 +50,12 @@ const cleanName = (value: string) => {
   return name;
 };
 
-const nowRecord = (id: string, name: string, revision: number, nowMs: number) => ({
+const nowRecord = (
+  id: string,
+  name: string,
+  revision: number,
+  nowMs: number,
+) => ({
   id,
   name,
   normalizedName: normalizeSearchName(name),
@@ -99,7 +115,10 @@ export async function createFolder(
     ["activityFolders"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
     async (revision) => {
-      if (input.parentId && !(await timeSliceDb.activityFolders.get(input.parentId))) {
+      if (
+        input.parentId &&
+        !(await timeSliceDb.activityFolders.get(input.parentId))
+      ) {
         throw new TypeError("The parent folder no longer exists.");
       }
       const siblings = (await timeSliceDb.activityFolders.toArray()).filter(
@@ -129,9 +148,16 @@ export async function moveFolder(
     async (revision) => {
       const folders = await timeSliceDb.activityFolders.toArray();
       const folder = folders.find((item) => item.id === id);
-      if (!folder || folder.revision !== expectedRevision) throw new CatalogRevisionConflictError();
-      if (!canMoveFolder(folders, id, parentId)) throw new TypeError("That folder move would create an invalid tree.");
-      const updated = { ...folder, parentId, revision, updatedAtMs: Date.now() };
+      if (!folder || folder.revision !== expectedRevision)
+        throw new CatalogRevisionConflictError();
+      if (!canMoveFolder(folders, id, parentId))
+        throw new TypeError("That folder move would create an invalid tree.");
+      const updated = {
+        ...folder,
+        parentId,
+        revision,
+        updatedAtMs: Date.now(),
+      };
       await timeSliceDb.activityFolders.put(updated);
       return updated;
     },
@@ -152,14 +178,18 @@ export async function updateLifeArea(
       const current = await timeSliceDb.lifeAreas.get(id);
       if (!current || current.revision !== expectedRevision)
         throw new CatalogRevisionConflictError();
-      const name = changes.name === undefined ? current.name : cleanName(changes.name);
+      const name =
+        changes.name === undefined ? current.name : cleanName(changes.name);
       const updated: LifeAreaRecord = {
         ...current,
         ...changes,
         name,
         normalizedName: normalizeSearchName(name),
         color: changes.color?.trim() || current.color,
-        order: changes.order === undefined ? current.order : Math.max(0, Math.floor(changes.order)),
+        order:
+          changes.order === undefined
+            ? current.order
+            : Math.max(0, Math.floor(changes.order)),
         revision,
         updatedAtMs: Date.now(),
       };
@@ -175,7 +205,12 @@ export async function setLifeAreaArchived(
   expectedRevision: number,
   mutationId: string = crypto.randomUUID(),
 ) {
-  const command = { type: "set-life-area-archived", id, archived, expectedRevision };
+  const command = {
+    type: "set-life-area-archived",
+    id,
+    archived,
+    expectedRevision,
+  };
   return transactIdempotent(
     ["lifeAreas"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
@@ -210,17 +245,22 @@ export async function updateFolder(
       const current = folders.find((folder) => folder.id === id);
       if (!current || current.revision !== expectedRevision)
         throw new CatalogRevisionConflictError();
-      const parentId = changes.parentId === undefined ? current.parentId : changes.parentId;
+      const parentId =
+        changes.parentId === undefined ? current.parentId : changes.parentId;
       if (!canMoveFolder(folders, id, parentId))
         throw new TypeError("That folder move would create an invalid tree.");
-      const name = changes.name === undefined ? current.name : cleanName(changes.name);
+      const name =
+        changes.name === undefined ? current.name : cleanName(changes.name);
       const updated: ActivityFolderRecord = {
         ...current,
         ...changes,
         name,
         normalizedName: normalizeSearchName(name),
         parentId,
-        order: changes.order === undefined ? current.order : Math.max(0, Math.floor(changes.order)),
+        order:
+          changes.order === undefined
+            ? current.order
+            : Math.max(0, Math.floor(changes.order)),
         revision,
         updatedAtMs: Date.now(),
       };
@@ -236,7 +276,12 @@ export async function setFolderArchived(
   expectedRevision: number,
   mutationId: string = crypto.randomUUID(),
 ) {
-  const command = { type: "set-folder-archived", id, archived, expectedRevision };
+  const command = {
+    type: "set-folder-archived",
+    id,
+    archived,
+    expectedRevision,
+  };
   return transactIdempotent(
     ["activityFolders"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
@@ -266,6 +311,17 @@ export async function createActivityDefinition(
     folderId?: string | null;
     protected?: boolean;
     decisionType?: DecisionType;
+    planningEnabled?: boolean;
+    tagIds?: string[];
+    schedulingMode?: ActivityDefinitionRecord["schedulingMode"];
+    exactStartMinutes?: number | null;
+    windowStartMinutes?: number | null;
+    windowEndMinutes?: number | null;
+    durationMode?: ActivityDefinitionRecord["durationMode"];
+    baselineDurationSeconds?: number;
+    minimumDurationSeconds?: number;
+    recurrenceRule?: ActivityDefinitionRecord["recurrenceRule"];
+    rolloverPolicy?: ActivityDefinitionRecord["rolloverPolicy"];
   },
   mutationId: string = crypto.randomUUID(),
 ) {
@@ -278,9 +334,13 @@ export async function createActivityDefinition(
     async (revision) => {
       if (input.lifeAreaId) {
         const area = await timeSliceDb.lifeAreas.get(input.lifeAreaId);
-        if (!area || area.archivedAtMs !== undefined) throw new TypeError("Choose an active life area.");
+        if (!area || area.archivedAtMs !== undefined)
+          throw new TypeError("Choose an active life area.");
       }
-      if (input.folderId && !(await timeSliceDb.activityFolders.get(input.folderId))) {
+      if (
+        input.folderId &&
+        !(await timeSliceDb.activityFolders.get(input.folderId))
+      ) {
         throw new TypeError("Choose an existing folder.");
       }
       const definition: ActivityDefinitionRecord = {
@@ -293,6 +353,26 @@ export async function createActivityDefinition(
         order: await timeSliceDb.activityDefinitions.count(),
         protected: Boolean(input.protected),
         decisionType: input.decisionType || "normal",
+        planningEnabled: Boolean(input.planningEnabled),
+        tagIds: [...new Set(input.tagIds || [])],
+        schedulingMode: input.schedulingMode || "flexible",
+        exactStartMinutes: input.exactStartMinutes ?? null,
+        windowStartMinutes: input.windowStartMinutes ?? null,
+        windowEndMinutes: input.windowEndMinutes ?? null,
+        durationMode: input.durationMode || "fixed",
+        baselineDurationSeconds: Math.max(
+          60,
+          Math.floor(input.baselineDurationSeconds || 3600),
+        ),
+        minimumDurationSeconds: Math.max(
+          0,
+          Math.floor(
+            input.minimumDurationSeconds ??
+              (input.baselineDurationSeconds || 3600) / 2,
+          ),
+        ),
+        recurrenceRule: input.recurrenceRule || { type: "none" },
+        rolloverPolicy: input.rolloverPolicy || "carry",
       };
       await timeSliceDb.activityDefinitions.add(definition);
       return definition;
@@ -306,7 +386,12 @@ export async function updateActivityDefinition(
   expectedRevision: number,
   mutationId: string = crypto.randomUUID(),
 ) {
-  const command = { type: "update-activity-definition", id, changes, expectedRevision };
+  const command = {
+    type: "update-activity-definition",
+    id,
+    changes,
+    expectedRevision,
+  };
   return transactIdempotent(
     ["activityDefinitions", "lifeAreas", "activityFolders"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
@@ -314,8 +399,12 @@ export async function updateActivityDefinition(
       const current = await timeSliceDb.activityDefinitions.get(id);
       if (!current || current.revision !== expectedRevision)
         throw new CatalogRevisionConflictError();
-      const lifeAreaId = changes.lifeAreaId === undefined ? current.lifeAreaId : changes.lifeAreaId;
-      const folderId = changes.folderId === undefined ? current.folderId : changes.folderId;
+      const lifeAreaId =
+        changes.lifeAreaId === undefined
+          ? current.lifeAreaId
+          : changes.lifeAreaId;
+      const folderId =
+        changes.folderId === undefined ? current.folderId : changes.folderId;
       if (lifeAreaId) {
         const area = await timeSliceDb.lifeAreas.get(lifeAreaId);
         if (!area || area.archivedAtMs !== undefined)
@@ -323,12 +412,15 @@ export async function updateActivityDefinition(
       }
       if (folderId && !(await timeSliceDb.activityFolders.get(folderId)))
         throw new TypeError("Choose an existing folder.");
-      const name = changes.name === undefined ? current.name : cleanName(changes.name);
+      const name =
+        changes.name === undefined ? current.name : cleanName(changes.name);
       const previousNormalized = normalizeSearchName(current.name);
-      const aliases = [...new Set([
-        ...(changes.aliases || current.aliases).map(normalizeSearchName),
-        ...(name !== current.name ? [previousNormalized] : []),
-      ])].filter((alias) => alias && alias !== normalizeSearchName(name));
+      const aliases = [
+        ...new Set([
+          ...(changes.aliases || current.aliases).map(normalizeSearchName),
+          ...(name !== current.name ? [previousNormalized] : []),
+        ]),
+      ].filter((alias) => alias && alias !== normalizeSearchName(name));
       const updated: ActivityDefinitionRecord = {
         ...current,
         ...changes,
@@ -338,7 +430,10 @@ export async function updateActivityDefinition(
         color: changes.color?.trim() || current.color,
         lifeAreaId,
         folderId,
-        order: changes.order === undefined ? current.order : Math.max(0, Math.floor(changes.order)),
+        order:
+          changes.order === undefined
+            ? current.order
+            : Math.max(0, Math.floor(changes.order)),
         revision,
         updatedAtMs: Date.now(),
       };
@@ -354,7 +449,12 @@ export async function setActivityDefinitionArchived(
   expectedRevision: number,
   mutationId: string = crypto.randomUUID(),
 ) {
-  const command = { type: "set-activity-definition-archived", id, archived, expectedRevision };
+  const command = {
+    type: "set-activity-definition-archived",
+    id,
+    archived,
+    expectedRevision,
+  };
   return transactIdempotent(
     ["activityDefinitions"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
@@ -378,12 +478,16 @@ export async function setActivityDefinitionArchived(
 export async function findDefinitionsByName(name: string) {
   const normalized = normalizeSearchName(name);
   return (await listActivityDefinitions(true)).filter(
-    (item) => item.normalizedName === normalized || item.aliases.includes(normalized),
+    (item) =>
+      item.normalizedName === normalized || item.aliases.includes(normalized),
   );
 }
 
 export async function findDefinitionBySourceKey(sourceKey: string) {
-  const candidates = await timeSliceDb.activityDefinitions.where("sourceKeys").equals(sourceKey).toArray();
+  const candidates = await timeSliceDb.activityDefinitions
+    .where("sourceKeys")
+    .equals(sourceKey)
+    .toArray();
   return candidates.map(normalizeActivityDefinition).find(Boolean) || null;
 }
 
@@ -399,7 +503,8 @@ export async function listRecentActivityDefinitions(limit = 6) {
         let cursor: ActivityFolderRecord | undefined = folder;
         const visited = new Set<string>();
         while (cursor) {
-          if (visited.has(cursor.id) || cursor.archivedAtMs !== undefined) return true;
+          if (visited.has(cursor.id) || cursor.archivedAtMs !== undefined)
+            return true;
           visited.add(cursor.id);
           cursor = cursor.parentId
             ? folders.find((candidate) => candidate.id === cursor?.parentId)
@@ -412,13 +517,17 @@ export async function listRecentActivityDefinitions(limit = 6) {
   const result: ActivityDefinitionRecord[] = [];
   const seen = new Set<string>();
   for (const session of sessions) {
-    if (!session.activityDefinitionId || seen.has(session.activityDefinitionId)) continue;
-    const definition = await timeSliceDb.activityDefinitions.get(session.activityDefinitionId);
+    if (!session.activityDefinitionId || seen.has(session.activityDefinitionId))
+      continue;
+    const definition = await timeSliceDb.activityDefinitions.get(
+      session.activityDefinitionId,
+    );
     if (
       !definition ||
       definition.archivedAtMs !== undefined ||
       (definition.folderId && archivedFolderIds.has(definition.folderId))
-    ) continue;
+    )
+      continue;
     seen.add(definition.id);
     result.push(definition);
     if (result.length >= Math.max(0, Math.floor(limit))) break;
@@ -440,11 +549,15 @@ export type LegacyHistoryCandidate = {
 export async function previewLegacyHistoryCandidates(definitionId: string) {
   const definition = await timeSliceDb.activityDefinitions.get(definitionId);
   if (!definition) throw new TypeError("Activity not found.");
-  const searchNames = new Set([definition.normalizedName, ...definition.aliases]);
+  const searchNames = new Set([
+    definition.normalizedName,
+    ...definition.aliases,
+  ]);
   const records = await timeSliceDb.activitySessions.toArray();
   const groups = new Map<string, LegacyHistoryCandidate>();
   for (const record of records) {
-    if (record.activityDefinitionId || record.deletedAtMs !== undefined) continue;
+    if (record.activityDefinitionId || record.deletedAtMs !== undefined)
+      continue;
     if (!searchNames.has(normalizeSearchName(record.activityName))) continue;
     const key = `${record.source}:${record.activityId}`;
     const current = groups.get(key);
@@ -455,11 +568,19 @@ export async function previewLegacyHistoryCandidates(definitionId: string) {
       source: record.source,
       count: (current?.count || 0) + 1,
       durationMs: (current?.durationMs || 0) + record.durationMs,
-      firstAtMs: Math.min(current?.firstAtMs ?? record.startedAtMs, record.startedAtMs),
-      lastAtMs: Math.max(current?.lastAtMs ?? record.startedAtMs, record.endedAtMs || record.startedAtMs),
+      firstAtMs: Math.min(
+        current?.firstAtMs ?? record.startedAtMs,
+        record.startedAtMs,
+      ),
+      lastAtMs: Math.max(
+        current?.lastAtMs ?? record.startedAtMs,
+        record.endedAtMs || record.startedAtMs,
+      ),
     });
   }
-  return [...groups.values()].sort((left, right) => right.lastAtMs - left.lastAtMs);
+  return [...groups.values()].sort(
+    (left, right) => right.lastAtMs - left.lastAtMs,
+  );
 }
 
 export async function adoptLegacyHistory(
@@ -473,9 +594,12 @@ export async function adoptLegacyHistory(
     ["activityDefinitions", "lifeAreas", "activitySessions"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
     async (revision) => {
-      const definition = await timeSliceDb.activityDefinitions.get(definitionId);
+      const definition =
+        await timeSliceDb.activityDefinitions.get(definitionId);
       if (!definition) throw new TypeError("Activity not found.");
-      const area = definition.lifeAreaId ? await timeSliceDb.lifeAreas.get(definition.lifeAreaId) : undefined;
+      const area = definition.lifeAreaId
+        ? await timeSliceDb.lifeAreas.get(definition.lifeAreaId)
+        : undefined;
       const records = await timeSliceDb.activitySessions.toArray();
       const changed: ActivitySessionRecord[] = [];
       const correctedAtMs = Date.now();
