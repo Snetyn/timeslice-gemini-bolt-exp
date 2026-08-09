@@ -15418,6 +15418,7 @@ export default function App() {
                       ${draggingActivityId === activity.id ? "opacity-40" : ""}
                       ${activity.parentActivityId ? "ml-5 border-l-4" : ""}
                       ${dragOverActivityId === activity.id && draggingActivityId ? "ring-2 ring-blue-300" : ""}`}
+                        data-testid={`session-activity-${activity.id}`}
                         data-parent-activity-id={activity.parentActivityId}
                         onClick={() =>
                           !activity.isCompleted && switchToActivity(index)

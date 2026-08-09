@@ -26,6 +26,7 @@ export type SessionHierarchyActivity = {
   tags?: string[];
   parentActivityId?: string;
   ownTimerCompleted?: boolean;
+  completedElapsedSeconds?: number;
   subActivityFunding?: SubActivityFunding;
   [key: string]: unknown;
 };
@@ -165,49 +166,6 @@ const activityRemaining = (activity: SessionHierarchyActivity) =>
       : Number(activity.duration || 0) * 60,
   );
 
-const parentIsProtected = (
-  activity: SessionHierarchyActivity,
-  byId: Map<string, SessionHierarchyActivity>,
-) =>
-  Boolean(
-    activity.priority ||
-    (activity.parentActivityId &&
-      byId.get(activity.parentActivityId)?.priority),
-  );
-
-function proportionalShares(
-  donors: Array<{ id: string; available: number; index: number }>,
-  requested: number,
-) {
-  const total = donors.reduce((sum, donor) => sum + donor.available, 0);
-  const funded = Math.min(seconds(requested), total);
-  if (funded <= 0 || total <= 0) return {};
-  const shares = donors.map((donor) => {
-    const exact = (funded * donor.available) / total;
-    return {
-      ...donor,
-      amount: Math.floor(exact),
-      remainder: exact - Math.floor(exact),
-    };
-  });
-  let remaining = funded - shares.reduce((sum, share) => sum + share.amount, 0);
-  [...shares]
-    .sort(
-      (left, right) =>
-        right.remainder - left.remainder || left.index - right.index,
-    )
-    .forEach((share) => {
-      if (remaining <= 0 || share.amount >= share.available) return;
-      share.amount += 1;
-      remaining -= 1;
-    });
-  return Object.fromEntries(
-    shares
-      .filter((share) => share.amount > 0)
-      .map((share) => [share.id, share.amount]),
-  );
-}
-
 export function previewSubActivityFunding(options: {
   activities: SessionHierarchyActivity[];
   parentId: string;
@@ -215,39 +173,25 @@ export function previewSubActivityFunding(options: {
   minimumDonorSeconds?: number;
 }): SubActivityFundingPreview {
   const activities = normalizeSessionHierarchy(options.activities);
-  const family = sessionFamilyIds(activities, options.parentId);
-  const byId = new Map(activities.map((activity) => [activity.id, activity]));
-  const minimum = seconds(options.minimumDonorSeconds);
-  const donors = activities
-    .map((activity, index) => ({
-      activity,
-      index,
-      available: Math.max(0, activityRemaining(activity) - minimum),
-    }))
-    .filter(
-      ({ activity, available }) =>
-        !family.has(activity.id) &&
-        isOrdinaryCountdown(activity) &&
-        !activity.isCompleted &&
-        !parentIsProtected(activity, byId) &&
-        available > 0,
-    )
-    .map(({ activity, index, available }) => ({
-      id: activity.id,
-      index,
-      available,
-    }));
-  const maximumSeconds = donors.reduce(
-    (sum, donor) => sum + donor.available,
-    0,
+  const parent = activities.find(
+    (activity) => activity.id === options.parentId,
   );
+  const minimum = seconds(options.minimumDonorSeconds);
+  const maximumSeconds =
+    parent &&
+    !parent.parentActivityId &&
+    isOrdinaryCountdown(parent) &&
+    !parent.isCompleted
+      ? Math.max(0, activityRemaining(parent) - minimum)
+      : 0;
   const requestedSeconds = seconds(options.requestedSeconds);
   const fundedSeconds = Math.min(requestedSeconds, maximumSeconds);
   return {
     maximumSeconds,
     requestedSeconds,
     fundedSeconds,
-    donatedSecondsById: proportionalShares(donors, fundedSeconds),
+    donatedSecondsById:
+      parent && fundedSeconds > 0 ? { [parent.id]: fundedSeconds } : {},
     valid: requestedSeconds > 0 && requestedSeconds <= maximumSeconds,
   };
 }
@@ -492,8 +436,6 @@ export function removeSessionSubActivity<
   const restoredSecondsById: Record<string, number> = {};
   const funding = normalizeSubActivityFunding(child.subActivityFunding);
   const originalShares = funding?.donatedSecondsById || {};
-  const family = sessionFamilyIds(activities, child.parentActivityId);
-  const byId = new Map(activities.map((activity) => [activity.id, activity]));
   const next = activities
     .filter((activity) => activity.id !== child.id)
     .map((activity) => ({ ...activity })) as T[];
@@ -501,37 +443,42 @@ export function removeSessionSubActivity<
   Object.entries(originalShares).forEach(([donorId, funded]) => {
     if (remaining <= 0) return;
     const donor = next.find((activity) => activity.id === donorId);
-    if (!donor || donor.isCompleted || donor.countUp || donor.isRewardRest)
+    const isParent = donorId === child.parentActivityId;
+    if (
+      !donor ||
+      (!isParent && donor.isCompleted) ||
+      donor.countUp ||
+      donor.isRewardRest
+    )
       return;
     const restore = Math.min(remaining, funded);
     donor.timeRemaining = activityRemaining(donor) + restore;
     donor.duration = Number(donor.duration || 0) + restore / 60;
     donor.originalPlannedSeconds =
       seconds(donor.originalPlannedSeconds) + restore;
+    if (isParent && restore > 0) {
+      donor.isCompleted = false;
+      donor.ownTimerCompleted = false;
+      donor.completedElapsedSeconds = undefined;
+    }
     restoredSecondsById[donor.id] = restore;
     remaining -= restore;
   });
 
-  const fallbackDonors = next.filter(
-    (activity) =>
-      !family.has(activity.id) &&
-      isOrdinaryCountdown(activity) &&
-      !activity.isCompleted &&
-      !parentIsProtected(activity, byId),
+  const parent = next.find(
+    (activity) => activity.id === child.parentActivityId,
   );
-  if (remaining > 0 && fallbackDonors.length > 0) {
-    const base = Math.floor(remaining / fallbackDonors.length);
-    let remainder = remaining - base * fallbackDonors.length;
-    fallbackDonors.forEach((donor) => {
-      const restore = base + (remainder-- > 0 ? 1 : 0);
-      donor.timeRemaining = activityRemaining(donor) + restore;
-      donor.duration = Number(donor.duration || 0) + restore / 60;
-      donor.originalPlannedSeconds =
-        seconds(donor.originalPlannedSeconds) + restore;
-      restoredSecondsById[donor.id] =
-        (restoredSecondsById[donor.id] || 0) + restore;
-      remaining -= restore;
-    });
+  if (remaining > 0 && parent && isOrdinaryCountdown(parent)) {
+    parent.timeRemaining = activityRemaining(parent) + remaining;
+    parent.duration = Number(parent.duration || 0) + remaining / 60;
+    parent.originalPlannedSeconds =
+      seconds(parent.originalPlannedSeconds) + remaining;
+    parent.isCompleted = false;
+    parent.ownTimerCompleted = false;
+    parent.completedElapsedSeconds = undefined;
+    restoredSecondsById[parent.id] =
+      (restoredSecondsById[parent.id] || 0) + remaining;
+    remaining = 0;
   }
   return {
     activities: recalculatePercentages(next),

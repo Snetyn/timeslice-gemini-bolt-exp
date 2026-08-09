@@ -49,7 +49,7 @@ describe("Session sub-activities", () => {
     );
   });
 
-  it("funds a child proportionally with deterministic integer rounding", () => {
+  it("partitions a child directly from its parent's remaining allocation", () => {
     const source = [
       activity("parent", 600),
       activity("a", 100),
@@ -61,10 +61,10 @@ describe("Session sub-activities", () => {
       requestedSeconds: 101,
     });
     expect(preview).toMatchObject({
-      maximumSeconds: 300,
+      maximumSeconds: 600,
       fundedSeconds: 101,
       valid: true,
-      donatedSecondsById: { a: 34, b: 67 },
+      donatedSecondsById: { parent: 101 },
     });
     const result = addSessionSubActivity({
       activities: source,
@@ -79,7 +79,7 @@ describe("Session sub-activities", () => {
       "b",
     ]);
     expect(result.activities.map(({ timeRemaining }) => timeRemaining)).toEqual(
-      [600, 101, 66, 133],
+      [499, 101, 100, 200],
     );
     expect(
       result.activities.reduce(
@@ -89,10 +89,10 @@ describe("Session sub-activities", () => {
     ).toBe(900);
   });
 
-  it("protects stars and starred parent families but not locks", () => {
+  it("uses only the selected parent even when unrelated tasks are eligible", () => {
     const preview = previewSubActivityFunding({
       activities: [
-        activity("parent", 600),
+        activity("parent", 600, { priority: true }),
         activity("protected-parent", 100, { priority: true }),
         activity("protected-child", 100, {
           parentActivityId: "protected-parent",
@@ -103,13 +103,13 @@ describe("Session sub-activities", () => {
       parentId: "parent",
       requestedSeconds: 100,
     });
-    expect(preview.maximumSeconds).toBe(100);
-    expect(preview.donatedSecondsById).toEqual({ locked: 100 });
+    expect(preview.maximumSeconds).toBe(600);
+    expect(preview.donatedSecondsById).toEqual({ parent: 100 });
   });
 
   it("respects donor minimums and exposes the actual maximum", () => {
     const preview = previewSubActivityFunding({
-      activities: [activity("parent", 600), activity("a", 100)],
+      activities: [activity("parent", 100), activity("a", 600)],
       parentId: "parent",
       requestedSeconds: 80,
       minimumDonorSeconds: 30,
@@ -119,7 +119,7 @@ describe("Session sub-activities", () => {
     expect(preview.fundedSeconds).toBe(70);
   });
 
-  it("restores remaining child allocation to recorded donors and Vault fallback", () => {
+  it("restores remaining child allocation to its parent", () => {
     const created = addSessionSubActivity({
       activities: [
         activity("parent", 600),
@@ -145,12 +145,47 @@ describe("Session sub-activities", () => {
         0,
       ),
     ).toBeGreaterThan(0);
+    expect(restored.restoredSecondsById).toEqual({ parent: 90 });
     expect(
-      Object.values(restored.restoredSecondsById).reduce((a, b) => a + b, 0),
-    ).toBe(90);
+      restored.activities.find(({ id }) => id === "parent")?.timeRemaining,
+    ).toBe(600);
   });
 
-  it("increases a child through the same outside-family donor rules", () => {
+  it("reactivates a completed parent when a child returns unused time", () => {
+    const created = addSessionSubActivity({
+      activities: [activity("parent", 100)],
+      parentId: "parent",
+      child: { id: "child", name: "Child" },
+      requestedSeconds: 40,
+    });
+    const restored = removeSessionSubActivity({
+      activities: created.activities.map((item) =>
+        item.id === "parent"
+          ? {
+              ...item,
+              timeRemaining: 0,
+              isCompleted: true,
+              ownTimerCompleted: true,
+              completedElapsedSeconds: 60,
+            }
+          : item,
+      ),
+      childId: "child",
+      vaultSeconds: 0,
+    });
+
+    expect(restored.activities.find(({ id }) => id === "parent")).toMatchObject(
+      {
+        timeRemaining: 40,
+        isCompleted: false,
+        ownTimerCompleted: false,
+        completedElapsedSeconds: undefined,
+      },
+    );
+    expect(restored.vaultSeconds).toBe(0);
+  });
+
+  it("increases a child by shrinking the parent again", () => {
     const created = addSessionSubActivity({
       activities: [activity("parent", 100), activity("donor", 200)],
       parentId: "parent",
@@ -168,13 +203,16 @@ describe("Session sub-activities", () => {
         originalPlannedSeconds: 70,
         subActivityFunding: {
           fundedSeconds: 70,
-          donatedSecondsById: { donor: 70 },
+          donatedSecondsById: { parent: 70 },
         },
       },
     );
     expect(
+      increased.activities.find(({ id }) => id === "parent")?.timeRemaining,
+    ).toBe(30);
+    expect(
       increased.activities.find(({ id }) => id === "donor")?.timeRemaining,
-    ).toBe(130);
+    ).toBe(200);
   });
 
   it("moves top-level families together and only reorders children within a family", () => {

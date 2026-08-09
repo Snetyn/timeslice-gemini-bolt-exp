@@ -153,7 +153,7 @@ export function SessionSubActivitySheet({
 
         <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm">
           <div className="flex justify-between gap-3">
-            <span className="text-slate-600">Available from other tasks</span>
+            <span className="text-slate-600">Available from {parentName}</span>
             <strong>{formatDuration(preview.maximumSeconds)}</strong>
           </div>
           {requested > preview.maximumSeconds && (
@@ -164,7 +164,7 @@ export function SessionSubActivitySheet({
           {Object.keys(preview.donatedSecondsById).length > 0 && (
             <div className="mt-2 border-t border-slate-200 pt-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Proportional reduction
+                Parent time change
               </p>
               <ul className="mt-1 space-y-1">
                 {Object.entries(preview.donatedSecondsById).map(

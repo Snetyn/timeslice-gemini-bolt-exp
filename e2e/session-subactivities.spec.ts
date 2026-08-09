@@ -51,6 +51,7 @@ test("creates and persists a proportionally funded Session sub-activity", async 
     );
   });
   await page.goto("/");
+  await page.getByRole("button", { name: "Pause" }).click();
 
   const predicted = page
     .getByText("Predicted End", { exact: true })
@@ -62,12 +63,15 @@ test("creates and persists a proportionally funded Session sub-activity", async 
   const dialog = page.getByRole("dialog", { name: "Add sub-activity" });
   await dialog.getByLabel("Name").fill("Kitchen");
   await dialog.getByLabel("Sub-activity minutes").fill("2");
-  await expect(dialog.getByText("Work")).toBeVisible();
+  await expect(dialog.getByText("Available from Cleaning")).toBeVisible();
   await expect(dialog.getByText("−2:00")).toBeVisible();
   await dialog.getByRole("button", { name: "Add 2:00" }).click();
 
   const child = page.locator('[data-parent-activity-id="cleaning"]');
   await expect(child).toContainText("Kitchen");
+  await expect(
+    page.locator('[data-testid="session-activity-cleaning"]'),
+  ).toContainText(/3:00|03:00/);
   await expect(predicted).toHaveText(before || "");
   await page.reload();
   await expect(
@@ -76,7 +80,7 @@ test("creates and persists a proportionally funded Session sub-activity", async 
   await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
 });
 
-test("the sub-activity sheet rejects time beyond the live donor maximum", async ({
+test("the sub-activity sheet rejects time beyond the parent's live maximum", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -117,9 +121,9 @@ test("the sub-activity sheet rejects time beyond the live donor maximum", async 
     .click();
   const dialog = page.getByRole("dialog", { name: "Add sub-activity" });
   await dialog.getByLabel("Name").fill("Child");
-  await dialog.getByLabel("Sub-activity minutes").fill("1");
+  await dialog.getByLabel("Sub-activity minutes").fill("2");
   await expect(
-    dialog.getByText("Available from other tasks").locator(".."),
-  ).toContainText("0:00");
-  await expect(dialog.getByRole("button", { name: "Add 1:00" })).toBeDisabled();
+    dialog.getByText("Available from Parent").locator(".."),
+  ).toContainText("1:00");
+  await expect(dialog.getByRole("button", { name: "Add 2:00" })).toBeDisabled();
 });
