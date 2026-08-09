@@ -34,6 +34,10 @@ export type PersistedSessionActivity = {
   isLocked?: boolean;
   priority?: boolean;
   isRewardRest?: boolean;
+  rewardRestFunding?: RewardRestFunding;
+  parentActivityId?: string;
+  ownTimerCompleted?: boolean;
+  subActivityFunding?: SubActivityFunding;
   showOnBar?: boolean;
   sharedId?: string;
   templateId?: string;
@@ -181,6 +185,14 @@ export const normalizePersistedSessionActivity = (
     isLocked: Boolean(value.isLocked),
     priority: Boolean(value.priority),
     isRewardRest: Boolean(value.isRewardRest),
+    rewardRestFunding: normalizeRewardRestFunding(value.rewardRestFunding),
+    parentActivityId:
+      typeof value.parentActivityId === "string" &&
+      value.parentActivityId.trim()
+        ? value.parentActivityId.trim()
+        : undefined,
+    ownTimerCompleted: Boolean(value.ownTimerCompleted),
+    subActivityFunding: normalizeSubActivityFunding(value.subActivityFunding),
     showOnBar: value.showOnBar !== false,
     tags: Array.isArray(value.tags)
       ? value.tags.filter((tag): tag is string => typeof tag === "string")
@@ -269,13 +281,16 @@ export const normalizePersistedSessionRun = (
   if (!isRecord(value)) return null;
   const snapshot = normalizeSessionRunSnapshot(value.snapshot);
   if (!snapshot) return null;
-  const activities = Array.isArray(value.activities)
-    ? value.activities
-        .map(normalizePersistedSessionActivity)
-        .filter(
-          (activity): activity is PersistedSessionActivity => activity !== null,
-        )
-    : [];
+  const activities = normalizeSessionHierarchy(
+    Array.isArray(value.activities)
+      ? value.activities
+          .map(normalizePersistedSessionActivity)
+          .filter(
+            (activity): activity is PersistedSessionActivity =>
+              activity !== null,
+          )
+      : [],
+  );
   const flowmodoroState = normalizePersistedFlowmodoroState(
     value.flowmodoroState,
   );
@@ -286,3 +301,12 @@ export const normalizePersistedSessionRun = (
     ...(flowmodoroState ? { flowmodoroState } : {}),
   };
 };
+import {
+  normalizeRewardRestFunding,
+  type RewardRestFunding,
+} from "./bankedRest";
+import {
+  normalizeSessionHierarchy,
+  normalizeSubActivityFunding,
+  type SubActivityFunding,
+} from "./sessionSubActivities";

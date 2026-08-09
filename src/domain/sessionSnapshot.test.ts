@@ -117,4 +117,92 @@ describe("persisted Session run snapshot", () => {
       activeBreakBehavior: "postpone",
     });
   });
+
+  it("validates Reward Rest donor metadata without rewriting other fields", () => {
+    const normalized = normalizePersistedSessionRun({
+      snapshot: createSessionRunSnapshot({
+        status: "paused",
+        currentActivityIndex: 0,
+        sessionPlanFrozen: true,
+      }),
+      activities: [
+        {
+          id: "timeslice-banked-rest",
+          name: "Reward Rest",
+          color: "#8b5cf6",
+          duration: 1,
+          timeRemaining: 60,
+          isRewardRest: true,
+          rollbackField: "kept",
+          rewardRestFunding: {
+            donatedSecondsById: { focus: 40.9, bad: "nope" },
+            fundedSeconds: 60,
+          },
+        },
+      ],
+      vaultSeconds: 0,
+    });
+    expect(normalized?.activities[0]).toMatchObject({
+      rollbackField: "kept",
+      rewardRestFunding: {
+        donatedSecondsById: { focus: 40 },
+        fundedSeconds: 60,
+        operations: [{ donatedSecondsById: { focus: 40 }, fundedSeconds: 60 }],
+      },
+    });
+  });
+
+  it("validates child metadata and promotes orphaned or nested records", () => {
+    const normalized = normalizePersistedSessionRun({
+      snapshot: createSessionRunSnapshot({
+        status: "paused",
+        currentActivityIndex: 0,
+        sessionPlanFrozen: true,
+      }),
+      activities: [
+        { id: "parent", name: "Parent", color: "#123", duration: 10 },
+        {
+          id: "child",
+          name: "Child",
+          color: "#456",
+          duration: 2,
+          parentActivityId: "parent",
+          subActivityFunding: {
+            fundedSeconds: 120.9,
+            donatedSecondsById: { donor: 120.9, invalid: "bad" },
+          },
+        },
+        {
+          id: "nested",
+          name: "Nested",
+          color: "#789",
+          duration: 1,
+          parentActivityId: "child",
+        },
+        {
+          id: "orphan",
+          name: "Orphan",
+          color: "#aaa",
+          duration: 1,
+          parentActivityId: "missing",
+        },
+      ],
+      vaultSeconds: 0,
+    });
+    expect(normalized?.activities.map((activity) => activity.id)).toEqual([
+      "parent",
+      "child",
+      "nested",
+      "orphan",
+    ]);
+    expect(normalized?.activities[1]).toMatchObject({
+      parentActivityId: "parent",
+      subActivityFunding: {
+        fundedSeconds: 120,
+        donatedSecondsById: { donor: 120 },
+      },
+    });
+    expect(normalized?.activities[2].parentActivityId).toBeUndefined();
+    expect(normalized?.activities[3].parentActivityId).toBeUndefined();
+  });
 });

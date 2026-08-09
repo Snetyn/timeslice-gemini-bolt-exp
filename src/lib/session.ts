@@ -11,6 +11,9 @@ export type SessionActivityLike = {
   showOnBar?: boolean;
   priority?: boolean;
   isLocked?: boolean;
+  parentActivityId?: string;
+  ownTimerCompleted?: boolean;
+  isRewardRest?: boolean;
 };
 
 export type ProgressEntry = SessionActivityLike & {
@@ -132,11 +135,17 @@ export const drainFlowBreakActivities = (
   const isEligible = (activity: SessionActivityLike | undefined) =>
     Boolean(
       activity &&
-        !activity.isCompleted &&
-        !activity.countUp &&
-        !activity.priority &&
-        Number.isFinite(activity.timeRemaining) &&
-        (activity.timeRemaining || 0) > 0,
+      !activity.isCompleted &&
+      !activity.countUp &&
+      !activity.priority &&
+      !activity.isRewardRest &&
+      !(
+        activity.parentActivityId &&
+        next.find((candidate) => candidate.id === activity.parentActivityId)
+          ?.priority
+      ) &&
+      Number.isFinite(activity.timeRemaining) &&
+      (activity.timeRemaining || 0) > 0,
     );
   while (remaining > 0) {
     let source = next.find((activity) => activity.id === sourceId);

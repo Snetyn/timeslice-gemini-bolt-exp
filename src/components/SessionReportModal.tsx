@@ -144,69 +144,67 @@ export function SessionReportModal({
         )}
 
         <div className="mt-5 max-h-72 space-y-2 overflow-y-auto pr-1">
-          {report.rows
-            .slice()
-            .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
-            .map((row) => {
-              const scale = Math.max(row.planned, row.actual, 1);
-              const plannedWidth = Math.min(100, (row.planned / scale) * 100);
-              const actualWidth = Math.min(100, (row.actual / scale) * 100);
-              return (
-                <div
-                  key={row.id}
-                  className="rounded-lg border border-slate-200 p-3"
-                >
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="min-w-0 truncate font-semibold text-slate-800">
-                      <span
-                        className="mr-2 inline-block h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: row.color || "#64748b" }}
-                      />
-                      {row.name}
-                    </span>
+          {report.rows.slice().map((row) => {
+            const scale = Math.max(row.planned, row.actual, 1);
+            const plannedWidth = Math.min(100, (row.planned / scale) * 100);
+            const actualWidth = Math.min(100, (row.actual / scale) * 100);
+            return (
+              <div
+                key={row.id}
+                className={`rounded-lg border border-slate-200 p-3 ${row.parentActivityId ? "ml-4 border-l-4" : ""}`}
+                data-parent-activity-id={row.parentActivityId}
+              >
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="min-w-0 truncate font-semibold text-slate-800">
                     <span
-                      className={`shrink-0 font-semibold ${row.delta >= 0 ? "text-emerald-700" : "text-rose-700"}`}
-                    >
-                      {row.delta >= 0 ? "+" : "−"}
-                      {minutes(Math.abs(row.delta))}
-                    </span>
-                  </div>
-                  <div className="mt-2 space-y-1 text-xs text-slate-500">
-                    <div className="flex items-center gap-2">
-                      <span className="w-11">Plan</span>
-                      <div className="h-2 flex-1 rounded bg-sky-100">
-                        <div
-                          className="h-full rounded bg-sky-400"
-                          style={{ width: `${plannedWidth}%` }}
-                        />
-                      </div>
-                      <span>{minutes(row.planned)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="w-11">Actual</span>
-                      <div className="h-2 flex-1 rounded bg-violet-100">
-                        <div
-                          className="h-full rounded bg-violet-500"
-                          style={{ width: `${actualWidth}%` }}
-                        />
-                      </div>
-                      <span>{minutes(row.actual)}</span>
-                    </div>
-                  </div>
-                  {(row.drainedSeconds > 0 || row.receivedOvertime > 0) && (
-                    <details className="mt-2 text-xs text-slate-500">
-                      <summary className="cursor-pointer">
-                        Transfer details
-                      </summary>
-                      <p className="mt-1">
-                        Donated: {minutes(row.drainedSeconds)} · Received:{" "}
-                        {minutes(row.receivedOvertime)}
-                      </p>
-                    </details>
-                  )}
+                      className="mr-2 inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: row.color || "#64748b" }}
+                    />
+                    {row.name}
+                  </span>
+                  <span
+                    className={`shrink-0 font-semibold ${row.delta >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+                  >
+                    {row.delta >= 0 ? "+" : "−"}
+                    {minutes(Math.abs(row.delta))}
+                  </span>
                 </div>
-              );
-            })}
+                <div className="mt-2 space-y-1 text-xs text-slate-500">
+                  <div className="flex items-center gap-2">
+                    <span className="w-11">Plan</span>
+                    <div className="h-2 flex-1 rounded bg-sky-100">
+                      <div
+                        className="h-full rounded bg-sky-400"
+                        style={{ width: `${plannedWidth}%` }}
+                      />
+                    </div>
+                    <span>{minutes(row.planned)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-11">Actual</span>
+                    <div className="h-2 flex-1 rounded bg-violet-100">
+                      <div
+                        className="h-full rounded bg-violet-500"
+                        style={{ width: `${actualWidth}%` }}
+                      />
+                    </div>
+                    <span>{minutes(row.actual)}</span>
+                  </div>
+                </div>
+                {(row.drainedSeconds > 0 || row.receivedOvertime > 0) && (
+                  <details className="mt-2 text-xs text-slate-500">
+                    <summary className="cursor-pointer">
+                      Transfer details
+                    </summary>
+                    <p className="mt-1">
+                      Donated: {minutes(row.drainedSeconds)} · Received:{" "}
+                      {minutes(row.receivedOvertime)}
+                    </p>
+                  </details>
+                )}
+              </div>
+            );
+          })}
         </div>
         {history.length > 0 && (
           <details className="mt-4 rounded-lg border border-slate-200 p-3 text-sm">

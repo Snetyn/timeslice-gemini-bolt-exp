@@ -1,6 +1,13 @@
 export type FlowRewardExpiry = "never" | "daily" | "weekly" | "monthly";
 export type FlowBreakSource = "reserve" | "vault" | "combined";
 export type FlowBreakBehavior = "drain" | "postpone";
+export type BankDisplayMode = "split" | "available" | "mirrored";
+
+export type FlowRewardBankSettings = {
+  flowmodoroQuickReserveMinutes: number;
+  flowmodoroBankGoalMinutes: number;
+  flowmodoroBankDisplayMode: BankDisplayMode;
+};
 
 export type FlowBreakFunding = {
   reserveSeconds: number;
@@ -27,6 +34,8 @@ export type FlowRewardState = {
 export type FlowRewardLimits = {
   quickReserveCapSeconds: number;
   vaultCapSeconds: number;
+  /** Reward currency already reserved by unfinished Reward Rest activities. */
+  scheduledRewardRestSeconds?: number;
 };
 
 export type RewardDepositResult<T extends FlowRewardState> = {
@@ -44,6 +53,50 @@ const nonNegativeInteger = (value: unknown): number => {
 const positiveInteger = (value: unknown, fallback: number): number => {
   const number = nonNegativeInteger(value);
   return number > 0 ? number : fallback;
+};
+
+export const normalizeFlowRewardBankSettings = (
+  value: unknown,
+): FlowRewardBankSettings => {
+  const settings =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const legacyA = Math.max(
+    0,
+    Number(settings.flowmodoroMaxPerSessionMinutes) || 0,
+  );
+  const legacyB = Math.max(
+    0,
+    Number(settings.flowmodoroSessionActivityMinutes) || 0,
+  );
+  const derivedQuick =
+    legacyA > 0 && legacyB > 0
+      ? Math.min(legacyA, legacyB)
+      : legacyA || legacyB || 10;
+  const hasDedicatedQuick = Object.prototype.hasOwnProperty.call(
+    settings,
+    "flowmodoroQuickReserveMinutes",
+  );
+  const dedicatedQuick = Number(settings.flowmodoroQuickReserveMinutes);
+  const display = settings.flowmodoroBankDisplayMode;
+  return {
+    flowmodoroQuickReserveMinutes: Math.min(
+      1440,
+      Math.max(
+        0,
+        hasDedicatedQuick && Number.isFinite(dedicatedQuick)
+          ? dedicatedQuick
+          : derivedQuick,
+      ),
+    ),
+    flowmodoroBankGoalMinutes: Math.min(
+      10080,
+      Math.max(0, Number(settings.flowmodoroBankGoalMinutes) || 0),
+    ),
+    flowmodoroBankDisplayMode:
+      display === "available" || display === "mirrored" ? display : "split",
+  };
 };
 
 const localDateKey = (date: Date): string =>
@@ -243,7 +296,12 @@ export const depositFlowReward = <T extends FlowRewardState>(
   const overflow = requested - quickAddedSeconds;
   const vaultRoom =
     vaultCap > 0
-      ? Math.max(0, vaultCap - nonNegativeInteger(state.relaxationVaultSeconds))
+      ? Math.max(
+          0,
+          vaultCap -
+            nonNegativeInteger(state.relaxationVaultSeconds) -
+            nonNegativeInteger(limits.scheduledRewardRestSeconds),
+        )
       : Number.POSITIVE_INFINITY;
   const vaultAddedSeconds = Math.min(overflow, vaultRoom);
   const discardedSeconds = overflow - vaultAddedSeconds;

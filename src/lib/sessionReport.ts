@@ -5,6 +5,7 @@ export type SessionReportView = "summary" | "tasks";
 export type SessionReportRow = {
   id: string;
   name: string;
+  parentActivityId?: string;
   color?: string;
   planned: number;
   actual: number;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateAllocation,
   confirmAllocation,
+  directSourceAvailableSeconds,
   type AllocationActivity,
 } from "./timeAllocation";
 
@@ -12,6 +13,60 @@ const activities: AllocationActivity[] = [
 ];
 
 describe("time allocation", () => {
+  it("reports the live capacity of one direct donor", () => {
+    expect(
+      directSourceAvailableSeconds({
+        operation: "transfer",
+        activities,
+        sourceId: "bottom",
+        minimumDonorSeconds: 60,
+      }),
+    ).toBe(300);
+    expect(
+      directSourceAvailableSeconds({
+        operation: "extra",
+        activities,
+        sourceId: "bottom",
+        minimumDonorSeconds: 60,
+      }),
+    ).toBe(240);
+  });
+
+  it("does not offer direct capacity for aggregate, completed, count-up, or missing sources", () => {
+    expect(
+      directSourceAvailableSeconds({
+        operation: "transfer",
+        activities,
+        sourceId: "otherActivities",
+        minimumDonorSeconds: 0,
+      }),
+    ).toBeNull();
+    for (const source of [
+      { id: "done", name: "Done", timeRemaining: 60, isCompleted: true },
+      { id: "up", name: "Up", timeRemaining: 60, countUp: true },
+      { id: "zero", name: "Zero", timeRemaining: 0 },
+    ]) {
+      expect(
+        directSourceAvailableSeconds({
+          operation: "transfer",
+          activities: [source],
+          sourceId: source.id,
+          minimumDonorSeconds: 0,
+        }),
+      ).toBe(0);
+    }
+  });
+
+  it("keeps priority time available for the existing explicit manual override", () => {
+    expect(
+      directSourceAvailableSeconds({
+        operation: "transfer",
+        activities,
+        sourceId: "star",
+        minimumDonorSeconds: 0,
+      }),
+    ).toBe(600);
+  });
   it("drains automatic donors bottom-up and never falls back to starred time", () => {
     const preview = calculateAllocation({
       operation: "extra",

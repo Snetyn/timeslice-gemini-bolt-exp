@@ -1,9 +1,13 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-const seedBankedRestWorkspace = async (page: Page, autoSchedule = false) => {
+const seedBankedRestWorkspace = async (
+  page: Page,
+  autoSchedule = false,
+  bankGoalMinutes = 0,
+) => {
   await page.addInitScript(
-    ({ autoSchedule }) => {
+    ({ autoSchedule, bankGoalMinutes }) => {
       const activities = [
         {
           id: "focus",
@@ -48,6 +52,7 @@ const seedBankedRestWorkspace = async (page: Page, autoSchedule = false) => {
             timeSliceFlowmodoro: JSON.stringify(flow),
             timeSliceSettings: JSON.stringify({
               flowmodoroAutoScheduleBankedRest: autoSchedule,
+              flowmodoroBankGoalMinutes: bankGoalMinutes,
             }),
             timeSliceTotalHours: "2",
             timeSliceTotalMinutes: "0",
@@ -55,7 +60,7 @@ const seedBankedRestWorkspace = async (page: Page, autoSchedule = false) => {
         }),
       );
     },
-    { autoSchedule },
+    { autoSchedule, bankGoalMinutes },
   );
 };
 
@@ -67,14 +72,16 @@ test("banked time schedules protected Rest without changing Session total", asyn
 
   const rest = page.getByTestId("banked-rest-activity");
   await expect(rest).toContainText("Scheduled: 00:00");
-  await expect(rest).toContainText("Banked: 30:00");
+  await expect(rest).toContainText("Available: 30:00");
+  await expect(rest).toContainText("Total: 30:00");
   await rest.getByRole("button", { name: "Add time" }).click();
   await page.getByLabel("Rest minutes").fill("10");
   await page.getByLabel("Rest seconds").fill("0");
   await page.getByRole("button", { name: "Schedule rest" }).click();
 
   await expect(rest).toContainText("Scheduled: 10:00");
-  await expect(rest).toContainText("Banked: 20:00");
+  await expect(rest).toContainText("Available: 20:00");
+  await expect(rest).toContainText("Total: 30:00");
   await expect(page.getByLabel("Focus minutes")).toHaveValue("82.5");
   await expect(page.getByLabel("Chores minutes")).toHaveValue("27.5");
   await expect(page.getByText("Total: 100%")).toBeVisible();
@@ -89,8 +96,14 @@ test("banked time schedules protected Rest without changing Session total", asyn
     "Scheduled: 10:00",
   );
   await expect(page.getByTestId("banked-rest-activity")).toContainText(
-    "Banked: 20:00",
+    "Available: 20:00",
   );
+
+  await rest.getByRole("button", { name: "Unschedule" }).click();
+  await expect(rest).toContainText("Scheduled: 00:00");
+  await expect(rest).toContainText("Available: 30:00");
+  await expect(page.getByLabel("Focus minutes")).toHaveValue("135");
+  await expect(page.getByLabel("Chores minutes")).toHaveValue("45");
 });
 
 test("auto-fill consumes only available donor time during setup", async ({
@@ -102,5 +115,47 @@ test("auto-fill consumes only available donor time during setup", async ({
   const rest = page.getByTestId("banked-rest-activity");
   await expect(rest).toContainText("Auto-fill is on");
   await expect(rest).toContainText("Scheduled: 30:00");
-  await expect(rest).toContainText("Banked: 00:00");
+  await expect(rest).toContainText("Available: 00:00");
+  await expect(rest).toContainText("Total: 30:00");
+});
+
+test("Bank goal caps auto-fill and display modes persist", async ({ page }) => {
+  await seedBankedRestWorkspace(page, true, 10);
+  await page.goto("/");
+  await expect(page.getByTestId("banked-rest-activity")).toContainText(
+    "Scheduled: 10:00",
+  );
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Mirrored total" }).click();
+  await page.getByRole("button", { name: "Settings" }).click();
+
+  const rest = page.getByTestId("banked-rest-activity");
+  await expect(rest).toContainText("Shared total: 30:00");
+  await expect(rest).toContainText("Goal reached");
+
+  await page.reload();
+  await expect(page.getByTestId("banked-rest-activity")).toContainText(
+    "Shared total: 30:00",
+  );
+});
+
+test("reset removes scheduled Rest and restores its Session donors", async ({
+  page,
+}) => {
+  await seedBankedRestWorkspace(page);
+  await page.goto("/");
+  const rest = page.getByTestId("banked-rest-activity");
+  await rest.getByRole("button", { name: "Add time" }).click();
+  await page.getByLabel("Rest minutes").fill("10");
+  await page.getByRole("button", { name: "Schedule rest" }).click();
+
+  await page.getByRole("tab", { name: "Flowmodoro" }).click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Reset Bank" }).click();
+  await page.getByRole("tab", { name: "Session" }).click();
+
+  await expect(rest).toContainText("Scheduled: 00:00");
+  await expect(rest).toContainText("Available: 00:00");
+  await expect(page.getByLabel("Focus minutes")).toHaveValue("90");
+  await expect(page.getByLabel("Chores minutes")).toHaveValue("30");
 });

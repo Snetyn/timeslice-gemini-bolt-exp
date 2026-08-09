@@ -51,6 +51,25 @@ export type AllocationPreview = {
 const seconds = (value: number) =>
   Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 
+export function directSourceAvailableSeconds(
+  request: Pick<
+    AllocationRequest,
+    "activities" | "sourceId" | "operation" | "minimumDonorSeconds"
+  >,
+): number | null {
+  if (request.sourceId === "vault" || request.sourceId === "otherActivities")
+    return null;
+  const source = request.activities.find(
+    (activity) => activity.id === request.sourceId,
+  );
+  if (!source || source.isCompleted || source.countUp) return 0;
+  const minimum =
+    request.operation === "extra"
+      ? seconds(request.minimumDonorSeconds || 0)
+      : 0;
+  return Math.max(0, seconds(source.timeRemaining) - minimum);
+}
+
 export function allocationFingerprint(
   input: Pick<
     AllocationRequest,

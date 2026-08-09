@@ -229,4 +229,63 @@ describe("session run batch transition", () => {
     });
     expect(result.activities[0].timeRemaining).toBe(59);
   });
+
+  it("finishes a parent's own timer then continues through its children", () => {
+    const result = advanceSessionRun({
+      activities: [
+        task("parent", 2),
+        task("child", 5, { parentActivityId: "parent" }),
+        task("other", 5),
+      ],
+      currentActivityIndex: 0,
+      elapsedSeconds: 4,
+      overtimeMode: "none",
+    });
+    expect(result.activities[0]).toMatchObject({
+      id: "parent",
+      timeRemaining: 0,
+      ownTimerCompleted: true,
+    });
+    expect(result.activities[0].isCompleted).not.toBe(true);
+    expect(result.activities[1].timeRemaining).toBe(3);
+    expect(result.currentActivityIndex).toBe(1);
+    expect(result.isComplete).toBe(false);
+  });
+
+  it("completes the parent when its final child finishes", () => {
+    const result = advanceSessionRun({
+      activities: [
+        task("parent", 10),
+        task("child", 2, { parentActivityId: "parent" }),
+        task("other", 20),
+      ],
+      currentActivityIndex: 1,
+      elapsedSeconds: 3,
+      overtimeMode: "none",
+      earlyCompletionPolicy: "distribute",
+    });
+    expect(result.activities[0]).toMatchObject({
+      id: "parent",
+      timeRemaining: 0,
+      isCompleted: true,
+      ownTimerCompleted: true,
+    });
+    expect(result.activities[2].timeRemaining).toBe(29);
+    expect(result.completedActivityIds).toEqual(["child", "parent"]);
+  });
+
+  it("sends an early parent remainder to Vault under the default policy", () => {
+    const result = advanceSessionRun({
+      activities: [
+        task("parent", 10),
+        task("child", 1, { parentActivityId: "parent" }),
+      ],
+      currentActivityIndex: 1,
+      elapsedSeconds: 1,
+      overtimeMode: "none",
+      vaultSeconds: 3,
+    });
+    expect(result.vaultSeconds).toBe(13);
+    expect(result.isComplete).toBe(true);
+  });
 });

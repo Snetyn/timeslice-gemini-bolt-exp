@@ -1,5 +1,7 @@
 import {
   drainFlowBreakActivities,
+  distributeEarlyCompletion,
+  type EarlyCompletionPolicy,
   type SessionActivityLike,
 } from "../lib/session";
 
@@ -11,6 +13,8 @@ export type SessionRunActivity = SessionActivityLike & {
   duration: number;
   timeRemaining: number;
   sharedId?: string;
+  parentActivityId?: string;
+  ownTimerCompleted?: boolean;
 };
 
 export type SessionAdvanceInput = {
@@ -24,6 +28,8 @@ export type SessionAdvanceInput = {
   vaultSeconds?: number;
   flowDrainSourceId?: string | null;
   donorCursor?: number;
+  earlyCompletionPolicy?: EarlyCompletionPolicy;
+  earlyCompletionTargetId?: string;
 };
 
 export type SessionAdvanceResult = {
@@ -75,7 +81,11 @@ const nextIncompleteIndex = (
 ) => {
   for (let offset = 1; offset <= activities.length; offset += 1) {
     const index = (afterIndex + offset) % activities.length;
-    if (!activities[index]?.isCompleted) return index;
+    if (
+      !activities[index]?.isCompleted &&
+      !activities[index]?.ownTimerCompleted
+    )
+      return index;
   }
   return -1;
 };
@@ -96,6 +106,8 @@ export function advanceSessionRun({
   vaultSeconds = 0,
   flowDrainSourceId = null,
   donorCursor = -1,
+  earlyCompletionPolicy = "vault",
+  earlyCompletionTargetId,
 }: SessionAdvanceInput): SessionAdvanceResult {
   let activities = sourceActivities.map(ensureRemaining);
   let cursor = Math.max(
@@ -113,6 +125,47 @@ export function advanceSessionRun({
   const completedActivityIds: string[] = [];
   const activitySlices: SessionActivitySlice[] = [];
   let batchOffsetSeconds = 0;
+
+  const unfinishedChildren = (parentId: string) =>
+    activities.filter(
+      (activity) =>
+        activity.parentActivityId === parentId && !activity.isCompleted,
+    );
+  const protectedByParent = (activity: SessionRunActivity) =>
+    Boolean(
+      activity.parentActivityId &&
+      activities.find((candidate) => candidate.id === activity.parentActivityId)
+        ?.priority,
+    );
+
+  const completeParentWhenFamilyDone = (child: SessionRunActivity) => {
+    if (!child.parentActivityId) return;
+    if (unfinishedChildren(child.parentActivityId).length > 0) return;
+    const parentIndex = activities.findIndex(
+      (activity) => activity.id === child.parentActivityId,
+    );
+    const parent = activities[parentIndex];
+    if (!parent || parent.isCompleted) return;
+    const leftover = safeSeconds(parent.timeRemaining);
+    parent.isCompleted = true;
+    parent.ownTimerCompleted = true;
+    parent.timeRemaining = 0;
+    parent.completedElapsedSeconds = Math.max(
+      safeSeconds(parent.completedElapsedSeconds),
+      Math.max(0, plannedSeconds(parent) - leftover),
+    );
+    completedActivityIds.push(parent.id);
+    if (leftover <= 0) return;
+    const redistributed = distributeEarlyCompletion(
+      activities,
+      parent.id,
+      leftover,
+      earlyCompletionPolicy,
+      earlyCompletionTargetId,
+    );
+    activities = redistributed.activities as SessionRunActivity[];
+    nextVault += redistributed.vaultSeconds;
+  };
 
   const appendActivitySlice = (
     activityId: string,
@@ -173,7 +226,7 @@ export function advanceSessionRun({
   while (remainingBatch > 0 && activities.length > 0 && safety < 100_000) {
     safety += 1;
     let current = activities[cursor];
-    if (!current || current.isCompleted) {
+    if (!current || current.isCompleted || current.ownTimerCompleted) {
       const next = nextIncompleteIndex(activities, cursor);
       if (next < 0) break;
       cursor = next;
@@ -193,7 +246,23 @@ export function advanceSessionRun({
       current.timeRemaining -= consumed;
       remainingBatch -= consumed;
       appendActivitySlice(current.id, consumed, "countdown");
-      if (remainingBatch === 0) break;
+      if (remainingBatch === 0 && current.timeRemaining > 0) break;
+    }
+
+    if (unfinishedChildren(current.id).length > 0) {
+      current.timeRemaining = 0;
+      current.ownTimerCompleted = true;
+      current.completedElapsedSeconds = Math.max(
+        safeSeconds(current.completedElapsedSeconds),
+        plannedSeconds(current),
+      );
+      const next = nextIncompleteIndex(activities, cursor);
+      if (next < 0) {
+        remainingBatch = 0;
+        break;
+      }
+      cursor = next;
+      continue;
     }
 
     if (overtimeMode === "postpone") {
@@ -212,6 +281,7 @@ export function advanceSessionRun({
             !activity.isCompleted &&
             !activity.countUp &&
             !activity.priority &&
+            !protectedByParent(activity) &&
             activity.timeRemaining > 0,
         );
       let fundedSeconds = 0;
@@ -304,6 +374,7 @@ export function advanceSessionRun({
       plannedSeconds(current),
     );
     completedActivityIds.push(current.id);
+    completeParentWhenFamilyDone(current);
     const next = nextIncompleteIndex(activities, cursor);
     if (next < 0) {
       remainingBatch = 0;

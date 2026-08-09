@@ -84,6 +84,87 @@ test("running Session allocation keeps input focus and can reactivate a complete
   await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
 });
 
+test("Use all follows a running activity and transfers its live maximum", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const activities = [
+      {
+        id: "focus",
+        name: "Focus",
+        color: "#2563eb",
+        percentage: 50,
+        duration: 10,
+        timeRemaining: 600,
+        isCompleted: false,
+        countUp: false,
+      },
+      {
+        id: "backup",
+        name: "Backup",
+        color: "#14b8a6",
+        percentage: 50,
+        duration: 10,
+        timeRemaining: 600,
+        isCompleted: false,
+        countUp: false,
+      },
+    ];
+    localStorage.setItem(
+      "timeslice.state.v2",
+      JSON.stringify({
+        version: 2,
+        values: {
+          timeSliceActivities: JSON.stringify(activities),
+          timeSliceTotalHours: "0",
+          timeSliceTotalMinutes: "20",
+          timeSliceSettings: JSON.stringify({
+            overtimeType: "none",
+            vaultPredictionMode: "independent",
+          }),
+          timeSliceSessionState: JSON.stringify({
+            isTimerActive: true,
+            isPaused: false,
+            currentActivityIndex: 0,
+            sessionPlanFrozen: true,
+            initialAllocatedSeconds: 1200,
+            lastActiveTimestamp: Date.now(),
+          }),
+        },
+      }),
+    );
+  });
+  await page.goto("/");
+
+  const predicted = page
+    .getByText("Predicted End", { exact: true })
+    .locator("..");
+  const predictedBefore = await predicted.textContent();
+  await page
+    .getByRole("button", { name: "Transfer time to vault" })
+    .first()
+    .click();
+  const useAll = page.getByRole("button", { name: /Use all/ });
+  await useAll.click();
+  await expect(useAll).toHaveAttribute("aria-pressed", "true");
+  const selectedAt = await useAll.textContent();
+  await page.waitForTimeout(1_200);
+  await expect(useAll).not.toHaveText(selectedAt || "");
+  await expect(page.getByText("Unfunded", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Confirm" }).click();
+
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect(
+    page.getByRole("checkbox", { name: "Complete Focus" }),
+  ).toBeChecked();
+  await expect(
+    page.getByRole("button", { name: "Give time to Focus" }),
+  ).toBeVisible();
+  await expect(predicted).toHaveText(predictedBefore || "");
+  await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
+});
+
 test("Daily tag filters provide persistent per-tag/combined and Plan/Actual wheels", async ({
   page,
 }) => {

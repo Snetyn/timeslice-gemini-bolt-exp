@@ -14,6 +14,7 @@ import {
   distributeEarlyCompletion,
 } from "./lib/session";
 import { SessionReportModal } from "./components/SessionReportModal";
+import { SessionSubActivitySheet } from "./components/SessionSubActivitySheet";
 import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
 import { InsightsSheet } from "./components/InsightsSheet";
 import { ActivityManager } from "./components/ActivityManager";
@@ -42,7 +43,12 @@ import {
 import {
   allocateBankedRest,
   BANKED_REST_ACTIVITY_ID,
+  restoreBankedRest,
+  rewardBankHoldings,
   rewardEligibleSessionSeconds,
+  normalizeRewardRestFunding,
+  scheduledRewardRestSeconds,
+  type RewardRestFunding,
 } from "./domain/bankedRest";
 import { predictedScheduleSeconds } from "./domain/sessionSchedule";
 import { displayActivityColor } from "./domain/activityColor";
@@ -57,6 +63,15 @@ import { timerController } from "./lib/controller";
 import { getTimer, transitionTimer } from "./data/timerRepository";
 import { snapshotTimer } from "./domain/timer";
 import { advanceSessionRun } from "./domain/sessionRun";
+import {
+  addSessionSubActivity,
+  increaseSessionSubActivity,
+  normalizeSessionHierarchy,
+  previewSubActivityFunding,
+  removeSessionSubActivity,
+  reorderSessionHierarchy,
+  type SubActivityFunding,
+} from "./domain/sessionSubActivities";
 import {
   adHocActivityId,
   type ActivitySessionContext,
@@ -83,8 +98,10 @@ import {
   flowRewardPeriodKey,
   fundFlowBreak,
   nextFlowRewardResetAt,
+  normalizeFlowRewardBankSettings,
   normalizeFlowRewardFields,
   refundUnusedFlowBreak,
+  type BankDisplayMode,
 } from "./domain/flowRewards";
 
 // Keep the existing component code isolated from browser storage details. This
@@ -151,6 +168,10 @@ interface Activity {
   priority?: boolean;
   // Special Session activity funded from the Flow Relaxation Vault.
   isRewardRest?: boolean;
+  rewardRestFunding?: RewardRestFunding;
+  parentActivityId?: string;
+  ownTimerCompleted?: boolean;
+  subActivityFunding?: SubActivityFunding;
   // Optional per-activity time window overrides (HH:MM 24h). If set, they take precedence over template window.
   startTime?: string;
   endTime?: string;
@@ -6447,6 +6468,7 @@ const ActivityManagementPage = ({
 // FlowmodoroActivity component that behaves like other activities
 const FlowmodoroActivity = ({
   flowState,
+  scheduledRewardRest = 0,
   settings,
   onTakeBreak,
   onSkipBreak,
@@ -6460,7 +6482,8 @@ const FlowmodoroActivity = ({
     settings.flowmodoroMode === "drain" &&
     !flowState.isOnBreak &&
     (flowState.availableRestTime || 0) <= 0 &&
-    (flowState.relaxationVaultSeconds || 0) <= 0
+    (flowState.relaxationVaultSeconds || 0) <= 0 &&
+    scheduledRewardRest <= 0
   )
     return null;
 
@@ -6471,6 +6494,10 @@ const FlowmodoroActivity = ({
 
   const totalEarnedMinutes = Math.floor(flowState.totalEarnedToday / 60);
   const totalEarnedSeconds = flowState.totalEarnedToday % 60;
+  const bankAvailable = Math.max(0, flowState.relaxationVaultSeconds || 0);
+  const bankScheduled = Math.max(0, scheduledRewardRest || 0);
+  const bankTotal = bankAvailable + bankScheduled;
+  const bankDisplay = settings.flowmodoroBankDisplayMode || "split";
 
   // Calculate progress for visual display - always show full bar that fills/drains
   const progressPercentage = flowState.isOnBreak
@@ -6509,8 +6536,8 @@ const FlowmodoroActivity = ({
           ? "Click to skip break and return unused time"
           : flowState.availableRestTime > 0
             ? `Start ${Math.floor(flowState.availableRestTime / 60)}m ${flowState.availableRestTime % 60}s break`
-            : flowState.relaxationVaultSeconds > 0
-              ? `Banked ${formatTime(flowState.relaxationVaultSeconds)}. Open Flowmodoro mode to start a Vault Rest.`
+            : bankTotal > 0
+              ? `Reward Bank ${formatTime(bankTotal)} total. Open Flowmodoro mode to spend available time.`
               : "No rest time earned yet. Work on activities to earn break time."
       }
     >
@@ -6544,9 +6571,13 @@ const FlowmodoroActivity = ({
           <span className="text-xs sm:text-sm font-mono text-right">
             {flowState.isOnBreak
               ? formatTime(flowState.breakTimeRemaining)
-              : `Quick ${formatTime(flowState.availableRestTime)} · Banked ${formatTime(
-                  flowState.relaxationVaultSeconds || 0,
-                )}`}
+              : `Quick ${formatTime(flowState.availableRestTime)} · ${
+                  bankDisplay === "available"
+                    ? `Bank ${formatTime(bankAvailable)} available`
+                    : bankDisplay === "mirrored"
+                      ? `Bank ${formatTime(bankTotal)} total`
+                      : `Bank ${formatTime(bankTotal)} (${formatTime(bankAvailable)} available · ${formatTime(bankScheduled)} scheduled)`
+                }`}
           </span>
         )}
       </div>
@@ -6960,6 +6991,7 @@ const DailyActivityEditModal = ({
 // Standalone Flowmodoro Mode Component
 const FlowmodoroMode = ({
   flowmodoroState,
+  scheduledRewardRest,
   onTakeBreak,
   onSkipBreak,
   onReset,
@@ -6974,18 +7006,20 @@ const FlowmodoroMode = ({
   const [customBreakSeconds, setCustomBreakSeconds] = useState("");
   const quickSeconds = Math.max(0, flowmodoroState.availableRestTime || 0);
   const vaultSeconds = Math.max(0, flowmodoroState.relaxationVaultSeconds || 0);
-  const capA = Math.max(0, (settings.flowmodoroMaxPerSessionMinutes || 0) * 60);
-  const capB = Math.max(
+  const scheduledSeconds = Math.max(0, scheduledRewardRest || 0);
+  const bankTotalSeconds = vaultSeconds + scheduledSeconds;
+  const quickCap = Math.max(
     0,
-    (settings.flowmodoroSessionActivityMinutes || 0) * 60,
+    (settings.flowmodoroQuickReserveMinutes || 0) * 60,
   );
-  const quickCap =
-    capA > 0 && capB > 0 ? Math.min(capA, capB) : capA > 0 ? capA : capB;
   const vaultCap = Math.max(
     0,
     (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
   );
-  const vaultIsFull = vaultCap > 0 && vaultSeconds >= vaultCap;
+  const vaultIsFull = vaultCap > 0 && bankTotalSeconds >= vaultCap;
+  const bankGoal = Math.max(0, (settings.flowmodoroBankGoalMinutes || 0) * 60);
+  const goalReached = bankGoal > 0 && bankTotalSeconds >= bankGoal;
+  const bankDisplayMode = settings.flowmodoroBankDisplayMode || "split";
   const nextReset = nextFlowRewardResetAt(
     new Date(),
     settings.flowmodoroRelaxationVaultExpiry || "never",
@@ -7109,15 +7143,43 @@ const FlowmodoroMode = ({
             >
               <CardContent className="p-3 sm:p-4">
                 <div className="text-xs font-semibold uppercase tracking-wide text-violet-700">
-                  Relaxation Vault
+                  Reward Bank
                 </div>
                 <div className="text-2xl sm:text-3xl font-bold text-violet-700 tabular-nums mt-1">
-                  {formatTime(vaultSeconds)}
+                  {formatTime(
+                    bankDisplayMode === "available"
+                      ? vaultSeconds
+                      : bankTotalSeconds,
+                  )}
                 </div>
                 <div className="text-[11px] text-gray-500 mt-2">
+                  {bankDisplayMode === "split"
+                    ? `Available ${formatTime(vaultSeconds)} · Scheduled ${formatTime(scheduledSeconds)}`
+                    : bankDisplayMode === "mirrored"
+                      ? `Shared total · ${formatTime(scheduledSeconds)} in Reward Rest`
+                      : "Available to spend"}
+                </div>
+                {bankGoal > 0 && (
+                  <div className="mt-2">
+                    <div className="h-1.5 overflow-hidden rounded-full bg-violet-100">
+                      <div
+                        className="h-full bg-violet-500"
+                        style={{
+                          width: `${Math.min(100, (bankTotalSeconds / bankGoal) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <div className={`mt-1 text-[11px] ${goalReached ? "font-semibold text-emerald-700" : "text-gray-500"}`}>
+                      {goalReached
+                        ? `Goal reached · ${formatTime(bankGoal)}`
+                        : `${formatTime(bankTotalSeconds)} / ${formatTime(bankGoal)} goal`}
+                    </div>
+                  </div>
+                )}
+                <div className="text-[11px] text-gray-500 mt-1">
                   {vaultCap > 0
-                    ? `${formatTime(vaultCap)} maximum`
-                    : "Unlimited bank"}
+                    ? `${formatTime(vaultCap)} hard maximum`
+                    : "Unlimited hard maximum"}
                 </div>
                 <div
                   className={`text-[11px] mt-1 ${
@@ -7127,7 +7189,7 @@ const FlowmodoroMode = ({
                   }`}
                 >
                   {vaultIsFull
-                    ? "Vault full — new overflow is not stored"
+                    ? "Bank full — new overflow is not stored"
                     : nextReset
                       ? `Resets ${nextReset.toLocaleString()}`
                       : "Does not expire"}
@@ -7230,18 +7292,18 @@ const FlowmodoroMode = ({
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={vaultSeconds <= 0}
+                    disabled={bankTotalSeconds <= 0}
                     onClick={() => {
                       if (
                         window.confirm(
-                          "Reset the Relaxation Vault? Quick Break time is not affected.",
+                          "Reset the Reward Bank and remove scheduled Reward Rest? Remaining Session time will be restored to activities. Quick Reserve is not affected.",
                         )
                       )
                         onResetVault();
                     }}
                     className="text-red-600"
                   >
-                    Reset Vault
+                    Reset Bank
                   </Button>
                 </div>
               </div>
@@ -7328,7 +7390,7 @@ const SingleActivityMode = ({
       // Dynamic ratio based on task length patterns
       const baseConfigRatio = Math.max(
         1,
-        Math.min(10, settings?.flowmodoroRatio || 5),
+        Math.min(60, settings?.flowmodoroRatio || 5),
       );
       let baseRatio = baseConfigRatio;
       if (taskLengthMinutes <= 5) {
@@ -7380,7 +7442,7 @@ const SingleActivityMode = ({
     // Dynamic base ratio
     const baseConfigRatio = Math.max(
       1,
-      Math.min(10, settings?.flowmodoroRatio || 5),
+      Math.min(60, settings?.flowmodoroRatio || 5),
     );
     let baseRatio = baseConfigRatio;
     if (taskLengthMinutes <= 5) {
@@ -8118,19 +8180,30 @@ export default function App() {
         const parsed = JSON.parse(savedActivities);
         // Validate and sanitize loaded activities
         if (Array.isArray(parsed)) {
-          return parsed.filter(Boolean).map((activity) => ({
-            ...activity,
-            name: String(activity?.name || "New Activity"), // Ensure name is always a string
-            id: String(activity?.id || Date.now()),
-            percentage: Number(activity?.percentage || 0),
-            color: String(activity?.color || "hsl(220, 70%, 50%)"),
-            duration: Number(activity?.duration || 0),
-            timeRemaining: Number(activity?.timeRemaining || 0),
-            isCompleted: Boolean(activity?.isCompleted),
-            isLocked: Boolean(activity?.isLocked),
-            countUp: Boolean(activity?.countUp || false),
-            tags: Array.isArray(activity?.tags) ? activity.tags : [], // Ensure tags array exists
-          }));
+          return normalizeSessionHierarchy(
+            parsed.filter(Boolean).map((activity) => ({
+              ...activity,
+              name: String(activity?.name || "New Activity"),
+              id: String(activity?.id || Date.now()),
+              percentage: Number(activity?.percentage || 0),
+              color: String(activity?.color || "hsl(220, 70%, 50%)"),
+              duration: Number(activity?.duration || 0),
+              timeRemaining: Number(activity?.timeRemaining || 0),
+              isCompleted: Boolean(activity?.isCompleted),
+              isLocked: Boolean(activity?.isLocked),
+              countUp: Boolean(activity?.countUp || false),
+              parentActivityId:
+                typeof activity?.parentActivityId === "string"
+                  ? activity.parentActivityId
+                  : undefined,
+              ownTimerCompleted: Boolean(activity?.ownTimerCompleted),
+              subActivityFunding: activity?.subActivityFunding,
+              rewardRestFunding: normalizeRewardRestFunding(
+                activity?.rewardRestFunding,
+              ),
+              tags: Array.isArray(activity?.tags) ? activity.tags : [],
+            })),
+          );
         }
       }
     } catch (e) {
@@ -8255,6 +8328,9 @@ export default function App() {
       flowmodoroResetEndTime: "23:59", // Daily reset at 11:59 PM
       flowmodoroShowAsActivity: true, // visualize Flowmodoro as its own pseudo-activity segment
       flowmodoroSessionActivityMinutes: 10, // planned Flow capacity for pseudo segment
+      flowmodoroQuickReserveMinutes: 10,
+      flowmodoroBankGoalMinutes: 0,
+      flowmodoroBankDisplayMode: "split" as BankDisplayMode,
       flowmodoroRelaxationVaultMaxMinutes: 0, // 0 = unlimited
       flowmodoroRelaxationVaultExpiry: "never", // 'never' | 'daily' | 'weekly' | 'monthly'
       flowmodoroRelaxationVaultMode: "postpone", // independent behavior for longer Vault rests
@@ -8301,9 +8377,11 @@ export default function App() {
       const saved = localStorage.getItem("timeSliceSettings");
       if (!saved) return defaultValue;
       const parsed = JSON.parse(saved);
+      const bankSettings = normalizeFlowRewardBankSettings(parsed);
       return {
         ...defaultValue,
         ...parsed,
+        ...bankSettings,
         vaultPredictionMode: resolveVaultPredictionMode(parsed),
       };
     } catch (e) {
@@ -8635,6 +8713,12 @@ export default function App() {
   // Add Activity Modal State (NEW)
   const [addActivityModalState, setAddActivityModalState] = useState({
     isOpen: false,
+  });
+  const [subActivityDialog, setSubActivityDialog] = useState({
+    isOpen: false,
+    parentId: "",
+    childId: "",
+    requestedSeconds: 0,
   });
   const [bankedRestDialogOpen, setBankedRestDialogOpen] = useState(false);
   const [bankedRestMinutesDraft, setBankedRestMinutesDraft] = useState("");
@@ -9516,9 +9600,8 @@ export default function App() {
         const shouldReset = checkIfShouldReset(now, lastReset);
 
         if (shouldReset) {
-          return applyFlowRewardExpiry(
-            normalizeFlowRewardFields(
-              {
+          return normalizeFlowRewardFields(
+            {
                 ...defaultState,
                 ...parsed,
                 availableRestTime: 0,
@@ -9527,23 +9610,14 @@ export default function App() {
                 accumulatedFractionalTime: 0,
                 lastResetDate: now.toDateString(),
               },
-              now,
-              expiry,
-              resetTime,
-            ),
             now,
             expiry,
             resetTime,
           );
         }
 
-        return applyFlowRewardExpiry(
-          normalizeFlowRewardFields(
-            { ...defaultState, ...parsed },
-            now,
-            expiry,
-            resetTime,
-          ),
+        return normalizeFlowRewardFields(
+          { ...defaultState, ...parsed },
           now,
           expiry,
           resetTime,
@@ -9635,30 +9709,22 @@ export default function App() {
       if (!settings.flowmodoroEnabled) return;
       if (!elapsedSecs || elapsedSecs <= 0) return;
       const ratio = Math.max(1, settings.flowmodoroRatio || 1);
-      const capA = Math.max(
+      const quickReserveCapSeconds = Math.max(
         0,
-        (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
+        (settings.flowmodoroQuickReserveMinutes || 0) * 60,
       );
-      const capB = Math.max(
-        0,
-        (settings.flowmodoroSessionActivityMinutes || 0) * 60,
-      );
-      const quickReserveCapSeconds =
-        capA > 0 && capB > 0 ? Math.min(capA, capB) : capA > 0 ? capA : capB;
       const limits = {
         quickReserveCapSeconds,
         vaultCapSeconds: Math.max(
           0,
           (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
         ),
+        scheduledRewardRestSeconds: scheduledRewardRestSeconds(
+          activitiesRef.current,
+        ),
       };
       setFlowmodoroState((prev) => {
-        const current = applyFlowRewardExpiry(
-          prev,
-          new Date(),
-          settings.flowmodoroRelaxationVaultExpiry || "never",
-          settings.flowmodoroResetStartTime || "06:00",
-        );
+        const current = prev;
         if (current.isOnBreak) return current;
         const accum = (prev.accumulatedFractionalTime || 0) + elapsedSecs;
         const restToAdd = Math.floor(accum / ratio);
@@ -9699,8 +9765,7 @@ export default function App() {
     [
       settings.flowmodoroEnabled,
       settings.flowmodoroRatio,
-      settings.flowmodoroMaxPerSessionMinutes,
-      settings.flowmodoroSessionActivityMinutes,
+      settings.flowmodoroQuickReserveMinutes,
       settings.flowmodoroRelaxationVaultMaxMinutes,
       settings.flowmodoroRelaxationVaultExpiry,
       settings.flowmodoroResetStartTime,
@@ -9871,12 +9936,7 @@ export default function App() {
   ) => {
     if (!settings.flowmodoroEnabled) return;
     const now = new Date();
-    const current = applyFlowRewardExpiry(
-      flowmodoroStateRef.current,
-      now,
-      settings.flowmodoroRelaxationVaultExpiry || "never",
-      settings.flowmodoroResetStartTime || "06:00",
-    );
+    const current = flowmodoroStateRef.current;
     const initiallyFunded = fundFlowBreak(
       current,
       duration,
@@ -9975,12 +10035,7 @@ export default function App() {
       settings.flowmodoroRelaxationVaultExpiry || "never",
       settings.flowmodoroResetStartTime || "06:00",
     );
-    const current = applyFlowRewardExpiry(
-      flowmodoroStateRef.current,
-      now,
-      settings.flowmodoroRelaxationVaultExpiry || "never",
-      settings.flowmodoroResetStartTime || "06:00",
-    );
+    const current = flowmodoroStateRef.current;
     const refunded = refundUnusedFlowBreak(
       current,
       current.breakTimeRemaining,
@@ -10043,9 +10098,78 @@ export default function App() {
     );
   };
 
+  const removeScheduledRewardRest = useCallback(
+    (
+      returnToBank: boolean,
+      flowState = flowmodoroStateRef.current,
+    ) => {
+    const restIndex = activitiesRef.current.findIndex(
+      (activity) => activity.isRewardRest,
+    );
+    const totalSessionSeconds = activitiesRef.current.reduce(
+      (sum, activity) =>
+        sum +
+        Math.max(
+          0,
+          Number(
+            activity.originalPlannedSeconds ??
+              (activity.countUp ? 0 : activity.duration * 60),
+          ) || 0,
+        ),
+      0,
+    );
+    const restoration = restoreBankedRest<Activity>({
+      activities: activitiesRef.current,
+      totalSessionSeconds,
+      sessionVaultSeconds: vaultTimeRef.current,
+    });
+    if (!restoration.removedRewardRest) return flowState;
+
+    activitiesRef.current = restoration.activities;
+    vaultTimeRef.current = restoration.sessionVaultSeconds;
+    setActivities(restoration.activities);
+    setVaultTime(restoration.sessionVaultSeconds);
+    if (restIndex >= 0) {
+      const nextIndex =
+        currentActivityIndexRef.current > restIndex
+          ? currentActivityIndexRef.current - 1
+          : Math.min(
+              currentActivityIndexRef.current,
+              Math.max(0, restoration.activities.length - 1),
+            );
+      currentActivityIndexRef.current = nextIndex;
+      setCurrentActivityIndex(nextIndex);
+    }
+    localStorage.setItem(
+      "timeSliceActivities",
+      JSON.stringify(restoration.activities),
+    );
+    const nextFlowState = {
+      ...flowState,
+      relaxationVaultSeconds:
+        Math.max(0, Number(flowState.relaxationVaultSeconds) || 0) +
+        (returnToBank ? restoration.restoredSeconds : 0),
+    };
+    if (isTimerActive) {
+      void persistSessionRunSnapshot("running", {
+        activities: restoration.activities,
+        currentActivityIndex: currentActivityIndexRef.current,
+        vaultSeconds: restoration.sessionVaultSeconds,
+        flowmodoroState: nextFlowState,
+      });
+    }
+      return nextFlowState;
+    },
+    [isTimerActive, persistSessionRunSnapshot],
+  );
+
   const resetRelaxationVault = () => {
+    const restoredFlowState = removeScheduledRewardRest(
+      false,
+      flowmodoroStateRef.current,
+    );
     const nextFlowmodoroState = {
-      ...flowmodoroStateRef.current,
+      ...restoredFlowState,
       relaxationVaultSeconds: 0,
       relaxationVaultPeriodKey: flowRewardPeriodKey(
         new Date(),
@@ -10195,26 +10319,18 @@ export default function App() {
 
     // Single uses the same capped two-tier allocator as Session and Daily.
     setFlowmodoroState((prev) => {
-      const capA = Math.max(
-        0,
-        (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
-      );
-      const capB = Math.max(
-        0,
-        (settings.flowmodoroSessionActivityMinutes || 0) * 60,
-      );
-      const current = applyFlowRewardExpiry(
-        prev,
-        completedAt,
-        settings.flowmodoroRelaxationVaultExpiry || "never",
-        settings.flowmodoroResetStartTime || "06:00",
-      );
+      const current = prev;
       const deposited = depositFlowReward(current, rewardSeconds, {
-        quickReserveCapSeconds:
-          capA > 0 && capB > 0 ? Math.min(capA, capB) : capA > 0 ? capA : capB,
+        quickReserveCapSeconds: Math.max(
+          0,
+          (settings.flowmodoroQuickReserveMinutes || 0) * 60,
+        ),
         vaultCapSeconds: Math.max(
           0,
           (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+        ),
+        scheduledRewardRestSeconds: scheduledRewardRestSeconds(
+          activitiesRef.current,
         ),
       });
       return {
@@ -10339,9 +10455,21 @@ export default function App() {
     const reconcileAndSchedule = () => {
       if (cancelled) return;
       const now = new Date();
-      setFlowmodoroState((previous) =>
-        applyFlowRewardExpiry(previous, now, expiry, resetTime),
+      const previous = flowmodoroStateRef.current;
+      let next = applyFlowRewardExpiry(previous, now, expiry, resetTime);
+      const expired =
+        Boolean(previous.relaxationVaultPeriodKey) &&
+        previous.relaxationVaultExpiryPolicy === expiry &&
+        previous.relaxationVaultPeriodKey !==
+          flowRewardPeriodKey(now, expiry, resetTime);
+      if (expired) next = removeScheduledRewardRest(false, next);
+      flowmodoroStateRef.current = next;
+      setFlowmodoroState(next);
+      localStorage.setItem(
+        "timeSliceFlowmodoro",
+        JSON.stringify(next),
       );
+      void flushAppStorage();
       const nextReset = nextFlowRewardResetAt(now, expiry, resetTime);
       if (nextReset) {
         const delay = Math.min(
@@ -10359,6 +10487,8 @@ export default function App() {
   }, [
     settings.flowmodoroRelaxationVaultExpiry,
     settings.flowmodoroResetStartTime,
+    isTimerActive,
+    removeScheduledRewardRest,
   ]);
 
   useEffect(() => {
@@ -10537,6 +10667,8 @@ export default function App() {
               vaultSeconds: vaultTimeRef.current,
               flowDrainSourceId: flowBreakDrainSourceRef.current,
               donorCursor: lastDrainedIndex.current,
+              earlyCompletionPolicy: settings.earlyCompletionPolicy,
+              earlyCompletionTargetId: settings.earlyCompletionTargetId,
             });
             activitiesRef.current = transition.activities as Activity[];
             setActivities(transition.activities as Activity[]);
@@ -10809,14 +10941,18 @@ export default function App() {
 
   const scheduleBankedRest = useCallback(
     (requestedSeconds: number) => {
-      if (isTimerActive) return 0;
       const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
       const currentFlow = flowmodoroStateRef.current;
+      const rewardRestGoalSeconds = Math.max(
+        0,
+        (settings.flowmodoroBankGoalMinutes || 0) * 60,
+      );
       const result = allocateBankedRest<Activity>({
         activities: activitiesRef.current,
         totalSessionSeconds,
         requestedSeconds,
         bankedSeconds: currentFlow.relaxationVaultSeconds || 0,
+        maxRewardRestSeconds: rewardRestGoalSeconds,
         createRestActivity: () => ({
           id: BANKED_REST_ACTIVITY_ID,
           name: "Reward Rest",
@@ -10849,15 +10985,37 @@ export default function App() {
       );
       localStorage.setItem("timeSliceFlowmodoro", JSON.stringify(nextFlow));
       void flushAppStorage();
-      if (sessionPlanFrozenRef.current) {
+      if (isTimerActive) {
+        void persistSessionRunSnapshot("running", {
+          activities: result.activities,
+          flowmodoroState: nextFlow,
+          observedAtMs: Date.now(),
+        });
+      } else if (sessionPlanFrozenRef.current) {
         sessionPlanFrozenRef.current = false;
         setSessionPlanFrozen(false);
         initialTotalAllocatedRef.current = 0;
       }
       return result.allocatedSeconds;
     },
-    [calculateTotalSessionMinutes, isTimerActive],
+    [
+      calculateTotalSessionMinutes,
+      isTimerActive,
+      persistSessionRunSnapshot,
+      settings.flowmodoroBankGoalMinutes,
+    ],
   );
+
+  const unscheduleBankedRest = useCallback(() => {
+    const nextFlow = removeScheduledRewardRest(
+      true,
+      flowmodoroStateRef.current,
+    );
+    flowmodoroStateRef.current = nextFlow;
+    setFlowmodoroState(nextFlow);
+    localStorage.setItem("timeSliceFlowmodoro", JSON.stringify(nextFlow));
+    void flushAppStorage();
+  }, [removeScheduledRewardRest]);
 
   useEffect(() => {
     if (
@@ -10866,12 +11024,21 @@ export default function App() {
       (flowmodoroState.relaxationVaultSeconds || 0) <= 0
     )
       return;
-    scheduleBankedRest(flowmodoroState.relaxationVaultSeconds);
+    const goalSeconds = Math.max(
+      0,
+      (settings.flowmodoroBankGoalMinutes || 0) * 60,
+    );
+    const scheduledSeconds = scheduledRewardRestSeconds(activitiesRef.current);
+    const room = goalSeconds > 0 ? Math.max(0, goalSeconds - scheduledSeconds) : Infinity;
+    scheduleBankedRest(
+      Math.min(flowmodoroState.relaxationVaultSeconds, room),
+    );
   }, [
     flowmodoroState.relaxationVaultSeconds,
     isTimerActive,
     scheduleBankedRest,
     settings.flowmodoroAutoScheduleBankedRest,
+    settings.flowmodoroBankGoalMinutes,
   ]);
 
   useEffect(() => {
@@ -10929,9 +11096,7 @@ export default function App() {
         new Date(flowmodoroState.lastResetDate),
       );
       if (shouldReset) {
-        setFlowmodoroState((prev) =>
-          applyFlowRewardExpiry(
-            {
+        setFlowmodoroState((prev) => ({
               ...prev,
               availableRestTime: 0,
               availableRestMinutes: 0,
@@ -10940,12 +11105,7 @@ export default function App() {
               accumulatedFractionalTime: 0,
               pendingCatchup: undefined,
               lastResetDate: now.toDateString(),
-            },
-            now,
-            settings.flowmodoroRelaxationVaultExpiry || "never",
-            settings.flowmodoroResetStartTime || "06:00",
-          ),
-        );
+            }));
       }
 
       if (elapsedSeconds <= 0) return;
@@ -10956,33 +11116,19 @@ export default function App() {
           const pending = (prev as any).pendingCatchup || 0;
           if (!pending) return prev;
           const chunk = Math.min(pending, Math.max(5, elapsedSeconds * 3));
-          const capA = Math.max(
+          const quickReserveCapSeconds = Math.max(
             0,
-            (settings.flowmodoroMaxPerSessionMinutes || 0) * 60,
+            (settings.flowmodoroQuickReserveMinutes || 0) * 60,
           );
-          const capB = Math.max(
-            0,
-            (settings.flowmodoroSessionActivityMinutes || 0) * 60,
-          );
-          const quickReserveCapSeconds =
-            capA > 0 && capB > 0
-              ? Math.min(capA, capB)
-              : capA > 0
-                ? capA
-                : capB > 0
-                  ? capB
-                  : 0;
-          const current = applyFlowRewardExpiry(
-            prev,
-            now,
-            settings.flowmodoroRelaxationVaultExpiry || "never",
-            settings.flowmodoroResetStartTime || "06:00",
-          );
+          const current = prev;
           const deposited = depositFlowReward(current, chunk, {
             quickReserveCapSeconds,
             vaultCapSeconds: Math.max(
               0,
               (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+            ),
+            scheduledRewardRestSeconds: scheduledRewardRestSeconds(
+              activitiesRef.current,
             ),
           });
           const remainingPending = Math.max(0, pending - chunk);
@@ -11082,6 +11228,8 @@ export default function App() {
           vaultSeconds: vaultTimeRef.current,
           flowDrainSourceId: flowBreakDrainSourceRef.current,
           donorCursor: lastDrainedIndex.current,
+          earlyCompletionPolicy: settings.earlyCompletionPolicy,
+          earlyCompletionTargetId: settings.earlyCompletionTargetId,
         });
 
         if (
@@ -11194,8 +11342,7 @@ export default function App() {
       settings.flowmodoroRelaxationVaultMode,
       settings.flowmodoroRatio,
       settings.flowmodoroMaxProgressMinutes,
-      settings.flowmodoroMaxPerSessionMinutes,
-      settings.flowmodoroSessionActivityMinutes,
+      settings.flowmodoroQuickReserveMinutes,
       settings.flowmodoroRelaxationVaultMaxMinutes,
       settings.flowmodoroRelaxationVaultExpiry,
       settings.flowmodoroResetStartTime,
@@ -11400,8 +11547,9 @@ export default function App() {
           if (keys.includes("timeSliceActivities")) {
             const next = read("timeSliceActivities");
             if (Array.isArray(next)) {
-              activitiesRef.current = next;
-              setActivities(next);
+              const normalized = normalizeSessionHierarchy(next);
+              activitiesRef.current = normalized;
+              setActivities(normalized);
             }
           }
           if (keys.includes("timeSliceSettings")) {
@@ -13138,7 +13286,142 @@ export default function App() {
     }
   };
 
+  const commitSessionActivities = useCallback(
+    (nextActivities: Activity[], nextVault = vaultTimeRef.current) => {
+      const normalized = normalizeSessionHierarchy(nextActivities);
+      const previousCurrentId =
+        activitiesRef.current[currentActivityIndexRef.current]?.id;
+      let nextCurrentIndex = normalized.findIndex(
+        (activity) => activity.id === previousCurrentId,
+      );
+      if (
+        nextCurrentIndex < 0 ||
+        normalized[nextCurrentIndex]?.isCompleted ||
+        normalized[nextCurrentIndex]?.ownTimerCompleted
+      ) {
+        nextCurrentIndex = normalized.findIndex(
+          (activity) =>
+            !activity.isCompleted && !activity.ownTimerCompleted,
+        );
+      }
+      nextCurrentIndex = Math.max(0, nextCurrentIndex);
+      activitiesRef.current = normalized;
+      currentActivityIndexRef.current = nextCurrentIndex;
+      vaultTimeRef.current = nextVault;
+      setActivities(normalized);
+      setCurrentActivityIndex(nextCurrentIndex);
+      setVaultTime(nextVault);
+      if (isTimerActive) {
+        void persistSessionRunSnapshot("running", {
+          activities: normalized,
+          currentActivityIndex: nextCurrentIndex,
+          vaultSeconds: nextVault,
+          observedAtMs: Date.now(),
+        }).catch((error) =>
+          console.error("Failed to persist Session hierarchy", error),
+        );
+      }
+    },
+    [isTimerActive, persistSessionRunSnapshot],
+  );
+
+  const createSessionSubActivity = useCallback(
+    (name: string, requestedSeconds: number) => {
+      const parentId = subActivityDialog.parentId;
+      try {
+        const childId = subActivityDialog.childId;
+        const id = childId ||
+          `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const result = childId
+          ? increaseSessionSubActivity({
+              activities: activitiesRef.current,
+              childId,
+              requestedSeconds,
+              operationId: `increase-${id}-${Date.now()}`,
+            })
+          : addSessionSubActivity({
+              activities: activitiesRef.current,
+              parentId,
+              child: { id, name },
+              requestedSeconds,
+              operationId: `create-${id}`,
+            });
+        commitSessionActivities(result.activities as Activity[]);
+        setSubActivityDialog({
+          isOpen: false,
+          parentId: "",
+          childId: "",
+          requestedSeconds: 0,
+        });
+      } catch (error) {
+        console.error("Could not create sub-activity", error);
+      }
+    },
+    [
+      commitSessionActivities,
+      subActivityDialog.childId,
+      subActivityDialog.parentId,
+    ],
+  );
+
   const removeActivity = (id) => {
+    const source = activitiesRef.current;
+    const selected = source.find((activity) => activity.id === id);
+    if (selected?.parentActivityId) {
+      const result = removeSessionSubActivity({
+        activities: source,
+        childId: id,
+        vaultSeconds: vaultTimeRef.current,
+      });
+      commitSessionActivities(result.activities as Activity[], result.vaultSeconds);
+      return;
+    }
+    const children = source.filter(
+      (activity) => activity.parentActivityId === id,
+    );
+    if (children.length > 0) {
+      const promote = window.confirm(
+        `“${selected?.name || "This activity"}” has ${children.length} sub-activities.\n\nOK: promote them to top-level activities\nCancel: choose whether to delete the whole family`,
+      );
+      if (promote) {
+        commitSessionActivities(
+          source
+            .filter((activity) => activity.id !== id)
+            .map((activity) =>
+              activity.parentActivityId === id
+                ? {
+                    ...activity,
+                    parentActivityId: undefined,
+                    subActivityFunding: undefined,
+                  }
+                : activity,
+            ),
+        );
+        return;
+      }
+      if (
+        !window.confirm(
+          "Delete the parent and all of its sub-activities? Cancel keeps everything.",
+        )
+      )
+        return;
+      let nextActivities = source;
+      let nextVault = vaultTimeRef.current;
+      children.forEach((child) => {
+        const restoration = removeSessionSubActivity({
+          activities: nextActivities,
+          childId: child.id,
+          vaultSeconds: nextVault,
+        });
+        nextActivities = restoration.activities as Activity[];
+        nextVault = restoration.vaultSeconds;
+      });
+      commitSessionActivities(
+        nextActivities.filter((activity) => activity.id !== id),
+        nextVault,
+      );
+      return;
+    }
     if (activities.length > 1) {
       setActivities((prev) => {
         const filteredActivities = prev.filter(
@@ -13343,15 +13626,9 @@ export default function App() {
   }, []);
   const reorderActivities = useCallback((dragId: string, targetId: string) => {
     if (dragId === targetId) return;
-    setActivities((prev) => {
-      const idxA = prev.findIndex((a) => a.id === dragId);
-      const idxB = prev.findIndex((a) => a.id === targetId);
-      if (idxA === -1 || idxB === -1) return prev;
-      const clone = [...prev];
-      const [moved] = clone.splice(idxA, 1);
-      clone.splice(idxB, 0, moved);
-      return clone;
-    });
+    setActivities((prev) =>
+      reorderSessionHierarchy(prev, dragId, targetId) as Activity[],
+    );
   }, []);
 
   const updateActivityName = (id, name) => {
@@ -13410,9 +13687,12 @@ export default function App() {
       const firstIncompleteIndex =
         Number.isInteger(requestedIndex) &&
         activities[requestedIndex] &&
-        !activities[requestedIndex].isCompleted
+        !activities[requestedIndex].isCompleted &&
+        !activities[requestedIndex].ownTimerCompleted
           ? requestedIndex
-          : activities.findIndex((a) => !a.isCompleted);
+          : activities.findIndex(
+              (a) => !a.isCompleted && !a.ownTimerCompleted,
+            );
       const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
       const startingContext = sessionRecordingContext(activities[newIndex]);
       ensuredSessionRecordingRef.current = `${startingContext.activityId}:${startingContext.kind}`;
@@ -13537,6 +13817,7 @@ export default function App() {
           ? 0
           : Math.round((activity.percentage / 100) * totalMins) * 60,
         isCompleted: false,
+        ownTimerCompleted: false,
         completedElapsedSeconds: 0,
       })),
     );
@@ -13556,7 +13837,10 @@ export default function App() {
   }, [calculateTotalSessionMinutes, persistSessionTimer]);
 
   const switchToActivity = (index) => {
-    if (!activities[index].isCompleted) {
+    if (
+      !activities[index].isCompleted &&
+      !activities[index].ownTimerCompleted
+    ) {
       setCurrentActivityIndex(index);
       currentActivityIndexRef.current = index;
       const context = sessionRecordingContext(activities[index]);
@@ -13578,7 +13862,11 @@ export default function App() {
     const prioritized: number[] = [];
     const regular: number[] = [];
     activities.forEach((activity, index) => {
-      if (!activity.isCompleted && index !== currentActivityIndex) {
+      if (
+        !activity.isCompleted &&
+        !activity.ownTimerCompleted &&
+        index !== currentActivityIndex
+      ) {
         (activity.priority ? prioritized : regular).push(index);
       }
     });
@@ -13604,6 +13892,17 @@ export default function App() {
 
   const handleCompleteActivity = (activityId: string) => {
     const completedAtMs = Date.now();
+    const requestedActivity = activities.find((activity) => activity.id === activityId);
+    if (
+      requestedActivity &&
+      !requestedActivity.parentActivityId &&
+      activities.some(
+        (activity) =>
+          activity.parentActivityId === activityId && !activity.isCompleted,
+      )
+    ) {
+      return;
+    }
     const completedCurrentActivity =
       isTimerActive &&
       !isPaused &&
@@ -13659,6 +13958,28 @@ export default function App() {
       return act;
     });
 
+    if (requestedActivity?.parentActivityId) {
+      const parentId = requestedActivity.parentActivityId;
+      const allChildrenCompleted = updatedActivities
+        .filter((activity) => activity.parentActivityId === parentId)
+        .every((activity) => activity.isCompleted);
+      if (allChildrenCompleted) {
+        updatedActivities = updatedActivities.map((activity) => {
+          if (activity.id !== parentId || activity.isCompleted) return activity;
+          const planned = Math.max(0, Math.round(Number(activity.duration || 0) * 60));
+          const remaining = Math.max(0, Number(activity.timeRemaining || 0));
+          timeToVault += remaining;
+          return {
+            ...activity,
+            isCompleted: true,
+            ownTimerCompleted: true,
+            timeRemaining: 0,
+            completedElapsedSeconds: Math.max(0, planned - remaining),
+          };
+        });
+      }
+    }
+
     if (
       timeToVault > 0 &&
       isTimerActive &&
@@ -13681,7 +14002,13 @@ export default function App() {
 
     // Reorder: move newly completed activity to end (stable order for others)
     let reordered = updatedActivities;
-    if (completedActivity) {
+    if (
+      completedActivity &&
+      !completedActivity.parentActivityId &&
+      !updatedActivities.some(
+        (activity) => activity.parentActivityId === completedActivity!.id,
+      )
+    ) {
       const remaining = updatedActivities.filter(
         (a) => a.id !== completedActivity!.id,
       );
@@ -13716,7 +14043,9 @@ export default function App() {
     }
 
     if (completedCurrentActivity) {
-      const nextIndex = reordered.findIndex((act) => !act.isCompleted);
+      const nextIndex = reordered.findIndex(
+        (act) => !act.isCompleted && !act.ownTimerCompleted,
+      );
       if (nextIndex !== -1) {
         setCurrentActivityIndex(nextIndex);
         currentActivityIndexRef.current = nextIndex;
@@ -13736,7 +14065,9 @@ export default function App() {
     }
 
     if (reordered[currentActivityIndex].isCompleted) {
-      const nextIndex = reordered.findIndex((act) => !act.isCompleted);
+      const nextIndex = reordered.findIndex(
+        (act) => !act.isCompleted && !act.ownTimerCompleted,
+      );
       if (nextIndex !== -1) {
         setCurrentActivityIndex(nextIndex);
         currentActivityIndexRef.current = nextIndex;
@@ -13848,7 +14179,28 @@ export default function App() {
       );
       return false;
     }
-    const nextActivities = result.preview.activities;
+    let nextActivities = result.preview.activities;
+    const reopenedParentIds = new Set(
+      nextActivities
+        .filter(
+          (activity) =>
+            activity.parentActivityId &&
+            !activity.isCompleted &&
+            Number(activity.timeRemaining || 0) > 0,
+        )
+        .map((activity) => activity.parentActivityId),
+    );
+    if (reopenedParentIds.size > 0) {
+      nextActivities = nextActivities.map((activity) =>
+        reopenedParentIds.has(activity.id)
+          ? {
+              ...activity,
+              isCompleted: false,
+              completedElapsedSeconds: undefined,
+            }
+          : activity,
+      );
+    }
     const nextVault = result.preview.vaultAfterSeconds;
     activitiesRef.current = nextActivities;
     setActivities(nextActivities);
@@ -14102,6 +14454,7 @@ export default function App() {
       return {
         id: a.id,
         name: a.name,
+        parentActivityId: a.parentActivityId,
         color: a.color,
         planned,
         actual,
@@ -14337,6 +14690,19 @@ export default function App() {
           (currentActivity.duration * 60)) *
         100
       : 0;
+  const rewardBank = rewardBankHoldings(
+    flowmodoroState.relaxationVaultSeconds,
+    activities,
+  );
+  const rewardBankGoalSeconds = Math.max(
+    0,
+    (settings.flowmodoroBankGoalMinutes || 0) * 60,
+  );
+  const rewardBankGoalReached =
+    rewardBankGoalSeconds > 0 &&
+    rewardBank.totalSeconds >= rewardBankGoalSeconds;
+  const rewardBankDisplayMode =
+    settings.flowmodoroBankDisplayMode || "split";
 
   const mainContent =
     currentPage === "manage-activities" ? (
@@ -14635,11 +15001,12 @@ export default function App() {
               settings.flowmodoroEnabled &&
               settings.flowmodoroShowAsActivity &&
               settings.flowmodoroMode === "drain" &&
-              (settings.flowmodoroSessionActivityMinutes || 0) > 0 &&
+              (settings.flowmodoroQuickReserveMinutes || 0) > 0 &&
               !flowmodoroState.isOnBreak
             ) && (
               <FlowmodoroActivity
                 flowState={flowmodoroState}
+                scheduledRewardRest={rewardBank.scheduledSeconds}
                 settings={settings}
                 onTakeBreak={takeFlowmodoroBreak}
                 onSkipBreak={skipFlowmodoroBreak}
@@ -14658,7 +15025,7 @@ export default function App() {
                   (() => {
                     const capSec = Math.max(
                       0,
-                      (settings.flowmodoroSessionActivityMinutes || 0) * 60,
+                      (settings.flowmodoroQuickReserveMinutes || 0) * 60,
                     );
                     if (capSec <= 0) return null;
                     // When on break, show remaining break time vs cap; else show earned (available) vs cap
@@ -14707,10 +15074,10 @@ export default function App() {
                             ? "Break in progress – click settings to adjust"
                             : flowmodoroState.availableRestTime > 0
                               ? "Click to start break with earned Flow time"
-                              : flowmodoroState.relaxationVaultSeconds > 0
-                                ? `Banked ${formatTime(
-                                    flowmodoroState.relaxationVaultSeconds,
-                                  )}. Open Flowmodoro mode for a Vault Rest.`
+                            : rewardBank.totalSeconds > 0
+                              ? `Reward Bank ${formatTime(
+                                  rewardBank.totalSeconds,
+                                )} total; ${formatTime(rewardBank.availableSeconds)} available to spend.`
                                 : "No Flow time yet – click to adjust settings"
                         }
                         className="relative overflow-hidden flex items-center justify-between w-full text-left p-2 rounded-lg border bg-purple-50 border-purple-200 hover:bg-purple-100 focus:outline-none focus:ring-2 focus:ring-purple-400 transition-colors"
@@ -14733,10 +15100,11 @@ export default function App() {
                           </span>
                           {!onBreak && (
                             <span className="text-[10px] font-medium text-violet-700">
-                              Banked{" "}
-                              {formatTime(
-                                flowmodoroState.relaxationVaultSeconds || 0,
-                              )}
+                              {rewardBankDisplayMode === "available"
+                                ? `Bank ${formatTime(rewardBank.availableSeconds)} available`
+                                : rewardBankDisplayMode === "mirrored"
+                                  ? `Bank ${formatTime(rewardBank.totalSeconds)} total`
+                                  : `Bank ${formatTime(rewardBank.totalSeconds)} · ${formatTime(rewardBank.availableSeconds)} available / ${formatTime(rewardBank.scheduledSeconds)} scheduled`}
                             </span>
                           )}
                         </div>
@@ -14771,6 +15139,11 @@ export default function App() {
                     return isWithinWindow(s, e);
                   })
                   .map(({ activity, index }) => {
+                    const unfinishedChildren = activities.filter(
+                      (candidate) =>
+                        candidate.parentActivityId === activity.id &&
+                        !candidate.isCompleted,
+                    );
                     const activityProgress =
                       activity.duration > 0
                         ? ((activity.duration * 60 -
@@ -14852,7 +15225,9 @@ export default function App() {
                       ${activity.isCompleted ? "bg-slate-50 text-gray-500 cursor-not-allowed" : "cursor-pointer"} ${activity.priority ? "ring-1 ring-amber-300" : ""}
                       ${isVisuallyInactive ? "opacity-40 saturate-[.35]" : "opacity-100"}
                       ${draggingActivityId === activity.id ? "opacity-40" : ""}
+                      ${activity.parentActivityId ? "ml-5 border-l-4" : ""}
                       ${dragOverActivityId === activity.id && draggingActivityId ? "ring-2 ring-blue-300" : ""}`}
+                        data-parent-activity-id={activity.parentActivityId}
                         onClick={() =>
                           !activity.isCompleted && switchToActivity(index)
                         }
@@ -14891,7 +15266,14 @@ export default function App() {
                             className="h-4 w-4 rounded text-slate-600 focus:ring-slate-500"
                             aria-label={`Complete ${activity.name}`}
                             checked={activity.isCompleted}
-                            disabled={activity.isCompleted}
+                            disabled={
+                              activity.isCompleted || unfinishedChildren.length > 0
+                            }
+                            title={
+                              unfinishedChildren.length > 0
+                                ? "Complete the remaining sub-activities first"
+                                : undefined
+                            }
                             onChange={() => handleCompleteActivity(activity.id)}
                           />
                           <div
@@ -14910,6 +15292,12 @@ export default function App() {
                           >
                             {activity.name}
                           </span>
+                          {activity.ownTimerCompleted &&
+                            !activity.isCompleted && (
+                              <span className="text-[10px] font-medium text-slate-500">
+                                own timer done · {unfinishedChildren.length} left
+                              </span>
+                            )}
                           {percentOnly && settings.showActivityProgress && (
                             <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-slate-200 text-slate-700">
                               {Math.round(displayProgress)}%
@@ -14954,6 +15342,49 @@ export default function App() {
                               })
                             }
                           />
+                          {!activity.parentActivityId &&
+                            !activity.countUp &&
+                            !activity.isRewardRest && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="z-20 h-7 min-w-7 px-1 text-[10px] font-semibold text-indigo-700"
+                                title="Add sub-activity"
+                                aria-label={`Add sub-activity to ${activity.name}`}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setSubActivityDialog({
+                                    isOpen: true,
+                                    parentId: activity.id,
+                                    childId: "",
+                                    requestedSeconds: 0,
+                                  });
+                                }}
+                              >
+                                + Sub
+                              </Button>
+                            )}
+                          {activity.parentActivityId && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="z-20 h-7 min-w-7 px-1 text-[10px] font-semibold text-indigo-700"
+                              title="Add time to sub-activity"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setSubActivityDialog({
+                                  isOpen: true,
+                                  parentId: activity.parentActivityId!,
+                                  childId: activity.id,
+                                  requestedSeconds: 0,
+                                });
+                              }}
+                            >
+                              + Time
+                            </Button>
+                          )}
                           {settings.showActivityTime && !percentOnly && (
                             <span className="text-xs font-mono z-10">
                               {activity.isCompleted
@@ -15963,8 +16394,8 @@ export default function App() {
                             <div className="flex items-center space-x-2">
                               <Input
                                 type="number"
-                                min="2"
-                                max="10"
+                                min="1"
+                                max="60"
                                 value={settings.flowmodoroRatio}
                                 onChange={(e) => {
                                   const value = e.target.value;
@@ -15977,8 +16408,8 @@ export default function App() {
                                     setSettings((prev) => ({
                                       ...prev,
                                       flowmodoroRatio: Math.max(
-                                        2,
-                                        Math.min(10, Number(value) || 5),
+                                        1,
+                                        Math.min(60, Number(value) || 5),
                                       ),
                                     }));
                                   }
@@ -15988,8 +16419,8 @@ export default function App() {
                                   setSettings((prev) => ({
                                     ...prev,
                                     flowmodoroRatio: Math.max(
-                                      2,
-                                      Math.min(10, value),
+                                      1,
+                                      Math.min(60, value),
                                     ),
                                   }));
                                 }}
@@ -16280,11 +16711,12 @@ export default function App() {
                           <div className="space-y-3">
                             <div>
                               <Label className="font-medium text-violet-800">
-                                Relaxation Vault
+                                Reward Bank
                               </Label>
                               <p className="text-xs text-gray-500 mt-1">
-                                Reward earned above Quick Break capacity is
-                                banked here and never changes Predicted End.
+                                Reward earned above Quick Reserve capacity is
+                                banked here. Available and scheduled Reward Rest
+                                are one shared holding and never change Predicted End.
                               </p>
                             </div>
                             <label className="flex items-start gap-3 rounded-md border border-violet-200 bg-violet-50 p-3">
@@ -16307,20 +16739,74 @@ export default function App() {
                                   Auto-fill Session Reward Rest
                                 </span>
                                 <span className="mt-1 block text-xs text-violet-700">
-                                  During Session setup, move available Banked
-                                  time into Reward Rest and proportionally
-                                  reduce non-starred countdown tasks. The
-                                  Session end stays unchanged.
+                                  During Session setup, fill Reward Rest from
+                                  available Bank time up to its goal and
+                                  proportionally reduce non-starred countdown
+                                  tasks. The Session end stays unchanged.
                                 </span>
                               </span>
                             </label>
                             <div className="grid gap-3 sm:grid-cols-2">
                               <div className="space-y-1">
+                                <Label htmlFor="flow-quick-cap" className="text-sm">
+                                  Quick Reserve capacity
+                                </Label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    id="flow-quick-cap"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    max={1440}
+                                    value={settings.flowmodoroQuickReserveMinutes}
+                                    onChange={(event) =>
+                                      setSettings((previous) => ({
+                                        ...previous,
+                                        flowmodoroQuickReserveMinutes: Math.max(
+                                          0,
+                                          Math.min(1440, Number(event.target.value) || 0),
+                                        ),
+                                      }))
+                                    }
+                                    className="w-24"
+                                  />
+                                  <span className="text-xs text-gray-500">minutes</span>
+                                </div>
+                              </div>
+                              <div className="space-y-1">
+                                <Label htmlFor="flow-bank-goal" className="text-sm">
+                                  Reward Bank goal
+                                </Label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    id="flow-bank-goal"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    max={10080}
+                                    value={settings.flowmodoroBankGoalMinutes}
+                                    onChange={(event) =>
+                                      setSettings((previous) => ({
+                                        ...previous,
+                                        flowmodoroBankGoalMinutes: Math.max(
+                                          0,
+                                          Math.min(10080, Number(event.target.value) || 0),
+                                        ),
+                                      }))
+                                    }
+                                    className="w-24"
+                                  />
+                                  <span className="text-xs text-gray-500">
+                                    minutes (0 = disabled)
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="space-y-1">
                                 <Label
                                   htmlFor="flow-vault-max"
                                   className="text-sm"
                                 >
-                                  Vault maximum
+                                  Bank hard maximum
                                 </Label>
                                 <div className="flex items-center gap-2">
                                   <Input
@@ -16381,6 +16867,35 @@ export default function App() {
                               </div>
                             </div>
                             <div className="space-y-2">
+                              <Label className="text-sm">Bank display</Label>
+                              <div className="grid grid-cols-3 gap-2">
+                                {([
+                                  ["split", "Total + split"],
+                                  ["available", "Available"],
+                                  ["mirrored", "Mirrored total"],
+                                ] as const).map(([value, label]) => (
+                                  <Button
+                                    key={value}
+                                    size="sm"
+                                    variant={
+                                      settings.flowmodoroBankDisplayMode === value
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    className="h-11 px-2 text-xs"
+                                    onClick={() =>
+                                      setSettings((previous) => ({
+                                        ...previous,
+                                        flowmodoroBankDisplayMode: value,
+                                      }))
+                                    }
+                                  >
+                                    {label}
+                                  </Button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="space-y-2">
                               <Label className="text-sm">
                                 During a Vault Rest
                               </Label>
@@ -16423,10 +16938,10 @@ export default function App() {
                             </div>
                             <div className="flex items-center justify-between gap-3 rounded-md bg-violet-50 p-2">
                               <span className="text-sm text-violet-800">
-                                Banked:{" "}
+                                Bank total:{" "}
                                 <strong>
                                   {formatTime(
-                                    flowmodoroState.relaxationVaultSeconds || 0,
+                                    rewardBank.totalSeconds,
                                   )}
                                 </strong>
                               </span>
@@ -16434,19 +16949,19 @@ export default function App() {
                                 size="sm"
                                 variant="outline"
                                 disabled={
-                                  !flowmodoroState.relaxationVaultSeconds
+                                  rewardBank.totalSeconds <= 0
                                 }
                                 onClick={() => {
                                   if (
                                     window.confirm(
-                                      "Reset the Relaxation Vault? Quick Break time is not affected.",
+                                      "Reset the Reward Bank and remove scheduled Reward Rest? Remaining Session time will be restored to activities. Quick Reserve is not affected.",
                                     )
                                   )
                                     resetRelaxationVault();
                                 }}
                                 className="text-red-600"
                               >
-                                Reset Vault
+                                Reset Bank
                               </Button>
                             </div>
                           </div>
@@ -18405,6 +18920,7 @@ export default function App() {
                 // Standalone Flowmodoro Mode Content
                 <FlowmodoroMode
                   flowmodoroState={flowmodoroState}
+                  scheduledRewardRest={rewardBank.scheduledSeconds}
                   onTakeBreak={takeFlowmodoroBreak}
                   onSkipBreak={skipFlowmodoroBreak}
                   onReset={resetFlowmodoroState}
@@ -18437,40 +18953,52 @@ export default function App() {
                       </div>
                       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
                         <span>
-                          Scheduled:{" "}
+                          {rewardBankDisplayMode === "mirrored"
+                            ? "Shared total:"
+                            : "Scheduled:"}{" "}
                           <strong className="tabular-nums">
                             {formatTime(
-                              Math.max(
-                                0,
-                                activities.find(
-                                  (activity) => activity.isRewardRest,
-                                )?.timeRemaining || 0,
-                              ),
+                              rewardBankDisplayMode === "mirrored"
+                                ? rewardBank.totalSeconds
+                                : rewardBank.scheduledSeconds,
                             )}
                           </strong>
                         </span>
                         <span className="text-violet-700">
-                          Banked:{" "}
+                          {rewardBankDisplayMode === "available"
+                            ? "Available:"
+                            : rewardBankDisplayMode === "mirrored"
+                              ? "Bank total:"
+                              : "Available:"}{" "}
                           <strong className="tabular-nums">
                             {formatTime(
-                              flowmodoroState.relaxationVaultSeconds || 0,
+                              rewardBankDisplayMode === "mirrored"
+                                ? rewardBank.totalSeconds
+                                : rewardBank.availableSeconds,
                             )}
                           </strong>
                         </span>
+                        {rewardBankDisplayMode === "split" && (
+                          <span className="text-violet-700">
+                            Total:{" "}
+                            <strong className="tabular-nums">
+                              {formatTime(rewardBank.totalSeconds)}
+                            </strong>
+                          </span>
+                        )}
                       </div>
                       <p className="mt-1 text-xs text-violet-700">
                         Scheduling rest keeps the Session total and Predicted
                         End unchanged by reducing eligible tasks proportionally.
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="min-h-11 shrink-0 border-violet-300 bg-white"
-                      disabled={
-                        (flowmodoroState.relaxationVaultSeconds || 0) <= 0
-                      }
-                      onClick={() => {
+                    <div className="grid shrink-0 gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="min-h-11 border-violet-300 bg-white"
+                        disabled={rewardBank.availableSeconds <= 0}
+                        onClick={() => {
                         const banked = Math.max(
                           0,
                           Math.floor(
@@ -18482,11 +19010,39 @@ export default function App() {
                         );
                         setBankedRestSecondsDraft(String(banked % 60));
                         setBankedRestDialogOpen(true);
-                      }}
-                    >
-                      Add time
-                    </Button>
+                        }}
+                      >
+                        Add time
+                      </Button>
+                      {rewardBank.scheduledSeconds > 0 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="min-h-11 text-violet-800"
+                          onClick={unscheduleBankedRest}
+                        >
+                          Unschedule
+                        </Button>
+                      )}
+                    </div>
                   </div>
+                  {rewardBankGoalSeconds > 0 && (
+                    <div className="mt-3" aria-label={`Reward Bank goal ${formatTime(rewardBank.totalSeconds)} of ${formatTime(rewardBankGoalSeconds)}`}>
+                      <div className="h-1.5 overflow-hidden rounded-full bg-violet-100">
+                        <div
+                          className="h-full bg-violet-500"
+                          style={{
+                            width: `${Math.min(100, (rewardBank.totalSeconds / rewardBankGoalSeconds) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className={`mt-1 text-xs ${rewardBankGoalReached ? "font-semibold text-emerald-700" : "text-violet-700"}`}>
+                        {rewardBankGoalReached
+                          ? `Goal reached · ${formatTime(rewardBankGoalSeconds)}`
+                          : `${formatTime(rewardBank.totalSeconds)} / ${formatTime(rewardBankGoalSeconds)} goal`}
+                      </div>
+                    </div>
+                  )}
                   {settings.flowmodoroAutoScheduleBankedRest && (
                     <div className="mt-2 text-xs font-medium text-violet-800">
                       Auto-fill is on for Session setup.
@@ -18763,8 +19319,9 @@ export default function App() {
                       .map((activity) => (
                         <div
                           key={activity.id}
-                          className="border rounded-lg bg-white p-3"
+                          className={`border rounded-lg bg-white p-3 ${activity.parentActivityId ? "ml-5 border-l-4" : ""}`}
                           data-testid={`session-activity-${activity.id}`}
+                          data-parent-activity-id={activity.parentActivityId}
                         >
                           {/* First Row: Color + Name + Lock + Delete */}
                           <div className="flex items-center gap-3 mb-3">
@@ -18865,7 +19422,11 @@ export default function App() {
                                   );
                                 }}
                                 className="w-20 h-9 text-sm text-center"
-                                disabled={activity.isLocked || activity.countUp}
+                                disabled={
+                                  activity.isLocked ||
+                                  activity.countUp ||
+                                  Boolean(activity.parentActivityId)
+                                }
                               />
                               <span className="text-sm text-gray-600 font-medium">
                                 %
@@ -18947,7 +19508,11 @@ export default function App() {
                                   );
                                 }}
                                 className="w-20 h-9 text-sm text-center"
-                                disabled={activity.isLocked || activity.countUp}
+                                disabled={
+                                  activity.isLocked ||
+                                  activity.countUp ||
+                                  Boolean(activity.parentActivityId)
+                                }
                               />
                               <span className="text-sm text-gray-600 font-medium">
                                 min
@@ -18970,6 +19535,7 @@ export default function App() {
                           </div>
 
                           {/* Third Row: Count Up Timer Checkbox */}
+                          {!activity.parentActivityId && (
                           <div className="flex items-center justify-center gap-2 mt-3">
                             <input
                               type="checkbox"
@@ -18992,6 +19558,45 @@ export default function App() {
                               </span>
                             )}
                           </div>
+                          )}
+                          {!activity.parentActivityId &&
+                            !activity.countUp &&
+                            !activity.isRewardRest && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="mt-3 h-11 w-full text-sm"
+                                onClick={() =>
+                                  setSubActivityDialog({
+                                    isOpen: true,
+                                    parentId: activity.id,
+                                    childId: "",
+                                    requestedSeconds: 0,
+                                  })
+                                }
+                              >
+                                <Icon name="plus" className="mr-2 h-4 w-4" />
+                                Add sub-activity
+                              </Button>
+                            )}
+                          {activity.parentActivityId && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="mt-3 h-11 w-full text-sm"
+                              onClick={() =>
+                                setSubActivityDialog({
+                                  isOpen: true,
+                                  parentId: activity.parentActivityId!,
+                                  childId: activity.id,
+                                  requestedSeconds: 0,
+                                })
+                              }
+                            >
+                              <Icon name="plus" className="mr-2 h-4 w-4" />
+                              Add time to sub-activity
+                            </Button>
+                          )}
                         </div>
                       ))}
                   </div>
@@ -19101,6 +19706,51 @@ export default function App() {
           onClose={() => setTagPickerTarget(null)}
         />
       </TagSectionBoundary>
+      <SessionSubActivitySheet
+        open={subActivityDialog.isOpen}
+        parentName={
+          activities.find(
+            (activity) => activity.id === subActivityDialog.parentId,
+          )?.name || "Activity"
+        }
+        initialName={
+          activities.find(
+            (activity) => activity.id === subActivityDialog.childId,
+          )?.name || ""
+        }
+        action={subActivityDialog.childId ? "increase" : "create"}
+        preview={previewSubActivityFunding({
+          activities,
+          parentId: subActivityDialog.parentId,
+          requestedSeconds: subActivityDialog.requestedSeconds,
+        })}
+        donorNames={Object.fromEntries(
+          activities.map((activity) => [activity.id, activity.name]),
+        )}
+        existingNames={activities
+          .filter(
+            (activity) =>
+              activity.parentActivityId === subActivityDialog.parentId,
+          )
+          .filter((activity) => activity.id !== subActivityDialog.childId)
+          .map((activity) => activity.name)}
+        onPreview={(requestedSeconds) =>
+          setSubActivityDialog((previous) =>
+            previous.requestedSeconds === requestedSeconds
+              ? previous
+              : { ...previous, requestedSeconds },
+          )
+        }
+        onConfirm={createSessionSubActivity}
+        onClose={() =>
+          setSubActivityDialog({
+            isOpen: false,
+            parentId: "",
+            childId: "",
+            requestedSeconds: 0,
+          })
+        }
+      />
       {/* Removed ColorPicker - using simple random colors instead */}
       <TimeAllocationDialog
         open={borrowModalState.isOpen}

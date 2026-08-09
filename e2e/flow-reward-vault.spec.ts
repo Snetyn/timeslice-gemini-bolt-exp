@@ -35,9 +35,7 @@ test("Quick and Vault breaks stay explicit and survive reload", async ({
   await page.goto("/");
   await page.getByRole("tab", { name: "Flowmodoro" }).click();
 
-  await expect(
-    page.getByText("Relaxation Vault", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Reward Bank", { exact: true })).toBeVisible();
   await expect(page.getByText("20:00", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Custom Vault Rest" }).click();
   const minutes = page.getByLabel("Minutes");
@@ -54,9 +52,7 @@ test("Quick and Vault breaks stay explicit and survive reload", async ({
     page.getByText(/Vault Rest · activities postponed/i),
   ).toBeVisible();
   await page.getByRole("button", { name: "Stop & return unused time" }).click();
-  await expect(
-    page.getByText("Relaxation Vault", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("Reward Bank", { exact: true })).toBeVisible();
 });
 
 test("Vault settings persist and the Flow screen does not overflow Android", async ({

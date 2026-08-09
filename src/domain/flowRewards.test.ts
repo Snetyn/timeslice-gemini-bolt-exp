@@ -8,6 +8,7 @@ import {
   fundFlowBreak,
   nextFlowRewardResetAt,
   normalizeFlowRewardFields,
+  normalizeFlowRewardBankSettings,
   refundUnusedFlowBreak,
   type FlowRewardState,
 } from "./flowRewards";
@@ -25,6 +26,31 @@ const baseState = (
 });
 
 describe("Flow reward allocation", () => {
+  it("derives new Bank settings from legacy capacities without deleting them", () => {
+    expect(
+      normalizeFlowRewardBankSettings({
+        flowmodoroMaxPerSessionMinutes: 30,
+        flowmodoroSessionActivityMinutes: 10,
+        flowmodoroBankGoalMinutes: -5,
+        flowmodoroBankDisplayMode: "unknown",
+      }),
+    ).toEqual({
+      flowmodoroQuickReserveMinutes: 10,
+      flowmodoroBankGoalMinutes: 0,
+      flowmodoroBankDisplayMode: "split",
+    });
+    expect(
+      normalizeFlowRewardBankSettings({
+        flowmodoroQuickReserveMinutes: 25,
+        flowmodoroBankGoalMinutes: 90,
+        flowmodoroBankDisplayMode: "mirrored",
+      }),
+    ).toEqual({
+      flowmodoroQuickReserveMinutes: 25,
+      flowmodoroBankGoalMinutes: 90,
+      flowmodoroBankDisplayMode: "mirrored",
+    });
+  });
   it("fills the quick reserve and sends exact overflow to the vault", () => {
     const result = depositFlowReward(
       baseState({ availableRestTime: 590 }),
@@ -51,6 +77,24 @@ describe("Flow reward allocation", () => {
     expect(result.vaultAddedSeconds).toBe(5);
     expect(result.discardedSeconds).toBe(15);
     expect(result.state.totalEarnedToday).toBe(5);
+  });
+
+  it("enforces the vault maximum across available and scheduled holdings", () => {
+    const result = depositFlowReward(
+      baseState({
+        availableRestTime: 600,
+        relaxationVaultSeconds: 120,
+      }),
+      120,
+      {
+        quickReserveCapSeconds: 600,
+        vaultCapSeconds: 300,
+        scheduledRewardRestSeconds: 150,
+      },
+    );
+    expect(result.vaultAddedSeconds).toBe(30);
+    expect(result.discardedSeconds).toBe(90);
+    expect(result.state.relaxationVaultSeconds).toBe(150);
   });
 
   it("preserves fractional work across awards", () => {

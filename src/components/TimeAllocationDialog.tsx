@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   calculateAllocation,
+  directSourceAvailableSeconds,
   type AllocationActivity,
   type AllocationPreview,
   type AllocationSource,
@@ -47,6 +48,7 @@ export function TimeAllocationDialog({
 }) {
   const [minutesDraft, setMinutesDraft] = useState("1");
   const [secondsDraft, setSecondsDraft] = useState("0");
+  const [amountMode, setAmountMode] = useState<"custom" | "all">("custom");
   const [allowProtectedManual, setAllowProtectedManual] = useState(false);
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
   const onCloseRef = useRef(onClose);
@@ -58,8 +60,26 @@ export function TimeAllocationDialog({
       maximum === undefined ? parsed : Math.min(maximum, parsed),
     );
   };
+  const directAvailableSeconds = useMemo(
+    () =>
+      directSourceAvailableSeconds({
+        activities,
+        sourceId,
+        operation,
+        minimumDonorSeconds,
+      }),
+    [activities, minimumDonorSeconds, operation, sourceId],
+  );
   const requestedSeconds =
-    parseDraft(minutesDraft) * 60 + parseDraft(secondsDraft, 59);
+    amountMode === "all" && directAvailableSeconds !== null
+      ? directAvailableSeconds
+      : parseDraft(minutesDraft) * 60 + parseDraft(secondsDraft, 59);
+  const displayedMinutes =
+    amountMode === "all"
+      ? String(Math.floor(requestedSeconds / 60))
+      : minutesDraft;
+  const displayedSeconds =
+    amountMode === "all" ? String(requestedSeconds % 60) : secondsDraft;
   const preview = useMemo(
     () =>
       calculateAllocation({
@@ -93,8 +113,9 @@ export function TimeAllocationDialog({
     const initial = Math.max(0, Math.floor(initialSeconds ?? 60));
     setMinutesDraft(String(Math.floor(initial / 60)));
     setSecondsDraft(String(initial % 60));
+    setAmountMode("custom");
     setAllowProtectedManual(false);
-  }, [initialSeconds, open]);
+  }, [initialSeconds, open, sourceId, targetId]);
   useEffect(() => {
     if (!open) return;
     const viewport = window.visualViewport;
@@ -188,10 +209,11 @@ export function TimeAllocationDialog({
                 inputMode="numeric"
                 pattern="[0-9]*"
                 type="text"
-                value={minutesDraft}
-                onChange={(event) =>
-                  updateNumericDraft(event.target.value, setMinutesDraft)
-                }
+                value={displayedMinutes}
+                onChange={(event) => {
+                  setAmountMode("custom");
+                  updateNumericDraft(event.target.value, setMinutesDraft);
+                }}
                 onBlur={() => setMinutesDraft(String(parseDraft(minutesDraft)))}
                 className="mt-1 min-h-11 w-full rounded-lg border px-3"
               />
@@ -203,10 +225,11 @@ export function TimeAllocationDialog({
                 inputMode="numeric"
                 pattern="[0-9]*"
                 type="text"
-                value={secondsDraft}
-                onChange={(event) =>
-                  updateNumericDraft(event.target.value, setSecondsDraft)
-                }
+                value={displayedSeconds}
+                onChange={(event) => {
+                  setAmountMode("custom");
+                  updateNumericDraft(event.target.value, setSecondsDraft);
+                }}
                 onBlur={() =>
                   setSecondsDraft(String(parseDraft(secondsDraft, 59)))
                 }
@@ -214,6 +237,21 @@ export function TimeAllocationDialog({
               />
             </label>
           </div>
+          {directAvailableSeconds !== null && (
+            <button
+              type="button"
+              aria-pressed={amountMode === "all"}
+              disabled={directAvailableSeconds <= 0}
+              onClick={() => setAmountMode("all")}
+              className={`mt-3 min-h-11 w-full rounded-lg border px-3 text-sm font-semibold disabled:opacity-40 ${
+                amountMode === "all"
+                  ? "border-indigo-600 bg-indigo-50 text-indigo-800"
+                  : "border-slate-300 bg-white text-slate-800"
+              }`}
+            >
+              Use all · {format(directAvailableSeconds)}
+            </button>
+          )}
           <div className="mt-4 rounded-xl bg-slate-50 p-3" aria-live="polite">
             <div className="mb-2 flex justify-between text-sm">
               <span>Requested</span>
