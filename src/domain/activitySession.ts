@@ -21,6 +21,7 @@ export type ActivitySessionContext = {
   source: ActivitySessionSource;
   kind: ActivitySessionKind;
   activityDefinitionId?: string;
+  tagIds?: string[];
   taskOccurrenceId?: string;
   lifeAreaId?: string;
   lifeAreaName?: string;
@@ -116,6 +117,16 @@ export function normalizeActivitySessionContext(
       value.activityDefinitionId.trim()
         ? value.activityDefinitionId
         : undefined,
+    tagIds: Array.isArray(value.tagIds)
+      ? [
+          ...new Set(
+            value.tagIds
+              .filter((item): item is string => typeof item === "string")
+              .map((item) => item.trim().toLocaleLowerCase())
+              .filter(Boolean),
+          ),
+        ]
+      : undefined,
     taskOccurrenceId:
       typeof value.taskOccurrenceId === "string" &&
       value.taskOccurrenceId.trim()

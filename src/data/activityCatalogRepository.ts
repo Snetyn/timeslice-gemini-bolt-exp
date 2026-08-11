@@ -491,6 +491,86 @@ export async function findDefinitionBySourceKey(sourceKey: string) {
   return candidates.map(normalizeActivityDefinition).find(Boolean) || null;
 }
 
+/** Keeps timer-row tag edits attached to the canonical activity definition. */
+export async function setActivityDefinitionTags(
+  input: {
+    activityDefinitionId?: string;
+    sourceKey: string;
+    name: string;
+    color?: string;
+    tagIds: string[];
+  },
+  mutationId: string = crypto.randomUUID(),
+) {
+  const sourceKey = input.sourceKey.trim();
+  const tagIds = [
+    ...new Set(
+      input.tagIds
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim().toLocaleLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  const command = {
+    type: "set-activity-definition-tags",
+    ...input,
+    sourceKey,
+    tagIds,
+  };
+  return transactIdempotent(
+    ["activityDefinitions"],
+    { id: mutationId, fingerprint: JSON.stringify(command) },
+    async (revision) => {
+      const byId = input.activityDefinitionId
+        ? await timeSliceDb.activityDefinitions.get(input.activityDefinitionId)
+        : undefined;
+      const bySource = sourceKey
+        ? (
+            await timeSliceDb.activityDefinitions
+              .where("sourceKeys")
+              .equals(sourceKey)
+              .toArray()
+          )[0]
+        : undefined;
+      const current = byId || bySource;
+      const nowMs = Date.now();
+      if (current) {
+        const updated: ActivityDefinitionRecord = {
+          ...current,
+          tagIds,
+          sourceKeys: sourceKey
+            ? [...new Set([...(current.sourceKeys || []), sourceKey])]
+            : current.sourceKeys,
+          revision,
+          updatedAtMs: nowMs,
+        };
+        await timeSliceDb.activityDefinitions.put(updated);
+        return updated;
+      }
+      const name = cleanName(input.name);
+      const definition: ActivityDefinitionRecord = {
+        id: `tagged:${encodeURIComponent(sourceKey || crypto.randomUUID())}`,
+        name,
+        normalizedName: normalizeSearchName(name),
+        aliases: [],
+        sourceKeys: sourceKey ? [sourceKey] : [],
+        color: input.color?.trim() || "#64748b",
+        lifeAreaId: null,
+        folderId: null,
+        order: await timeSliceDb.activityDefinitions.count(),
+        protected: false,
+        decisionType: "normal",
+        tagIds,
+        revision,
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+      };
+      await timeSliceDb.activityDefinitions.put(definition);
+      return definition;
+    },
+  );
+}
+
 export async function listRecentActivityDefinitions(limit = 6) {
   const sessions = await timeSliceDb.activitySessions
     .orderBy("startedAtMs")

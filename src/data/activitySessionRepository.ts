@@ -94,11 +94,32 @@ async function resolveRecordingContext(
       order: await timeSliceDb.activityDefinitions.count(),
       protected: false,
       decisionType: "normal",
+      tagIds: context.tagIds || [],
       revision,
       createdAtMs: atMs,
       updatedAtMs: atMs,
     } satisfies ActivityDefinitionRecord;
     await timeSliceDb.activityDefinitions.put(definition);
+  }
+  if (definition && context.tagIds && context.tagIds.length > 0) {
+    const nextTags = [...new Set(context.tagIds)];
+    const currentTags = definition.tagIds || [];
+    const sourceKeys = context.sourceKey
+      ? [...new Set([...(definition.sourceKeys || []), context.sourceKey])]
+      : definition.sourceKeys;
+    if (
+      JSON.stringify(currentTags) !== JSON.stringify(nextTags) ||
+      sourceKeys.length !== (definition.sourceKeys || []).length
+    ) {
+      definition = {
+        ...definition,
+        tagIds: nextTags,
+        sourceKeys,
+        revision,
+        updatedAtMs: atMs,
+      };
+      await timeSliceDb.activityDefinitions.put(definition);
+    }
   }
   if (!definition) return context;
   const area = definition.lifeAreaId
@@ -308,10 +329,14 @@ export async function applyActivitySessionTrace(
         const slice = slices[index];
         const metadata = activityById.get(slice.activityId);
         if (!metadata) continue;
-        const context = await resolveRecordingContext({
-          ...metadata,
-          kind: slice.kind,
-        }, revision, Math.max(epoch, slice.startMs));
+        const context = await resolveRecordingContext(
+          {
+            ...metadata,
+            kind: slice.kind,
+          },
+          revision,
+          Math.max(epoch, slice.startMs),
+        );
         const startMs = Math.max(epoch, slice.startMs);
         const endMs = Math.max(startMs, slice.endMs);
         const sameActive =
@@ -360,7 +385,11 @@ export async function applyActivitySessionTrace(
         ? normalizeActivitySessionContext(input.currentActivity)
         : null;
       const current = normalizedCurrent
-        ? await resolveRecordingContext(normalizedCurrent, revision, observedAtMs)
+        ? await resolveRecordingContext(
+            normalizedCurrent,
+            revision,
+            observedAtMs,
+          )
         : null;
       if (input.continues && current) {
         const matchesCurrent =
@@ -474,7 +503,11 @@ export async function correctActivitySessionClassification(
   expectedRevision: number,
   mutationId: string = crypto.randomUUID(),
 ) {
-  const fingerprint = JSON.stringify({ id, activityDefinitionId, expectedRevision });
+  const fingerprint = JSON.stringify({
+    id,
+    activityDefinitionId,
+    expectedRevision,
+  });
   return transactIdempotent(
     ["activitySessions", "activityDefinitions", "lifeAreas"],
     { id: mutationId, fingerprint },

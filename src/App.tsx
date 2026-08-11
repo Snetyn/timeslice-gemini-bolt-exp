@@ -22,7 +22,7 @@ import { TasksHub } from "./components/TasksHub";
 import { DailyPlanner } from "./components/DailyPlanner";
 import { SessionTaskPicker } from "./components/SessionTaskPicker";
 import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
-import { DailyTagWheels } from "./components/DailyTagWheels";
+import { TagRatioPanel } from "./components/TagRatioPanel";
 import { DailyProgressDisplay } from "./components/DailyProgressDisplay";
 import {
   ActivityTagButton,
@@ -30,11 +30,9 @@ import {
 } from "./components/ActivityTagPicker";
 import { TagSectionBoundary } from "./components/TagSectionBoundary";
 import { confirmAllocation } from "./domain/timeAllocation";
-import { buildDailyTagWheels, resolveTagId } from "./domain/dailyTagWheel";
 import {
   buildCanonicalTags,
   applyTagsToLinkedActivities,
-  isTagAssigned,
   normalizeAssignedTags,
   normalizeTagName,
   setTagAssignment,
@@ -94,7 +92,11 @@ import {
   normalizeSessionRunSnapshot,
 } from "./domain/sessionSnapshot";
 import { deleteSessionRun, saveSessionRun } from "./data/sessionRunRepository";
-import { listRecentActivityDefinitions } from "./data/activityCatalogRepository";
+import {
+  listRecentActivityDefinitions,
+  setActivityDefinitionTags,
+} from "./data/activityCatalogRepository";
+import { useTagRpgLevels } from "./hooks/useTagRpgLevels";
 import {
   completeTaskOccurrence,
   updateTaskOccurrence,
@@ -196,6 +198,7 @@ const sessionRecordingContext = (
   activityName: activity.name,
   activityColor: activity.color,
   activityDefinitionId: activity.activityDefinitionId,
+  tagIds: normalizeAssignedTags(activity.tags),
   taskOccurrenceId: activity.taskOccurrenceId,
   sourceKey: activity.sharedId
     ? `shared:${activity.sharedId}`
@@ -215,6 +218,7 @@ const dailyRecordingContext = (activity: Activity): ActivitySessionContext => ({
   activityName: activity.name,
   activityColor: activity.color,
   activityDefinitionId: activity.activityDefinitionId,
+  tagIds: normalizeAssignedTags(activity.tags),
   taskOccurrenceId: activity.taskOccurrenceId,
   sourceKey: activity.sharedId
     ? `shared:${activity.sharedId}`
@@ -8373,6 +8377,10 @@ export default function App() {
       dailyHideCompleted: false, // hide completed items from the daily timeline view
       dailyTagWheelLayout: "per-tag",
       dailyTagWheelMetric: "plan",
+      tagRatioMetric: "plan",
+      tagMatchMode: "any",
+      tagChartView: "donut",
+      tagRpgMinutesPerLevel: 60,
       dailyPlannerVersion: "legacy",
       // Auto-schedule settings
       autoScheduleBreakMinutes: 15, // Break time between auto-scheduled activities
@@ -8401,6 +8409,22 @@ export default function App() {
         ...parsed,
         ...bankSettings,
         vaultPredictionMode: resolveVaultPredictionMode(parsed),
+        tagRatioMetric:
+          parsed.tagRatioMetric === "remaining" ||
+          parsed.tagRatioMetric === "actual"
+            ? parsed.tagRatioMetric
+            : parsed.dailyTagWheelMetric === "actual"
+              ? "actual"
+              : "plan",
+        tagMatchMode: parsed.tagMatchMode === "all" ? "all" : "any",
+        tagChartView:
+          parsed.tagChartView === "radar" || parsed.tagChartView === "rpg"
+            ? parsed.tagChartView
+            : "donut",
+        tagRpgMinutesPerLevel: Math.max(
+          1,
+          Math.min(1440, Number(parsed.tagRpgMinutesPerLevel) || 60),
+        ),
       };
     } catch (e) {
       return defaultValue;
@@ -8503,9 +8527,9 @@ export default function App() {
     ];
   });
 
-  // Selected tag filters for list views
-  const [tagFilter, setTagFilter] = useState<string[]>([]);
-  const [tagQuery, setTagQuery] = useState("");
+  // Chart-only selections intentionally reset on reload and remain separate per mode.
+  const [sessionTagSelection, setSessionTagSelection] = useState<string[]>([]);
+  const [dailyTagSelection, setDailyTagSelection] = useState<string[]>([]);
 
   const [activeDailyActivity, setActiveDailyActivity] = useState(() => {
     try {
@@ -8965,6 +8989,66 @@ export default function App() {
       })),
     [canonicalTags],
   );
+  const sessionTagRatioActivities = React.useMemo(
+    () =>
+      activities.map((activity) => {
+        const planSeconds = activity.countUp
+          ? 0
+          : Math.max(
+              0,
+              Number.isFinite(activity.originalPlannedSeconds)
+                ? Number(activity.originalPlannedSeconds)
+                : Number(activity.duration || 0) * 60,
+            );
+        const remaining = activity.countUp
+          ? 0
+          : Math.max(0, Number(activity.timeRemaining || 0));
+        const actual = activity.countUp
+          ? Math.max(0, Number(activity.timeRemaining || 0))
+          : Number.isFinite(activity.completedElapsedSeconds)
+            ? Math.max(0, Number(activity.completedElapsedSeconds))
+            : Math.max(
+                0,
+                planSeconds -
+                  Math.max(0, Number(activity.timeRemaining || 0)) +
+                  Math.max(0, -Number(activity.timeRemaining || 0)),
+              );
+        return {
+          id: activity.id,
+          tagIds: normalizeAssignedTags(activity.tags),
+          planSeconds,
+          remainingSeconds: remaining,
+          actualSeconds: actual,
+          excluded: Boolean(activity.isRewardRest),
+        };
+      }),
+    [activities],
+  );
+  const dailyTagRatioActivities = React.useMemo(
+    () =>
+      dailyActivities.map((activity) => {
+        const planSeconds = Math.max(0, Number(activity.duration || 0) * 60);
+        const actualSeconds = getRealTimeSpentInSeconds(activity);
+        return {
+          id: activity.id,
+          tagIds: normalizeAssignedTags(activity.tags),
+          planSeconds,
+          remainingSeconds: Math.max(0, planSeconds - actualSeconds),
+          actualSeconds,
+        };
+      }),
+    [dailyActivities, currentTime],
+  );
+  const sessionTagRpg = useTagRpgLevels(
+    canonicalTagWheelTags,
+    sessionTagSelection,
+    settings.tagRpgMinutesPerLevel,
+  );
+  const dailyTagRpg = useTagRpgLevels(
+    canonicalTagWheelTags,
+    dailyTagSelection,
+    settings.tagRpgMinutesPerLevel,
+  );
   const tagPickerActivity = tagPickerTarget
     ? (tagPickerTarget.mode === "session" ? activities : dailyActivities).find(
         (activity) => activity.id === tagPickerTarget.activityId,
@@ -9014,6 +9098,30 @@ export default function App() {
             : template,
         ),
       );
+      const sourceKey = source.sharedId
+        ? `shared:${source.sharedId}`
+        : `${mode}:${source.id}`;
+      void setActivityDefinitionTags({
+        activityDefinitionId: source.activityDefinitionId,
+        sourceKey,
+        name: source.name,
+        color: source.color,
+        tagIds: nextTags,
+      })
+        .then(({ value }) => {
+          const attachDefinition = (current, targetMode) =>
+            current.map((activity) =>
+              (targetMode === mode && activity.id === activityId) ||
+              (source.sharedId && activity.sharedId === source.sharedId)
+                ? { ...activity, activityDefinitionId: value.id }
+                : activity,
+            );
+          setActivities((current) => attachDefinition(current, "session"));
+          setDailyActivities((current) => attachDefinition(current, "daily"));
+        })
+        .catch((error) =>
+          console.error("Failed to update canonical activity tags", error),
+        );
     },
     [activities, dailyActivities],
   );
@@ -15210,7 +15318,47 @@ export default function App() {
               />
             )}
 
-            <div className="space-y-1">
+            <div className="space-y-2">
+              <TagSectionBoundary
+                resetKey={`session-ratios:${settings.tagRatioMetric}:${settings.tagMatchMode}:${settings.tagChartView}`}
+                onReset={() => setSessionTagSelection([])}
+              >
+                <TagRatioPanel
+                  mode="session"
+                  activities={sessionTagRatioActivities}
+                  tags={canonicalTagWheelTags}
+                  selectedTagIds={sessionTagSelection}
+                  onSelectionChange={setSessionTagSelection}
+                  metric={settings.tagRatioMetric}
+                  matchMode={settings.tagMatchMode}
+                  view={settings.tagChartView}
+                  onMetricChange={(tagRatioMetric) =>
+                    setSettings((current) => ({
+                      ...current,
+                      tagRatioMetric,
+                      ...(tagRatioMetric === "plan" ||
+                      tagRatioMetric === "actual"
+                        ? { dailyTagWheelMetric: tagRatioMetric }
+                        : {}),
+                    }))
+                  }
+                  onMatchModeChange={(tagMatchMode) =>
+                    setSettings((current) => ({ ...current, tagMatchMode }))
+                  }
+                  onViewChange={(tagChartView) =>
+                    setSettings((current) => ({ ...current, tagChartView }))
+                  }
+                  rpgLevels={sessionTagRpg.levels}
+                  historyError={sessionTagRpg.error}
+                  rpgMinutesPerLevel={settings.tagRpgMinutesPerLevel}
+                  onRpgMinutesPerLevelChange={(tagRpgMinutesPerLevel) =>
+                    setSettings((current) => ({
+                      ...current,
+                      tagRpgMinutesPerLevel,
+                    }))
+                  }
+                />
+              </TagSectionBoundary>
               <h3 className="font-semibold text-sm">Activities</h3>
               <div className="space-y-1">
                 {settings.flowmodoroEnabled &&
@@ -17764,211 +17912,57 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Tag filter and radial feedback */}
-                      {(() => {
-                        const availableTags = canonicalTags
-                          .filter((tag) =>
-                            dailyActivities.some((activity) =>
-                              isTagAssigned(activity.tags, tag),
-                            ),
-                          )
-                          .map((tag) => ({
-                            id: tag.storageValue,
-                            name: tag.name,
-                            color: tag.color,
-                          }));
-                        const wheelActivities = dailyActivities.map(
-                          (activity) => {
-                            const actualSeconds =
-                              getRealTimeSpentInSeconds(activity);
-                            return {
-                              id: activity.id,
-                              name: activity.name,
-                              color:
-                                typeof activity.color === "string" &&
-                                /^(#|rgb|hsl)/.test(activity.color)
-                                  ? activity.color
-                                  : "#3b82f6",
-                              tagIds: normalizeAssignedTags(activity.tags),
-                              plannedSeconds: Math.max(
-                                0,
-                                Number(activity.duration || 0) * 60 -
-                                  actualSeconds,
-                              ),
-                              actualSeconds,
-                            };
-                          },
-                        );
-                        const wheelModels = buildDailyTagWheels({
-                          activities: wheelActivities,
-                          tags: availableTags,
-                          selectedTagIds: tagFilter,
-                          metric: settings.dailyTagWheelMetric,
-                          layout: settings.dailyTagWheelLayout,
-                        });
-                        return (
-                          <div className="mb-3 space-y-2">
-                            <div className="flex gap-2">
-                              <input
-                                value={tagQuery}
-                                onChange={(event) =>
-                                  setTagQuery(event.target.value)
-                                }
-                                placeholder="Filter by tag..."
-                                className="min-h-11 min-w-0 flex-1 rounded-lg border px-2 text-sm"
-                              />
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="min-h-11"
-                                onClick={() => {
-                                  const query = tagQuery.trim();
-                                  if (!query) return;
-                                  const id = resolveTagId(query, availableTags);
-                                  if (!tagFilter.includes(id))
-                                    setTagFilter([...tagFilter, id]);
-                                  setTagQuery("");
-                                }}
-                              >
-                                Add
-                              </Button>
-                            </div>
-                            <div className="flex flex-wrap gap-1.5">
-                              {availableTags.map((tag) => {
-                                const selected = tagFilter.includes(tag.id);
-                                return (
-                                  <button
-                                    key={tag.id}
-                                    type="button"
-                                    aria-pressed={selected}
-                                    onClick={() =>
-                                      setTagFilter((current) =>
-                                        selected
-                                          ? current.filter(
-                                              (id) => id !== tag.id,
-                                            )
-                                          : [...current, tag.id],
-                                      )
-                                    }
-                                    className={`min-h-11 rounded-full border px-3 text-xs font-semibold ${
-                                      selected
-                                        ? "border-indigo-500 bg-indigo-50 text-indigo-800"
-                                        : "border-slate-200 bg-white text-slate-600"
-                                    }`}
-                                  >
-                                    <span
-                                      className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full"
-                                      style={{ backgroundColor: tag.color }}
-                                    />
-                                    {tag.name}
-                                  </button>
-                                );
-                              })}
-                              {tagFilter.length > 0 && (
-                                <button
-                                  className="min-h-11 px-2 text-xs font-semibold text-blue-600"
-                                  onClick={() => setTagFilter([])}
-                                >
-                                  Clear
-                                </button>
-                              )}
-                            </div>
-                            {tagFilter.length > 0 && (
-                              <>
-                                <div className="grid grid-cols-2 gap-2">
-                                  <div
-                                    className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
-                                    aria-label="Tag wheel metric"
-                                  >
-                                    {(["plan", "actual"] as const).map(
-                                      (metric) => (
-                                        <button
-                                          key={metric}
-                                          type="button"
-                                          aria-pressed={
-                                            settings.dailyTagWheelMetric ===
-                                            metric
-                                          }
-                                          onClick={() =>
-                                            setSettings((current) => ({
-                                              ...current,
-                                              dailyTagWheelMetric: metric,
-                                            }))
-                                          }
-                                          className={`min-h-11 rounded-md text-xs font-semibold capitalize ${
-                                            settings.dailyTagWheelMetric ===
-                                            metric
-                                              ? "bg-white text-indigo-700 shadow-sm"
-                                              : "text-slate-600"
-                                          }`}
-                                        >
-                                          {metric}
-                                        </button>
-                                      ),
-                                    )}
-                                  </div>
-                                  <div
-                                    className="grid grid-cols-2 rounded-lg bg-slate-100 p-1"
-                                    aria-label="Tag wheel layout"
-                                  >
-                                    {[
-                                      ["per-tag", "Per tag"],
-                                      ["combined", "Combined"],
-                                    ].map(([layout, label]) => (
-                                      <button
-                                        key={layout}
-                                        type="button"
-                                        aria-pressed={
-                                          settings.dailyTagWheelLayout ===
-                                          layout
-                                        }
-                                        onClick={() =>
-                                          setSettings((current) => ({
-                                            ...current,
-                                            dailyTagWheelLayout: layout,
-                                          }))
-                                        }
-                                        className={`min-h-11 rounded-md text-xs font-semibold ${
-                                          settings.dailyTagWheelLayout ===
-                                          layout
-                                            ? "bg-white text-indigo-700 shadow-sm"
-                                            : "text-slate-600"
-                                        }`}
-                                      >
-                                        {label}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                                <TagSectionBoundary
-                                  resetKey={`${settings.dailyTagWheelMetric}:${settings.dailyTagWheelLayout}:${tagFilter.join(",")}`}
-                                  onReset={() => setTagFilter([])}
-                                >
-                                  <DailyTagWheels
-                                    models={wheelModels}
-                                    metric={settings.dailyTagWheelMetric}
-                                  />
-                                </TagSectionBoundary>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })()}
+                      {/* Tag selections drive charts only; they never hide Daily rows. */}
+                      <TagSectionBoundary
+                        resetKey={`daily-ratios:${settings.tagRatioMetric}:${settings.tagMatchMode}:${settings.tagChartView}`}
+                        onReset={() => setDailyTagSelection([])}
+                      >
+                        <TagRatioPanel
+                          mode="daily"
+                          activities={dailyTagRatioActivities}
+                          tags={canonicalTagWheelTags}
+                          selectedTagIds={dailyTagSelection}
+                          onSelectionChange={setDailyTagSelection}
+                          metric={settings.tagRatioMetric}
+                          matchMode={settings.tagMatchMode}
+                          view={settings.tagChartView}
+                          onMetricChange={(tagRatioMetric) =>
+                            setSettings((current) => ({
+                              ...current,
+                              tagRatioMetric,
+                              ...(tagRatioMetric === "plan" ||
+                              tagRatioMetric === "actual"
+                                ? { dailyTagWheelMetric: tagRatioMetric }
+                                : {}),
+                            }))
+                          }
+                          onMatchModeChange={(tagMatchMode) =>
+                            setSettings((current) => ({
+                              ...current,
+                              tagMatchMode,
+                            }))
+                          }
+                          onViewChange={(tagChartView) =>
+                            setSettings((current) => ({
+                              ...current,
+                              tagChartView,
+                            }))
+                          }
+                          rpgLevels={dailyTagRpg.levels}
+                          historyError={dailyTagRpg.error}
+                          rpgMinutesPerLevel={settings.tagRpgMinutesPerLevel}
+                          onRpgMinutesPerLevelChange={(tagRpgMinutesPerLevel) =>
+                            setSettings((current) => ({
+                              ...current,
+                              tagRpgMinutesPerLevel,
+                            }))
+                          }
+                        />
+                      </TagSectionBoundary>
                       {/* Dynamic Activity Cards */}
                       <div className="space-y-2">
                         {(() => {
-                          const base = tagFilter.length
-                            ? dailyActivities.filter((a) =>
-                                (a.tags || []).some((t) =>
-                                  tagFilter.includes(
-                                    resolveTagId(
-                                      String(t),
-                                      canonicalTagWheelTags,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            : dailyActivities;
+                          const base = dailyActivities;
                           const visible = settings.dailyHideCompleted
                             ? base.filter((a) => a.status !== "completed")
                             : base;
@@ -19125,6 +19119,46 @@ export default function App() {
                       </Button>
                     </div>
                   </div>
+                  <TagSectionBoundary
+                    resetKey={`session-setup-ratios:${settings.tagRatioMetric}:${settings.tagMatchMode}:${settings.tagChartView}`}
+                    onReset={() => setSessionTagSelection([])}
+                  >
+                    <TagRatioPanel
+                      mode="session"
+                      activities={sessionTagRatioActivities}
+                      tags={canonicalTagWheelTags}
+                      selectedTagIds={sessionTagSelection}
+                      onSelectionChange={setSessionTagSelection}
+                      metric={settings.tagRatioMetric}
+                      matchMode={settings.tagMatchMode}
+                      view={settings.tagChartView}
+                      onMetricChange={(tagRatioMetric) =>
+                        setSettings((current) => ({
+                          ...current,
+                          tagRatioMetric,
+                          ...(tagRatioMetric === "plan" ||
+                          tagRatioMetric === "actual"
+                            ? { dailyTagWheelMetric: tagRatioMetric }
+                            : {}),
+                        }))
+                      }
+                      onMatchModeChange={(tagMatchMode) =>
+                        setSettings((current) => ({ ...current, tagMatchMode }))
+                      }
+                      onViewChange={(tagChartView) =>
+                        setSettings((current) => ({ ...current, tagChartView }))
+                      }
+                      rpgLevels={sessionTagRpg.levels}
+                      historyError={sessionTagRpg.error}
+                      rpgMinutesPerLevel={settings.tagRpgMinutesPerLevel}
+                      onRpgMinutesPerLevelChange={(tagRpgMinutesPerLevel) =>
+                        setSettings((current) => ({
+                          ...current,
+                          tagRpgMinutesPerLevel,
+                        }))
+                      }
+                    />
+                  </TagSectionBoundary>
                   <div className="space-y-3">
                     {activities
                       .filter((activity) => !activity.isRewardRest)

@@ -165,7 +165,7 @@ test("Use all follows a running activity and transfers its live maximum", async 
   await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
 });
 
-test("Daily tag filters provide persistent per-tag/combined and Plan/Actual wheels", async ({
+test("Daily tag ratios keep tasks visible and persist controls without persisting selection", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -205,27 +205,87 @@ test("Daily tag filters provide persistent per-tag/combined and Plan/Actual whee
   });
   await page.goto("/");
   await page.getByRole("tab", { name: "Daily" }).click();
-  await page.getByRole("button", { name: /Work$/ }).click();
-  await page.getByRole("button", { name: /Health$/ }).click();
-  await expect(page.getByRole("img", { name: /^Work, plan/ })).toBeVisible();
-  await expect(page.getByRole("img", { name: /^Health, plan/ })).toBeVisible();
-
-  await page.getByRole("button", { name: "Combined" }).click();
-  await page.getByRole("button", { name: "actual" }).click();
+  const panel = page.getByTestId("daily-tag-ratio-panel");
+  await panel.getByRole("button", { name: "Work" }).click();
+  await panel.getByRole("button", { name: "Health" }).click();
+  await expect(panel.getByTestId("tag-ratio-donut")).toBeVisible();
+  await expect(panel.getByText("70%", { exact: true })).toBeVisible();
+  await expect(panel.getByText("30%", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("img", { name: /^Selected tags, actual/ }),
+    page.getByRole("button", { name: "Edit tags for Shared" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Edit tags for Work only" }),
+  ).toBeVisible();
+
+  await panel.getByRole("button", { name: "all" }).click();
+  await panel.getByRole("button", { name: "actual" }).click();
+  await panel.getByRole("button", { name: "Radar" }).click();
+  await expect(panel.getByText(/Select at least three tags/)).toBeVisible();
 
   await page.reload();
   await page.getByRole("tab", { name: "Daily" }).click();
-  await page.getByRole("button", { name: /Work$/ }).click();
-  await page.getByRole("button", { name: /Health$/ }).click();
-  await expect(page.getByRole("button", { name: "Combined" })).toHaveAttribute(
+  const reloaded = page.getByTestId("daily-tag-ratio-panel");
+  await expect(reloaded.getByText(/Select one or more tags/)).toBeVisible();
+  await reloaded.getByRole("button", { name: "Work" }).click();
+  await expect(reloaded.getByRole("button", { name: "Radar" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await expect(page.getByRole("button", { name: "actual" })).toHaveAttribute(
+  await expect(
+    reloaded.getByRole("button", { name: "actual" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(reloaded.getByRole("button", { name: "all" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
+  await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
+});
+
+test("Session tag ratios are chart-only in setup and running views", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "timeslice.state.v2",
+      JSON.stringify({
+        version: 2,
+        values: {
+          timeSliceActivities: JSON.stringify([
+            {
+              id: "focus",
+              name: "Focus",
+              color: "#2563eb",
+              percentage: 50,
+              duration: 10,
+              timeRemaining: 600,
+              tags: ["1"],
+            },
+            {
+              id: "move",
+              name: "Move",
+              color: "#10b981",
+              percentage: 50,
+              duration: 10,
+              timeRemaining: 600,
+              tags: ["2"],
+            },
+          ]),
+          timeSliceTotalHours: "0",
+          timeSliceTotalMinutes: "20",
+        },
+      }),
+    );
+  });
+  await page.goto("/");
+  const setupPanel = page.getByTestId("session-tag-ratio-panel");
+  await setupPanel.getByRole("button", { name: "Work" }).click();
+  await expect(setupPanel.getByTestId("tag-ratio-donut")).toBeVisible();
+  await expect(page.getByTestId("session-activity-focus")).toBeVisible();
+  await expect(page.getByTestId("session-activity-move")).toBeVisible();
+  await page.getByRole("button", { name: /Start Session/ }).click();
+  const runningPanel = page.getByTestId("session-tag-ratio-panel");
+  await expect(runningPanel.getByTestId("tag-ratio-donut")).toBeVisible();
+  await expect(page.getByTestId("session-activity-focus")).toBeVisible();
+  await expect(page.getByTestId("session-activity-move")).toBeVisible();
 });

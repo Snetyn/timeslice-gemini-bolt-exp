@@ -8,6 +8,7 @@ import {
   moveFolder,
   previewLegacyHistoryCandidates,
   setFolderArchived,
+  setActivityDefinitionTags,
   updateActivityDefinition,
   updateLifeArea,
 } from "./activityCatalogRepository";
@@ -22,8 +23,14 @@ describe("activity catalog repository", () => {
   });
 
   it("allows same-name definitions while keeping source identities distinct", async () => {
-    await createActivityDefinition({ name: "Reading", sourceKeys: ["template:first"] });
-    await createActivityDefinition({ name: "Reading", sourceKeys: ["daily:second"] });
+    await createActivityDefinition({
+      name: "Reading",
+      sourceKeys: ["template:first"],
+    });
+    await createActivityDefinition({
+      name: "Reading",
+      sourceKeys: ["daily:second"],
+    });
     const matches = await findDefinitionsByName(" reading ");
     expect(matches).toHaveLength(2);
     expect(matches.map((item) => item.sourceKeys)).toEqual([
@@ -34,14 +41,16 @@ describe("activity catalog repository", () => {
 
   it("rejects folder cycles transactionally", async () => {
     const parent = (await createFolder({ name: "Parent" })).value;
-    const child = (await createFolder({ name: "Child", parentId: parent.id })).value;
-    await expect(moveFolder(parent.id, child.id, parent.revision)).rejects.toThrow(
-      "invalid tree",
-    );
+    const child = (await createFolder({ name: "Child", parentId: parent.id }))
+      .value;
+    await expect(
+      moveFolder(parent.id, child.id, parent.revision),
+    ).rejects.toThrow("invalid tree");
   });
 
   it("updates future catalog metadata without rewriting recorded snapshots", async () => {
-    const area = (await createLifeArea({ name: "Work", color: "#111111" })).value;
+    const area = (await createLifeArea({ name: "Work", color: "#111111" }))
+      .value;
     const definition = (
       await createActivityDefinition({ name: "Build", lifeAreaId: area.id })
     ).value;
@@ -67,7 +76,11 @@ describe("activity catalog repository", () => {
       updatedAtMs: 2,
     });
     const renamed = (
-      await updateActivityDefinition(definition.id, { name: "Build app" }, definition.revision)
+      await updateActivityDefinition(
+        definition.id,
+        { name: "Build app" },
+        definition.revision,
+      )
     ).value;
     await updateLifeArea(area.id, { name: "Career" }, area.revision);
     expect(renamed.aliases).toContain("build");
@@ -77,13 +90,56 @@ describe("activity catalog repository", () => {
     });
   });
 
+  it("attaches quick tags to the canonical source without rewriting history", async () => {
+    const definition = (
+      await createActivityDefinition({
+        name: "Focus",
+        sourceKeys: ["shared:focus"],
+      })
+    ).value;
+    await timeSliceDb.activitySessions.add({
+      id: "tag-history",
+      sourceTimerId: "session",
+      activityId: "focus",
+      activityName: "Focus",
+      activityDefinitionId: definition.id,
+      sourceKey: "shared:focus",
+      source: "session",
+      kind: "countdown",
+      status: "completed",
+      startedAtMs: 1,
+      endedAtMs: 2,
+      durationMs: 1,
+      corrections: [],
+      classificationCorrections: [],
+      revision: 1,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    });
+    const updated = (
+      await setActivityDefinitionTags({
+        sourceKey: "shared:focus",
+        name: "Focus",
+        tagIds: ["Work", "health", "work"],
+      })
+    ).value;
+    expect(updated.id).toBe(definition.id);
+    expect(updated.tagIds).toEqual(["work", "health"]);
+    expect(
+      await timeSliceDb.activitySessions.get("tag-history"),
+    ).not.toHaveProperty("tagIds");
+  });
+
   it("archives a folder subtree by inheritance without rewriting descendants", async () => {
     const parent = (await createFolder({ name: "Parent" })).value;
-    const child = (await createFolder({ name: "Child", parentId: parent.id })).value;
+    const child = (await createFolder({ name: "Child", parentId: parent.id }))
+      .value;
     await setFolderArchived(parent.id, true, parent.revision);
     const storedChild = await timeSliceDb.activityFolders.get(child.id);
     expect(storedChild?.archivedAtMs).toBeUndefined();
-    expect(flattenFolderTree(await timeSliceDb.activityFolders.toArray(), true)).toEqual(
+    expect(
+      flattenFolderTree(await timeSliceDb.activityFolders.toArray(), true),
+    ).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: child.id, effectivelyArchived: true }),
       ]),
@@ -91,7 +147,8 @@ describe("activity catalog repository", () => {
   });
 
   it("previews name candidates but mutates only explicitly selected source groups", async () => {
-    const area = (await createLifeArea({ name: "Learning", color: "#8b5cf6" })).value;
+    const area = (await createLifeArea({ name: "Learning", color: "#8b5cf6" }))
+      .value;
     const definition = (
       await createActivityDefinition({ name: "Reading", lifeAreaId: area.id })
     ).value;
@@ -134,16 +191,29 @@ describe("activity catalog repository", () => {
 
     const candidates = await previewLegacyHistoryCandidates(definition.id);
     expect(candidates).toHaveLength(2);
-    await adoptLegacyHistory(definition.id, ["session:session-reading"], "adopt-one");
+    await adoptLegacyHistory(
+      definition.id,
+      ["session:session-reading"],
+      "adopt-one",
+    );
     const records = await timeSliceDb.activitySessions.toArray();
     expect(records.find((item) => item.id === "one")).toMatchObject({
       activityDefinitionId: definition.id,
       lifeAreaId: area.id,
       classificationSource: "legacy-adoption",
     });
-    expect(records.find((item) => item.id === "two")?.activityDefinitionId).toBeUndefined();
+    expect(
+      records.find((item) => item.id === "two")?.activityDefinitionId,
+    ).toBeUndefined();
 
-    await adoptLegacyHistory(definition.id, ["session:session-reading"], "adopt-one");
-    expect((await timeSliceDb.activitySessions.get("one"))?.classificationCorrections).toHaveLength(1);
+    await adoptLegacyHistory(
+      definition.id,
+      ["session:session-reading"],
+      "adopt-one",
+    );
+    expect(
+      (await timeSliceDb.activitySessions.get("one"))
+        ?.classificationCorrections,
+    ).toHaveLength(1);
   });
 });

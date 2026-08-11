@@ -72,7 +72,8 @@ describe("activity session repository", () => {
   });
 
   it("resolves a stable source and snapshots canonical area metadata atomically", async () => {
-    const area = (await createLifeArea({ name: "Work", color: "#7c3aed" })).value;
+    const area = (await createLifeArea({ name: "Work", color: "#7c3aed" }))
+      .value;
     const definition = (
       await createActivityDefinition({
         name: "Deep work",
@@ -85,7 +86,11 @@ describe("activity session repository", () => {
       nowMs: 1_000,
       mutationId: "canonical-start",
       recording: {
-        context: { ...focus, activityId: "stable", sourceKey: "session:stable" },
+        context: {
+          ...focus,
+          activityId: "stable",
+          sourceKey: "session:stable",
+        },
       },
     });
     await transitionTimer("session", "complete", {
@@ -107,9 +112,9 @@ describe("activity session repository", () => {
       { name: "Renamed future work" },
       definition.revision,
     );
-    expect((await timeSliceDb.activitySessions.get(first.id))?.activityName).toBe(
-      "Deep work",
-    );
+    expect(
+      (await timeSliceDb.activitySessions.get(first.id))?.activityName,
+    ).toBe("Deep work");
   });
 
   it("creates one definition per exact source identity, never per visible name", async () => {
@@ -126,22 +131,37 @@ describe("activity session repository", () => {
     );
     expect(await timeSliceDb.activityDefinitions.count()).toBe(2);
     expect(
-      (await timeSliceDb.activityDefinitions.toArray()).map((item) => item.sourceKeys),
+      (await timeSliceDb.activityDefinitions.toArray()).map(
+        (item) => item.sourceKeys,
+      ),
     ).toEqual(expect.arrayContaining([["daily:one"], ["daily:two"]]));
   });
 
   it("audits an explicit historical classification correction", async () => {
-    const firstArea = (await createLifeArea({ name: "One", color: "#111111" })).value;
-    const secondArea = (await createLifeArea({ name: "Two", color: "#222222" })).value;
+    const firstArea = (await createLifeArea({ name: "One", color: "#111111" }))
+      .value;
+    const secondArea = (await createLifeArea({ name: "Two", color: "#222222" }))
+      .value;
     const firstDefinition = (
-      await createActivityDefinition({ name: "Focus", lifeAreaId: firstArea.id })
+      await createActivityDefinition({
+        name: "Focus",
+        lifeAreaId: firstArea.id,
+      })
     ).value;
     const secondDefinition = (
-      await createActivityDefinition({ name: "Focus", lifeAreaId: secondArea.id })
+      await createActivityDefinition({
+        name: "Focus",
+        lifeAreaId: secondArea.id,
+      })
     ).value;
     await switchActivitySession(
       "single",
-      { ...focus, source: "single", kind: "standard", activityDefinitionId: firstDefinition.id },
+      {
+        ...focus,
+        source: "single",
+        kind: "standard",
+        activityDefinitionId: firstDefinition.id,
+      },
       1_000,
     );
     await endActivitySession("single", "completed", 2_000);
@@ -278,6 +298,27 @@ describe("activity session repository", () => {
       [1_000, 2_000],
       [5_000, null],
     ]);
+  });
+
+  it("carries current timer tags into its canonical definition", async () => {
+    await switchActivitySession(
+      "session",
+      {
+        ...focus,
+        activityId: "tagged-focus",
+        activityName: "Tagged focus",
+        sourceKey: "shared:tagged-focus",
+        tagIds: ["Work", "health", "work"],
+      },
+      1_000,
+    );
+    const stored = (
+      await timeSliceDb.activityDefinitions
+        .where("sourceKeys")
+        .equals("shared:tagged-focus")
+        .toArray()
+    )[0];
+    expect(stored?.tagIds).toEqual(["work", "health"]);
   });
 
   it("audits corrections and uses reversible soft deletion", async () => {
