@@ -8,7 +8,7 @@ test("all TimeSlice modes are reachable from the primary workspace", async ({
   const modes = [
     ["Session", /Session Duration/i],
     ["Daily", /Daily Progress/i],
-    ["Single", /Single Activity Mode/i],
+    ["Free Flow", /^Free Flow$/i],
     ["Flowmodoro", /Flowmodoro Mode/i],
   ] as const;
 

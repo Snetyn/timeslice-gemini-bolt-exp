@@ -24,6 +24,7 @@ import { SessionTaskPicker } from "./components/SessionTaskPicker";
 import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
 import { TagRatioPanel } from "./components/TagRatioPanel";
 import { DailyProgressDisplay } from "./components/DailyProgressDisplay";
+import { FreeFlowMode } from "./components/FreeFlowMode";
 import {
   ActivityTagButton,
   ActivityTagPicker,
@@ -56,6 +57,9 @@ import { predictedScheduleSeconds } from "./domain/sessionSchedule";
 import { displayActivityColor } from "./domain/activityColor";
 import { buildDailyVisualModel } from "./domain/dailyVisual";
 import { resolveVaultPredictionMode } from "./domain/workspaceSettings";
+import { fundQuickActionElapsed } from "./domain/quickActionFunding";
+import { normalizeFreeFlowSettings } from "./domain/freeFlow";
+import { getActiveFreeFlowRun } from "./data/freeFlowRepository";
 import {
   DecisionCheckpoint,
   type DecisionStart,
@@ -8111,6 +8115,16 @@ export default function App() {
     sourceKey: "idle",
     foregroundBackgroundMs: 0,
   });
+  const [quickActionDialog, setQuickActionDialog] = useState({
+    open: false,
+    name: "",
+    fundingMode: "proportional",
+    remember: false,
+    allowProtectedCurrent: false,
+  });
+  const [quickActionInProgress, setQuickActionInProgress] = useState(false);
+  const [freeFlowActive, setFreeFlowActive] = useState(false);
+  const quickActionSessionContextRef = useRef<any>(null);
   const [recentCanonicalActivities, setRecentCanonicalActivities] = useState(
     [],
   );
@@ -8398,16 +8412,28 @@ export default function App() {
       colorIntensity: "standard",
       promptAfterActivity: false,
       promptWhenReturningIdle: false,
+      freeFlowRewardMode: "hybrid",
+      freeFlowQuickThresholdMinutes: 2,
+      freeFlowMediumThresholdMinutes: 10,
+      freeFlowRememberedFundingMode: null,
     };
     try {
       const saved = localStorage.getItem("timeSliceSettings");
       if (!saved) return defaultValue;
       const parsed = JSON.parse(saved);
       const bankSettings = normalizeFlowRewardBankSettings(parsed);
+      const freeFlowSettings = normalizeFreeFlowSettings(parsed);
       return {
         ...defaultValue,
         ...parsed,
         ...bankSettings,
+        freeFlowRewardMode: freeFlowSettings.rewardMode,
+        freeFlowQuickThresholdMinutes:
+          freeFlowSettings.quickThresholdMinutes,
+        freeFlowMediumThresholdMinutes:
+          freeFlowSettings.mediumThresholdMinutes,
+        freeFlowRememberedFundingMode:
+          freeFlowSettings.rememberedFundingMode,
         vaultPredictionMode: resolveVaultPredictionMode(parsed),
         tagRatioMetric:
           parsed.tagRatioMetric === "remaining" ||
@@ -8440,8 +8466,28 @@ export default function App() {
     vaultTimeRef.current = vaultTime;
   }, [vaultTime]);
 
-  // Mode state - 'session', 'daily', 'single', or 'flowmodoro'
+  // "single" remains the persisted route key for rollback compatibility; the
+  // visible experience is now Free Flow.
   const [currentMode, setCurrentMode] = useState("session");
+  const [freeFlowStartRequest, setFreeFlowStartRequest] = useState<any>(null);
+  useEffect(() => {
+    void getActiveFreeFlowRun()
+      .then((active) => {
+        const activeNode = active?.nodes.find(
+          (node) => node.id === active.activeNodeId,
+        );
+        if (
+          !activeNode ||
+          (activeNode.actionOrigin || active?.origin) !== "quick-action"
+        )
+          return;
+        setQuickActionInProgress(true);
+        setCurrentMode("single");
+      })
+      .catch((error) =>
+        console.error("Failed to restore active Quick Action", error),
+      );
+  }, []);
   useEffect(() => {
     void listRecentActivityDefinitions()
       .then(setRecentCanonicalActivities)
@@ -10061,6 +10107,7 @@ export default function App() {
     source: "reserve" | "vault" | "combined" = "reserve",
   ) => {
     if (!settings.flowmodoroEnabled) return;
+    window.dispatchEvent(new Event("timeslice:flow-rest-start"));
     const now = new Date();
     const current = flowmodoroStateRef.current;
     const initiallyFunded = fundFlowBreak(
@@ -10509,6 +10556,185 @@ export default function App() {
     ).catch((error) => console.error("Failed to cancel Single timer", error));
   };
 
+  const applyFreeFlowReward = useCallback(
+    (focusedSeconds, bonusSeconds, rewardMode) => {
+      const current = flowmodoroStateRef.current;
+      const quickBeforeSeconds = Math.max(
+        0,
+        Number(current.availableRestTime) || 0,
+      );
+      const limits = {
+        quickReserveCapSeconds: Math.max(
+          0,
+          (settings.flowmodoroQuickReserveMinutes || 0) * 60,
+        ),
+        vaultCapSeconds: Math.max(
+          0,
+          (settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+        ),
+        scheduledRewardRestSeconds: scheduledRewardRestSeconds(
+          activitiesRef.current,
+        ),
+      };
+      let next = current;
+      let creditedSeconds = 0;
+      let timeCreditedSeconds = 0;
+      let bonusCreditedSeconds = 0;
+      if (rewardMode === "time" || rewardMode === "hybrid") {
+        const focused = awardFocusedFlowTime(
+          next,
+          focusedSeconds,
+          settings.flowmodoroRatio || 5,
+          limits,
+        );
+        next = focused.state;
+        timeCreditedSeconds =
+          focused.quickAddedSeconds + focused.vaultAddedSeconds;
+        creditedSeconds += timeCreditedSeconds;
+      }
+      if (
+        (rewardMode === "hybrid" || rewardMode === "completion") &&
+        bonusSeconds > 0
+      ) {
+        const bonus = depositFlowReward(next, bonusSeconds, limits);
+        next = bonus.state;
+        bonusCreditedSeconds =
+          bonus.quickAddedSeconds + bonus.vaultAddedSeconds;
+        creditedSeconds += bonusCreditedSeconds;
+      }
+      const normalized = {
+        ...next,
+        availableRestMinutes: Math.floor(
+          Math.max(0, Number(next.availableRestTime) || 0) / 60,
+        ),
+      };
+      flowmodoroStateRef.current = normalized;
+      setFlowmodoroState(normalized);
+      localStorage.setItem("timeSliceFlowmodoro", JSON.stringify(normalized));
+      void flushAppStorage();
+      return {
+        quickBeforeSeconds,
+        quickAfterSeconds: Math.max(
+          0,
+          Number(normalized.availableRestTime) || 0,
+        ),
+        creditedSeconds,
+        timeCreditedSeconds,
+        bonusCreditedSeconds,
+      };
+    },
+    [
+      settings.flowmodoroQuickReserveMinutes,
+      settings.flowmodoroRelaxationVaultMaxMinutes,
+      settings.flowmodoroRatio,
+    ],
+  );
+
+  const openQuickAction = () => {
+    setQuickActionDialog({
+      open: true,
+      name: "",
+      fundingMode:
+        settings.freeFlowRememberedFundingMode || "proportional",
+      remember: false,
+      allowProtectedCurrent: false,
+    });
+  };
+
+  const startQuickAction = () => {
+    const name = quickActionDialog.name.trim();
+    if (!name) return;
+    const nowMs = Date.now();
+    if (flowmodoroStateRef.current.isOnBreak) skipFlowmodoroBreak();
+    const startedFromSession = isTimerActive;
+    if (startedFromSession) {
+      quickActionSessionContextRef.current = {
+        sessionId: `session:${nowMs}`,
+        currentActivityIndex: currentActivityIndexRef.current,
+      };
+      if (!isPaused) pauseResumeTimer();
+    } else {
+      quickActionSessionContextRef.current = null;
+    }
+    if (activeDailyActivity) stopDailyActivity();
+    if (quickActionDialog.remember) {
+      setSettings((previous) => ({
+        ...previous,
+        freeFlowRememberedFundingMode: quickActionDialog.fundingMode,
+      }));
+    }
+    setFreeFlowStartRequest({
+      id: crypto.randomUUID(),
+      name,
+      origin: "quick-action",
+      fundingMode: startedFromSession
+        ? quickActionDialog.fundingMode
+        : undefined,
+      allowProtectedCurrent: quickActionDialog.allowProtectedCurrent,
+      sessionCurrentActivityIndex: startedFromSession
+        ? currentActivityIndexRef.current
+        : undefined,
+    });
+    setQuickActionInProgress(true);
+    setCurrentMode("single");
+    setQuickActionDialog((previous) => ({ ...previous, open: false, name: "" }));
+  };
+
+  const applyQuickActionFunding = useCallback(
+    (input) => {
+      if (input.origin !== "quick-action") return;
+      setQuickActionInProgress(false);
+      const sessionContext =
+        quickActionSessionContextRef.current ||
+        (input.sessionCurrentActivityIndex === undefined
+          ? null
+          : { currentActivityIndex: input.sessionCurrentActivityIndex });
+      quickActionSessionContextRef.current = null;
+      if (!sessionContext || !input.fundingMode) return;
+      const result = fundQuickActionElapsed({
+        activities: activitiesRef.current.map((activity) => ({
+          ...activity,
+          locked: Boolean(activity.isLocked),
+        })),
+        currentActivityIndex: sessionContext.currentActivityIndex,
+        mode: input.fundingMode,
+        elapsedSeconds: input.elapsedSeconds,
+        vaultSeconds: vaultTimeRef.current,
+        allowProtectedCurrent: input.allowProtectedCurrent,
+      });
+      const fundedActivities = result.activities.map(
+        ({ locked: _fundingLock, ...activity }) => activity,
+      );
+      activitiesRef.current = fundedActivities;
+      vaultTimeRef.current = result.vaultSeconds;
+      setActivities(fundedActivities);
+      setVaultTime(result.vaultSeconds);
+      result.trace.forEach((entry) => {
+        if (entry.activityId === "session-time-vault") return;
+        quickActionDonatedRef.current[entry.activityId] =
+          (quickActionDonatedRef.current[entry.activityId] || 0) +
+          entry.seconds;
+      });
+      sessionQuickActionsRef.current.push({
+        id: input.actionId,
+        name: input.name,
+        actual: Math.max(0, Math.floor(input.elapsedSeconds || 0)),
+        overtimeSeconds: result.overtimeSeconds,
+        fundedSeconds: result.fundedSeconds,
+        actionClass: input.actionClass,
+        completed: input.completed,
+      });
+      void persistSessionRunSnapshot("paused", {
+        activities: fundedActivities,
+        currentActivityIndex: sessionContext.currentActivityIndex,
+        vaultSeconds: result.vaultSeconds,
+        sessionPlanFrozen: true,
+      });
+      return { fundingTrace: result.trace };
+    },
+    [persistSessionRunSnapshot],
+  );
+
   // --- Start of State Saving Logic ---
   useEffect(() => {
     try {
@@ -10926,6 +11152,8 @@ export default function App() {
     donated: Record<string, number>;
     received: Record<string, number>;
   }>({ donated: {}, received: {} });
+  const sessionQuickActionsRef = useRef<any[]>([]);
+  const quickActionDonatedRef = useRef<Record<string, number>>({});
 
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // Stable baseline for overall progress (sum of allocated seconds at session start)
@@ -11565,6 +11793,7 @@ export default function App() {
   const lastForegroundOpportunityRef = useRef("");
   const anyFocusedActivity =
     isTimerActive ||
+    freeFlowActive ||
     singleActivityState.isActive ||
     dailyActivities.some((activity) => activity.isActive);
 
@@ -13996,6 +14225,8 @@ export default function App() {
       );
       // If fresh start, freeze plan and reset snapshots; if resuming, initialize snapshot to current elapsed
       if (!sessionPlanFrozen) {
+        sessionQuickActionsRef.current = [];
+        quickActionDonatedRef.current = {};
         setSessionPlanFrozen(true);
         try {
           sharedElapsedSnapshotRef.current = {};
@@ -14096,6 +14327,8 @@ export default function App() {
     setVaultTime(0);
     setSessionPlanFrozen(false);
     initialTotalAllocatedRef.current = 0; // clear baseline on reset
+    sessionQuickActionsRef.current = [];
+    quickActionDonatedRef.current = {};
     const totalMins = calculateTotalSessionMinutes();
     setActivities((prev) =>
       prev.map((activity) => ({
@@ -14462,11 +14695,13 @@ export default function App() {
       }
     }
     setCurrentMode("single");
-    startSingleActivity(
-      definition.name,
-      definition.id,
-      momentum ? { ...momentum, source: "single" } : undefined,
-    );
+    setFreeFlowStartRequest({
+      id: crypto.randomUUID(),
+      name: definition.name,
+      activityDefinitionId: definition.id,
+      origin: "free-flow",
+      momentum: momentum ? { ...momentum, source: "free-flow" } : undefined,
+    });
   };
 
   const commitAllocationPreview = (preview) => {
@@ -14744,6 +14979,13 @@ export default function App() {
         }
       }
 
+      // Session-funded Quick Actions are actual-only work. Their donor
+      // reductions must not masquerade as focused time on the donor task.
+      rawActual = Math.max(
+        0,
+        rawActual - (quickActionDonatedRef.current[a.id] || 0),
+      );
+
       // Cap overtime contribution to avoid inflation from donor double-count artifacts
       const overtimeCap = planned + Math.round(planned * 0.25);
       let actual = rawActual;
@@ -14767,6 +15009,26 @@ export default function App() {
         drainedSeconds,
         receivedOvertime,
       };
+    });
+    sessionQuickActionsRef.current.forEach((action) => {
+      rows.push({
+        id: `quick-action:${action.id}`,
+        name: `⚡ ${action.name}`,
+        color:
+          action.actionClass === "hard"
+            ? "#8b5cf6"
+            : action.actionClass === "medium"
+              ? "#3b82f6"
+              : "#10b981",
+        planned: 0,
+        actual: action.actual,
+        delta: action.actual,
+        pct: 0,
+        overtimeSeconds: action.overtimeSeconds,
+        drainedSeconds: 0,
+        receivedOvertime: action.fundedSeconds,
+        actualOnly: true,
+      });
     });
     const totals = rows.reduce(
       (acc, r) => {
@@ -15102,7 +15364,7 @@ export default function App() {
           );
         })()}
       </div>
-    ) : isTimerActive ? (
+    ) : isTimerActive && !quickActionInProgress ? (
       <div className="max-w-2xl mx-auto">
         <Card>
           <CardHeader className="pb-3">
@@ -15110,7 +15372,7 @@ export default function App() {
               <CardTitle className="text-lg sm:text-xl">
                 TimeSlice Timer
               </CardTitle>
-              <div className="grid w-full grid-cols-5 gap-1 sm:w-auto sm:flex sm:space-x-2">
+              <div className="grid w-full grid-cols-3 gap-1 sm:w-auto sm:flex sm:space-x-2">
                 <Button
                   variant="outline"
                   size="sm"
@@ -15161,6 +15423,14 @@ export default function App() {
                 >
                   <Icon name="dice" className="h-3 w-3 mr-1" />
                   Random
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={openQuickAction}
+                  className="h-7 min-w-0 border-amber-300 px-1 text-[11px] text-amber-800 sm:h-8 sm:px-2 sm:text-xs"
+                >
+                  ⚡ Quick
                 </Button>
               </div>
             </div>
@@ -15872,6 +16142,15 @@ export default function App() {
                 >
                   Choose next
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={openQuickAction}
+                  className="flex-1 border-amber-300 text-amber-800 sm:flex-none h-9 text-sm hover:bg-amber-50"
+                  aria-label="Start a Quick Action"
+                >
+                  ⚡ Quick action
+                </Button>
                 {/* Spider Chart button removed */}
                 {/* RPG Stats button removed */}
                 <Button
@@ -16518,6 +16797,100 @@ export default function App() {
                       />
                     </div>
                   )}
+                  <Separator />
+                  <div className="space-y-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
+                    <div>
+                      <Label className="font-semibold text-violet-900">
+                        Free Flow rewards
+                      </Label>
+                      <p className="text-xs text-slate-600">
+                        Class suggestions use active time; you always confirm
+                        Quick, Medium, or Hard.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {[
+                        ["time", "Time"],
+                        ["hybrid", "Hybrid"],
+                        ["completion", "Completion"],
+                      ].map(([value, label]) => (
+                        <Button
+                          key={value}
+                          size="sm"
+                          variant={
+                            settings.freeFlowRewardMode === value
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((previous) => ({
+                              ...previous,
+                              freeFlowRewardMode: value,
+                            }))
+                          }
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="space-y-1 text-sm">
+                        <span>Quick up to</span>
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="number"
+                            min="1"
+                            max="120"
+                            value={settings.freeFlowQuickThresholdMinutes}
+                            onChange={(event) => {
+                              const quick = Math.max(
+                                1,
+                                Math.min(120, Number(event.target.value) || 2),
+                              );
+                              setSettings((previous) => ({
+                                ...previous,
+                                freeFlowQuickThresholdMinutes: quick,
+                                freeFlowMediumThresholdMinutes: Math.max(
+                                  quick + 1,
+                                  previous.freeFlowMediumThresholdMinutes || 10,
+                                ),
+                              }));
+                            }}
+                          />
+                          <span className="text-xs">min</span>
+                        </div>
+                      </label>
+                      <label className="space-y-1 text-sm">
+                        <span>Medium up to</span>
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="number"
+                            min={settings.freeFlowQuickThresholdMinutes + 1}
+                            max="480"
+                            value={settings.freeFlowMediumThresholdMinutes}
+                            onChange={(event) =>
+                              setSettings((previous) => ({
+                                ...previous,
+                                freeFlowMediumThresholdMinutes: Math.max(
+                                  (previous.freeFlowQuickThresholdMinutes || 2) +
+                                    1,
+                                  Math.min(
+                                    480,
+                                    Number(event.target.value) || 10,
+                                  ),
+                                ),
+                              }))
+                            }
+                          />
+                          <span className="text-xs">min</span>
+                        </div>
+                      </label>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Hybrid adds 15/30/60 seconds plus a gentle capped streak
+                      bonus to the normal work-time reward.
+                    </p>
+                  </div>
                   <Separator />
                   {/* Flowmodoro Enhancements */}
                   <div className="space-y-2">
@@ -17557,6 +17930,7 @@ export default function App() {
                     variant={currentMode === "session" ? "default" : "outline"}
                     className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === "session" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
                     onClick={() => setCurrentMode("session")}
+                    disabled={freeFlowActive}
                     role="tab"
                     aria-selected={currentMode === "session"}
                   >
@@ -17567,6 +17941,7 @@ export default function App() {
                     variant={currentMode === "daily" ? "default" : "outline"}
                     className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === "daily" ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}`}
                     onClick={() => setCurrentMode("daily")}
+                    disabled={freeFlowActive}
                     role="tab"
                     aria-selected={currentMode === "daily"}
                   >
@@ -17580,7 +17955,7 @@ export default function App() {
                     role="tab"
                     aria-selected={currentMode === "single"}
                   >
-                    Single
+                    Free Flow
                   </Button>
                   <Button
                     size="sm"
@@ -17589,6 +17964,7 @@ export default function App() {
                     }
                     className={`h-8 sm:h-9 text-xs sm:text-sm px-2 sm:px-3 ${currentMode === "flowmodoro" ? "bg-purple-600 hover:bg-purple-700 text-white" : "border-purple-400 text-purple-600 hover:bg-purple-50"}`}
                     onClick={() => setCurrentMode("flowmodoro")}
+                    disabled={freeFlowActive}
                     title="Standalone Flowmodoro timer - use your earned break time"
                     role="tab"
                     aria-label="Flowmodoro"
@@ -18705,17 +19081,38 @@ export default function App() {
                   </>
                 )
               ) : currentMode === "single" ? (
-                // Single Activity Mode Content
-                <SingleActivityMode
-                  singleState={singleActivityState}
-                  onStart={startSingleActivity}
-                  onPause={toggleSingleActivityPause}
-                  onComplete={completeSingleActivity}
-                  onCancel={cancelSingleActivity}
-                  flowmodoroState={flowmodoroState}
-                  formatTime={formatTime}
+                <FreeFlowMode
                   settings={settings}
-                  recentActivities={recentCanonicalActivities}
+                  quickReserveSeconds={Math.max(
+                    0,
+                    Number(flowmodoroState.availableRestTime) || 0,
+                  )}
+                  quickReserveCapSeconds={Math.max(
+                    0,
+                    (settings.flowmodoroQuickReserveMinutes || 0) * 60,
+                  )}
+                  bankSeconds={Math.max(
+                    0,
+                    Number(flowmodoroState.relaxationVaultSeconds) || 0,
+                  )}
+                  onApplyReward={applyFreeFlowReward}
+                  onTakeRest={takeFlowmodoroBreak}
+                  onChooseNext={() =>
+                    setDecisionCheckpoint({
+                      open: true,
+                      reason: "manual",
+                      sourceKey: `free-flow:${Date.now()}`,
+                      foregroundBackgroundMs: 0,
+                    })
+                  }
+                  startRequest={freeFlowStartRequest}
+                  onStartRequestHandled={(id) =>
+                    setFreeFlowStartRequest((current) =>
+                      current?.id === id ? null : current,
+                    )
+                  }
+                  onActionFinished={applyQuickActionFunding}
+                  onActiveChange={setFreeFlowActive}
                 />
               ) : currentMode === "flowmodoro" ? (
                 // Standalone Flowmodoro Mode Content
@@ -19539,6 +19936,136 @@ export default function App() {
           setCurrentPage("manage-activities");
         }}
       />
+      {quickActionDialog.open && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-black/45 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="quick-action-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget)
+              setQuickActionDialog((previous) => ({
+                ...previous,
+                open: false,
+              }));
+          }}
+        >
+          <div className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 id="quick-action-title" className="text-lg font-bold">
+                  Quick Action
+                </h2>
+                <p className="text-xs text-slate-600">
+                  Time one interruption honestly, then choose what comes next.
+                </p>
+              </div>
+              <button
+                className="min-h-11 min-w-11 rounded-lg border text-xl"
+                aria-label="Close Quick Action"
+                onClick={() =>
+                  setQuickActionDialog((previous) => ({
+                    ...previous,
+                    open: false,
+                  }))
+                }
+              >
+                ×
+              </button>
+            </div>
+            <label className="mt-4 block space-y-1 text-sm font-semibold">
+              Action
+              <Input
+                autoFocus
+                value={quickActionDialog.name}
+                onChange={(event) =>
+                  setQuickActionDialog((previous) => ({
+                    ...previous,
+                    name: event.target.value,
+                  }))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") startQuickAction();
+                }}
+                placeholder="What can you finish now?"
+                className="min-h-12 text-base"
+              />
+            </label>
+            {isTimerActive && (
+              <div className="mt-4 space-y-2">
+                <Label>Fund from Session</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    ["current", "Current task"],
+                    ["vault", "Time Vault"],
+                    ["next", "Next eligible"],
+                    ["proportional", "Proportional"],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={quickActionDialog.fundingMode === value}
+                      className={`min-h-11 rounded-lg border px-2 text-sm font-semibold ${
+                        quickActionDialog.fundingMode === value
+                          ? "border-blue-600 bg-blue-600 text-white"
+                          : "bg-white"
+                      }`}
+                      onClick={() =>
+                        setQuickActionDialog((previous) => ({
+                          ...previous,
+                          fundingMode: value,
+                        }))
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {quickActionDialog.fundingMode === "current" &&
+                  activities[currentActivityIndex]?.priority && (
+                    <label className="flex min-h-11 items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={quickActionDialog.allowProtectedCurrent}
+                        onChange={(event) =>
+                          setQuickActionDialog((previous) => ({
+                            ...previous,
+                            allowProtectedCurrent: event.target.checked,
+                          }))
+                        }
+                      />
+                      Allow the starred current task to fund this action
+                    </label>
+                  )}
+                <label className="flex min-h-11 items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={quickActionDialog.remember}
+                    onChange={(event) =>
+                      setQuickActionDialog((previous) => ({
+                        ...previous,
+                        remember: event.target.checked,
+                      }))
+                    }
+                  />
+                  Remember this funding choice
+                </label>
+                <p className="text-xs text-slate-600">
+                  Funded time keeps Predicted End fixed. If this source runs
+                  out, the remaining action time becomes overtime.
+                </p>
+              </div>
+            )}
+            <button
+              className="mt-4 min-h-12 w-full rounded-xl bg-amber-500 font-bold text-slate-950 disabled:opacity-40"
+              disabled={!quickActionDialog.name.trim()}
+              onClick={startQuickAction}
+            >
+              Start Quick Action
+            </button>
+          </div>
+        </div>
+      )}
       <DecisionCheckpoint
         open={decisionCheckpoint.open}
         reason={decisionCheckpoint.reason}

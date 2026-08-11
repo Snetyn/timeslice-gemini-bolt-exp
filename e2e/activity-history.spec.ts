@@ -1,14 +1,14 @@
 import { expect, test } from "@playwright/test";
 
-test("records, corrects, removes and restores a Single activity interval", async ({
+test("records, corrects, removes and restores a Free Flow activity interval", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("tab", { name: "Single", exact: true }).click();
-  await page
-    .getByPlaceholder("Enter a quick task or activity...")
-    .fill("History test");
-  await page.getByRole("button", { name: "Start Activity" }).click();
+  await page.getByRole("tab", { name: "Free Flow", exact: true }).click();
+  await page.getByRole("button", { name: "Start blank run" }).click();
+  await page.getByPlaceholder("Add an action…").fill("History test");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Start", exact: true }).click();
   await page.waitForTimeout(1_200);
   await page.getByRole("button", { name: "Pause", exact: true }).click();
 
@@ -16,7 +16,7 @@ test("records, corrects, removes and restores a Single activity interval", async
   const dialog = page.getByRole("dialog", { name: "Activity history" });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("History test", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("single", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("free-flow", { exact: false })).toBeVisible();
 
   await dialog.getByRole("button", { name: "Correct" }).click();
   await dialog

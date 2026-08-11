@@ -9,23 +9,6 @@ const displayedSeconds = async (locator: ReturnType<Page["locator"]>) => {
   return parts.reduce((total, part) => total * 60 + part, 0);
 };
 
-const timerRevision = (page: Page, id: string) =>
-  page.evaluate(
-    (timerId) =>
-      new Promise<number | undefined>((resolve, reject) => {
-        const request = indexedDB.open("timeslice");
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-          const db = request.result;
-          const transaction = db.transaction("timers", "readonly");
-          const get = transaction.objectStore("timers").get(timerId);
-          get.onerror = () => reject(get.error);
-          get.onsuccess = () => resolve(get.result?.value?.revision);
-        };
-      }),
-    id,
-  );
-
 const timerState = (page: Page, id: string) =>
   page.evaluate(
     (timerId) =>
@@ -55,6 +38,31 @@ const activitySessionRecords = (page: Page) =>
           const get = transaction.objectStore("activitySessions").getAll();
           get.onerror = () => reject(get.error);
           get.onsuccess = () => resolve(get.result);
+        };
+      }),
+  );
+
+const activeFreeFlowRun = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
+        const request = indexedDB.open("timeslice");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const transaction = db.transaction("meta", "readonly");
+          const store = transaction.objectStore("meta");
+          const pointer = store.get("free-flow:active-run");
+          pointer.onerror = () => reject(pointer.error);
+          pointer.onsuccess = () => {
+            if (typeof pointer.result?.value !== "string") {
+              resolve(undefined);
+              return;
+            }
+            const getRun = store.get(`free-flow:run:${pointer.result.value}`);
+            getRun.onerror = () => reject(getRun.error);
+            getRun.onsuccess = () => resolve(getRun.result?.value);
+          };
         };
       }),
   );
@@ -176,33 +184,33 @@ test("an automatic Session switch closes and orders activity records", async ({
     ]);
 });
 
-test("Single pause survives reload and ordinary ticks do not write IndexedDB", async ({
+test("Free Flow pause survives reload and ordinary ticks do not write IndexedDB", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("tab", { name: "Single", exact: true }).click();
-  await page
-    .getByPlaceholder("Enter a quick task or activity...")
-    .fill("Pause test");
-  await page.getByRole("button", { name: "Start Activity" }).click();
-  await expect.poll(() => timerRevision(page, "single")).toBeDefined();
-  const startedRevision = await timerRevision(page, "single");
+  await page.getByRole("tab", { name: "Free Flow", exact: true }).click();
+  await page.getByRole("button", { name: "Start blank run" }).click();
+  await page.getByPlaceholder("Add an action…").fill("Pause test");
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Start", exact: true }).click();
+  await expect.poll(() => activeFreeFlowRun(page)).toBeDefined();
+  const startedRevision = (await activeFreeFlowRun(page))?.revision;
   await expect
     .poll(async () => (await activitySessionRecords(page))[0]?.status)
     .toBe("running");
   const recordingRevision = (await activitySessionRecords(page))[0]?.revision;
 
   await page.waitForTimeout(2_100);
-  expect(await timerRevision(page, "single")).toBe(startedRevision);
+  expect((await activeFreeFlowRun(page))?.revision).toBe(startedRevision);
   expect((await activitySessionRecords(page))[0]?.revision).toBe(
     recordingRevision,
   );
   await page.getByRole("button", { name: "Pause", exact: true }).click();
   const pausedAt = await displayedSeconds(
-    page.getByLabel("Single activity elapsed time"),
+    page.getByLabel("Free Flow elapsed time"),
   );
   await expect
-    .poll(() => timerRevision(page, "single"))
+    .poll(async () => (await activeFreeFlowRun(page))?.revision)
     .not.toBe(startedRevision);
   await expect
     .poll(async () => (await activitySessionRecords(page))[0]?.status)
@@ -210,22 +218,22 @@ test("Single pause survives reload and ordinary ticks do not write IndexedDB", a
 
   await page.waitForTimeout(1_200);
   expect(
-    await displayedSeconds(page.getByLabel("Single activity elapsed time")),
+    await displayedSeconds(page.getByLabel("Free Flow elapsed time")),
   ).toBe(pausedAt);
 
   await page.reload();
-  await page.getByRole("tab", { name: "Single", exact: true }).click();
+  await page.getByRole("tab", { name: "Free Flow", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Resume", exact: true }),
   ).toBeVisible();
   expect(
-    await displayedSeconds(page.getByLabel("Single activity elapsed time")),
+    await displayedSeconds(page.getByLabel("Free Flow elapsed time")),
   ).toBe(pausedAt);
 
   await page.getByRole("button", { name: "Resume", exact: true }).click();
   await page.waitForTimeout(1_200);
   expect(
-    await displayedSeconds(page.getByLabel("Single activity elapsed time")),
+    await displayedSeconds(page.getByLabel("Free Flow elapsed time")),
   ).toBeGreaterThan(pausedAt);
 });
 

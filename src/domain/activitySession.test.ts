@@ -50,4 +50,31 @@ describe("activity session domain", () => {
     expect(adHocActivityId("  Read a Book ")).toBe("adhoc:read-a-book");
     expect(adHocActivityId("READ A BOOK")).toBe("adhoc:read-a-book");
   });
+
+  it("preserves validated Free Flow classification context", () => {
+    expect(
+      normalizeActivitySessionRecord({
+        id: "free-flow-record",
+        sourceTimerId: "free-flow:run",
+        activityId: "action",
+        activityName: "Clear desk",
+        source: "quick-action",
+        kind: "standard",
+        status: "completed",
+        startedAtMs: 1_000,
+        endedAtMs: 3_000,
+        durationMs: 2_000,
+        freeFlowRunId: "run",
+        actionId: "action",
+        actionOrigin: "quick-action",
+        suggestedActionClass: "quick",
+        actionClass: "hard",
+      }),
+    ).toMatchObject({
+      source: "quick-action",
+      freeFlowRunId: "run",
+      actionId: "action",
+      actionClass: "hard",
+    });
+  });
 });

@@ -11,6 +11,10 @@ import {
   normalizeSearchName,
   type ActivityDefinitionRecord,
 } from "../domain/activityCatalog";
+import {
+  applyMomentumCommand,
+  type MomentumCommand,
+} from "./decisionMomentumRepository";
 
 const LEDGER_EPOCH_ID = "activity-session-ledger-started-at";
 
@@ -236,6 +240,7 @@ export async function switchActivitySession(
   context: ActivitySessionContext,
   atMs = Date.now(),
   mutationId: string = crypto.randomUUID(),
+  momentum?: Omit<MomentumCommand, "atMs">,
 ) {
   const command: ActivitySessionCommand = {
     type: "start",
@@ -244,9 +249,23 @@ export async function switchActivitySession(
     atMs: safeTimestamp(atMs),
   };
   return transactIdempotent(
-    ["activitySessions", "activityDefinitions", "lifeAreas"],
-    { id: mutationId, fingerprint: JSON.stringify(command) },
-    (revision) => applyActivitySessionCommand(command, revision),
+    momentum
+      ? [
+          "activitySessions",
+          "activityDefinitions",
+          "lifeAreas",
+          "decisionOpportunities",
+          "decisionMomentum",
+        ]
+      : ["activitySessions", "activityDefinitions", "lifeAreas"],
+    { id: mutationId, fingerprint: JSON.stringify({ command, momentum }) },
+    async (revision) => {
+      const session = await applyActivitySessionCommand(command, revision);
+      if (momentum) {
+        await applyMomentumCommand({ ...momentum, atMs: command.atMs }, revision);
+      }
+      return session;
+    },
   );
 }
 

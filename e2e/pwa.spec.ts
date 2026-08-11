@@ -27,7 +27,7 @@ test("production shell installs a generated service worker and works offline", a
 
 test("Android workspaces never overflow horizontally", async ({ page }) => {
   await page.goto("/");
-  for (const mode of ["Session", "Daily", "Single", "Flowmodoro"]) {
+  for (const mode of ["Session", "Daily", "Free Flow", "Flowmodoro"]) {
     await page.getByRole("tab", { name: mode, exact: true }).click();
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,

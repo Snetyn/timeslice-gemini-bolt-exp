@@ -1,4 +1,11 @@
-export type ActivitySessionSource = "session" | "daily" | "single";
+import type { ActionClass } from "./freeFlow";
+
+export type ActivitySessionSource =
+  | "session"
+  | "daily"
+  | "single"
+  | "free-flow"
+  | "quick-action";
 
 export type ActivitySessionKind =
   "countdown" | "count-up" | "overtime" | "standard";
@@ -28,6 +35,11 @@ export type ActivitySessionContext = {
   lifeAreaColor?: string;
   classificationSource?: "recorded" | "legacy-adoption" | "corrected";
   classifiedAtMs?: number;
+  freeFlowRunId?: string;
+  actionId?: string;
+  actionOrigin?: "free-flow" | "quick-action" | "legacy-single";
+  suggestedActionClass?: ActionClass;
+  actionClass?: ActionClass;
 };
 
 export type ActivityClassificationAudit = {
@@ -73,7 +85,13 @@ const finiteInteger = (value: unknown, fallback = 0) => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-const SOURCES = new Set<ActivitySessionSource>(["session", "daily", "single"]);
+const SOURCES = new Set<ActivitySessionSource>([
+  "session",
+  "daily",
+  "single",
+  "free-flow",
+  "quick-action",
+]);
 const KINDS = new Set<ActivitySessionKind>([
   "countdown",
   "count-up",
@@ -155,6 +173,33 @@ export function normalizeActivitySessionContext(
       value.classifiedAtMs === undefined
         ? undefined
         : finiteInteger(value.classifiedAtMs),
+    freeFlowRunId:
+      typeof value.freeFlowRunId === "string" && value.freeFlowRunId.trim()
+        ? value.freeFlowRunId.trim()
+        : undefined,
+    actionId:
+      typeof value.actionId === "string" && value.actionId.trim()
+        ? value.actionId.trim()
+        : undefined,
+    actionOrigin:
+      value.actionOrigin === "quick-action" ||
+      value.actionOrigin === "legacy-single"
+        ? value.actionOrigin
+        : value.actionOrigin === "free-flow"
+          ? "free-flow"
+          : undefined,
+    suggestedActionClass:
+      value.suggestedActionClass === "quick" ||
+      value.suggestedActionClass === "medium" ||
+      value.suggestedActionClass === "hard"
+        ? value.suggestedActionClass
+        : undefined,
+    actionClass:
+      value.actionClass === "quick" ||
+      value.actionClass === "medium" ||
+      value.actionClass === "hard"
+        ? value.actionClass
+        : undefined,
   };
 }
 
