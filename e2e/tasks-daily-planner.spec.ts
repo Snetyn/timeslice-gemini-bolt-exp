@@ -7,22 +7,28 @@ test("Inbox occurrence is planned once and shared with Daily and Session", async
   await page
     .getByRole("button", { name: "Manage Activities and Tasks" })
     .click();
-  await page.getByRole("button", { name: "Tags", exact: true }).click();
-  await page.getByPlaceholder("New tag").fill("home focus");
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "+ Tag" }).click();
+  const tagEditor = page.getByRole("dialog", { name: "Add tag" });
+  await tagEditor.getByLabel("Name").fill("home focus");
+  await tagEditor.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("#home focus", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Inbox", exact: true }).click();
-  await page
-    .getByPlaceholder("What needs doing?")
-    .fill("Plan kitchen cleaning");
-  await page.getByLabel("Estimate").fill("35");
-  await page.getByRole("button", { name: "home focus", exact: true }).click();
-  await page.getByRole("button", { name: "One-off" }).click();
+
+  await page.getByRole("button", { name: "+ Task" }).click();
+  const taskEditor = page.getByRole("dialog", { name: "Add task" });
+  await taskEditor.getByLabel("Name").fill("Plan kitchen cleaning");
+  await taskEditor.getByLabel("Estimate (minutes)").fill("35");
+  await taskEditor.getByLabel("Date").fill(
+    await page.evaluate(() => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    }),
+  );
+  await taskEditor.getByRole("button", { name: "#home focus" }).click();
+  await taskEditor.getByRole("button", { name: "Save" }).click();
   await expect(
     page.getByText("Plan kitchen cleaning", { exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Plan today" }).click();
-  await page.getByRole("button", { name: "Close Tasks" }).click();
+  await page.getByRole("button", { name: "Back to Timer" }).click();
 
   await page.getByRole("tab", { name: "Daily", exact: true }).click();
   await page.getByRole("button", { name: "Set up" }).click();

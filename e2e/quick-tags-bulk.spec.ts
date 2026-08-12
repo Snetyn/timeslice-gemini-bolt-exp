@@ -154,21 +154,20 @@ test("Daily plus exposes bulk entry with the existing 60 minute default", async 
   await expect(page.getByText("1h 0m", { exact: true })).toHaveCount(3);
 });
 
-test("malformed legacy tags do not blank advanced tag management", async ({
+test("malformed legacy tags do not blank unified tag management", async ({
   page,
 }) => {
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   await seedWorkspace(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Manage Activities" }).click();
   await page
-    .getByRole("button", {
-      name: "Timer lists, templates, tags & advanced setup",
-    })
+    .getByRole("button", { name: "Manage Activities and Tasks" })
     .click();
-  await page.getByRole("button", { name: "Manage Tags" }).click();
-  await expect(page.getByText("Existing Tags")).toBeVisible();
-  await expect(page.getByText("home", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Tasks & Activities" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "#home" })).toBeVisible();
+  await expect(page.getByText("Activity Management")).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });

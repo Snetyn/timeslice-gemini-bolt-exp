@@ -9,6 +9,7 @@ export type TagInsightTag = {
   id: string;
   name: string;
   color: string;
+  aliases?: string[];
 };
 
 export type TagRatioActivity = {
@@ -62,8 +63,26 @@ const normalizedTags = (tags: readonly TagInsightTag[]) => {
     const name = typeof tag?.name === "string" ? tag.name.trim() : "";
     if (!id || !name || seen.has(id)) return [];
     seen.add(id);
-    return [{ id, name, color: safeColor(tag.color) }];
+    return [
+      {
+        id,
+        name,
+        color: safeColor(tag.color),
+        aliases: unique(tag.aliases || []),
+      },
+    ];
   });
+};
+
+const aliasMapFor = (tags: ReturnType<typeof normalizedTags>) => {
+  const aliases = new Map<string, string>();
+  for (const tag of tags) {
+    for (const value of [tag.id, tag.name, ...(tag.aliases || [])]) {
+      const key = normalized(value);
+      if (key && !aliases.has(key)) aliases.set(key, tag.id);
+    }
+  }
+  return aliases;
 };
 
 export function buildTagRatioModel({
@@ -81,7 +100,14 @@ export function buildTagRatioModel({
 }): TagRatioModel {
   const available = normalizedTags(tags);
   const tagById = new Map(available.map((tag) => [tag.id, tag]));
-  const selected = unique(selectedTagIds).filter((id) => tagById.has(id));
+  const aliasMap = aliasMapFor(available);
+  const selected = [
+    ...new Set(
+      unique(selectedTagIds)
+        .map((id) => aliasMap.get(id) || id)
+        .filter((id) => tagById.has(id)),
+    ),
+  ];
   const totals = new Map(selected.map((id) => [id, 0]));
   let matchedActivityCount = 0;
 
@@ -89,7 +115,7 @@ export function buildTagRatioModel({
     if (!activity || activity.excluded) continue;
     const activityTags = unique(
       Array.isArray(activity.tagIds) ? activity.tagIds : [],
-    );
+    ).map((id) => aliasMap.get(id) || id);
     const matches = selected.filter((id) => activityTags.includes(id));
     const included =
       selected.length > 0 &&
@@ -166,7 +192,14 @@ export function buildTagRpgLevels({
 }): TagRpgLevel[] {
   const available = normalizedTags(tags);
   const tagById = new Map(available.map((tag) => [tag.id, tag]));
-  const selected = unique(selectedTagIds).filter((id) => tagById.has(id));
+  const aliasMap = aliasMapFor(available);
+  const selected = [
+    ...new Set(
+      unique(selectedTagIds)
+        .map((id) => aliasMap.get(id) || id)
+        .filter((id) => tagById.has(id)),
+    ),
+  ];
   const definitionById = new Map(definitions.map((item) => [item.id, item]));
   const definitionBySourceKey = new Map<string, ActivityDefinitionRecord>();
   for (const definition of definitions) {
@@ -189,9 +222,13 @@ export function buildTagRpgLevels({
         ? definitionBySourceKey.get(normalized(record.sourceKey))
         : undefined);
     if (!definition) continue;
-    const currentTags = unique(definition.tagIds || []).filter((id) =>
-      tagById.has(id),
-    );
+    const currentTags = [
+      ...new Set(
+        unique(definition.tagIds || [])
+          .map((id) => aliasMap.get(id) || id)
+          .filter((id) => tagById.has(id)),
+      ),
+    ];
     if (currentTags.length === 0) continue;
     const attributedSeconds = durationMs / 1_000 / currentTags.length;
     for (const id of currentTags)

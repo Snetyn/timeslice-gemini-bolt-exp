@@ -105,6 +105,13 @@ const newOccurrence = (
     tagIds?: string[];
     localDate?: string | null;
     baselineDurationSeconds?: number;
+    color?: string;
+    minimumDurationSeconds?: number;
+    durationMode?: TaskOccurrenceRecord["durationMode"];
+    schedulingMode?: TaskOccurrenceRecord["schedulingMode"];
+    exactStartMinutes?: number | null;
+    windowStartMinutes?: number | null;
+    windowEndMinutes?: number | null;
   },
   revision: number,
   nowMs: number,
@@ -120,22 +127,28 @@ const newOccurrence = (
     id: crypto.randomUUID(),
     activityDefinitionId: definition?.id || null,
     title: input.title.trim(),
-    color: definition?.color || "#6366f1",
+    color: input.color?.trim() || definition?.color || "#6366f1",
     tagIds: [...new Set(input.tagIds || definition?.tagIds || [])],
     folderId: input.folderId ?? definition?.folderId ?? null,
     status: input.localDate ? "planned" : "inbox",
     localDate: input.localDate || null,
-    schedulingMode: definition?.schedulingMode || "flexible",
-    exactStartMinutes: definition?.exactStartMinutes ?? null,
-    windowStartMinutes: definition?.windowStartMinutes ?? null,
-    windowEndMinutes: definition?.windowEndMinutes ?? null,
+    schedulingMode:
+      input.schedulingMode || definition?.schedulingMode || "flexible",
+    exactStartMinutes:
+      input.exactStartMinutes ?? definition?.exactStartMinutes ?? null,
+    windowStartMinutes:
+      input.windowStartMinutes ?? definition?.windowStartMinutes ?? null,
+    windowEndMinutes:
+      input.windowEndMinutes ?? definition?.windowEndMinutes ?? null,
     plannedDurationSeconds: baseline,
     minimumDurationSeconds: Math.min(
       baseline,
-      definition?.minimumDurationSeconds ?? Math.floor(baseline / 2),
+      input.minimumDurationSeconds ??
+        definition?.minimumDurationSeconds ??
+        Math.floor(baseline / 2),
     ),
     durationOverrideSeconds: null,
-    durationMode: definition?.durationMode || "fixed",
+    durationMode: input.durationMode || definition?.durationMode || "fixed",
     placementStartMinutes: null,
     actualFocusedSeconds: 0,
     completedAtMs: null,
@@ -154,6 +167,16 @@ export async function createInboxTask(input: {
   folderId?: string | null;
   tagIds?: string[];
   baselineDurationSeconds?: number;
+  color?: string;
+  minimumDurationSeconds?: number;
+  durationMode?: TaskOccurrenceRecord["durationMode"];
+  schedulingMode?: TaskOccurrenceRecord["schedulingMode"];
+  exactStartMinutes?: number | null;
+  windowStartMinutes?: number | null;
+  windowEndMinutes?: number | null;
+  protected?: boolean;
+  recurrenceRule?: ActivityDefinitionRecord["recurrenceRule"];
+  rolloverPolicy?: ActivityDefinitionRecord["rolloverPolicy"];
 }) {
   const title = input.title.trim();
   if (!title) throw new TypeError("A task name is required.");
@@ -162,13 +185,22 @@ export async function createInboxTask(input: {
     definition = (
       await createActivityDefinition({
         name: title,
+        color: input.color,
         folderId: input.folderId || null,
         planningEnabled: true,
         tagIds: input.tagIds || [],
         baselineDurationSeconds: input.baselineDurationSeconds || 3600,
-        minimumDurationSeconds: Math.floor(
-          (input.baselineDurationSeconds || 3600) / 2,
-        ),
+        minimumDurationSeconds:
+          input.minimumDurationSeconds ??
+          Math.floor((input.baselineDurationSeconds || 3600) / 2),
+        durationMode: input.durationMode,
+        schedulingMode: input.schedulingMode,
+        exactStartMinutes: input.exactStartMinutes,
+        windowStartMinutes: input.windowStartMinutes,
+        windowEndMinutes: input.windowEndMinutes,
+        protected: input.protected,
+        recurrenceRule: input.recurrenceRule,
+        rolloverPolicy: input.rolloverPolicy,
       })
     ).value;
   }
@@ -190,6 +222,13 @@ export async function createInboxTask(input: {
           folderId: input.folderId,
           tagIds: input.tagIds,
           baselineDurationSeconds: input.baselineDurationSeconds,
+          color: input.color,
+          minimumDurationSeconds: input.minimumDurationSeconds,
+          durationMode: input.durationMode,
+          schedulingMode: input.schedulingMode,
+          exactStartMinutes: input.exactStartMinutes,
+          windowStartMinutes: input.windowStartMinutes,
+          windowEndMinutes: input.windowEndMinutes,
         },
         revision,
         nowMs,

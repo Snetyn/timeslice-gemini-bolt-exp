@@ -17,8 +17,7 @@ import { SessionReportModal } from "./components/SessionReportModal";
 import { SessionSubActivitySheet } from "./components/SessionSubActivitySheet";
 import { ActivityHistoryModal } from "./components/ActivityHistoryModal";
 import { InsightsSheet } from "./components/InsightsSheet";
-import { ActivityManager } from "./components/ActivityManager";
-import { TasksHub } from "./components/TasksHub";
+import { UnifiedOrganizer } from "./components/UnifiedOrganizer";
 import { DailyPlanner } from "./components/DailyPlanner";
 import { SessionTaskPicker } from "./components/SessionTaskPicker";
 import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
@@ -279,6 +278,7 @@ interface RPGTag {
   id: string;
   name: string;
   color: string;
+  aliases?: string[];
   description?: string;
   createdAt: Date;
   parentId?: string; // For sub-categories - references parent tag
@@ -8107,7 +8107,6 @@ export default function App() {
   );
   const [activityHistoryOpen, setActivityHistoryOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
-  const [catalogManagerOpen, setCatalogManagerOpen] = useState(false);
   const [tasksHubOpen, setTasksHubOpen] = useState(false);
   const [decisionCheckpoint, setDecisionCheckpoint] = useState({
     open: false,
@@ -8428,12 +8427,9 @@ export default function App() {
         ...parsed,
         ...bankSettings,
         freeFlowRewardMode: freeFlowSettings.rewardMode,
-        freeFlowQuickThresholdMinutes:
-          freeFlowSettings.quickThresholdMinutes,
-        freeFlowMediumThresholdMinutes:
-          freeFlowSettings.mediumThresholdMinutes,
-        freeFlowRememberedFundingMode:
-          freeFlowSettings.rememberedFundingMode,
+        freeFlowQuickThresholdMinutes: freeFlowSettings.quickThresholdMinutes,
+        freeFlowMediumThresholdMinutes: freeFlowSettings.mediumThresholdMinutes,
+        freeFlowRememberedFundingMode: freeFlowSettings.rememberedFundingMode,
         vaultPredictionMode: resolveVaultPredictionMode(parsed),
         tagRatioMetric:
           parsed.tagRatioMetric === "remaining" ||
@@ -9032,6 +9028,7 @@ export default function App() {
         id: tag.storageValue,
         name: tag.name,
         color: tag.color,
+        aliases: tag.aliases,
       })),
     [canonicalTags],
   );
@@ -9206,6 +9203,63 @@ export default function App() {
     },
     [applyQuickTags, tagPickerActivity, tagPickerTarget],
   );
+
+  const syncOrganizerTags = useCallback((tags) => {
+    const active = tags.filter((tag) => tag.archivedAtMs === undefined);
+    setRpgTags((current) => {
+      const currentById = new Map(current.map((tag) => [tag.id, tag]));
+      const next = active.map((tag) => ({
+        ...(currentById.get(tag.id) || {}),
+        id: tag.id,
+        name: tag.name,
+        color: tag.color,
+        aliases: tag.aliases,
+        createdAt:
+          currentById.get(tag.id)?.createdAt || new Date(tag.createdAtMs),
+      }));
+      return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+    });
+    setCustomTags((current) => {
+      const next = active
+        .filter((tag) => tag.source !== "rpg")
+        .map((tag) => tag.name);
+      return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+    });
+  }, []);
+
+  const syncOrganizerTask = useCallback((task) => {
+    const apply = (current) =>
+      current.map((activity) =>
+        activity.taskOccurrenceId === task.id
+          ? {
+              ...activity,
+              name: task.title,
+              color: task.color,
+              tags: task.tagIds,
+            }
+          : activity,
+      );
+    setActivities(apply);
+    setDailyActivities(apply);
+  }, []);
+
+  const syncOrganizerDefinitionTags = useCallback((definitionId, tagIds) => {
+    const apply = (current) =>
+      current.map((activity) =>
+        activity.activityDefinitionId === definitionId
+          ? { ...activity, tags: tagIds }
+          : activity,
+      );
+    setActivities(apply);
+    setDailyActivities(apply);
+    setActivityTemplates((current) =>
+      current.map((template) =>
+        template.activityDefinitionId === definitionId
+          ? { ...template, tags: tagIds }
+          : template,
+      ),
+    );
+  }, []);
 
   // Helpers
   const upsertCategory = useCallback((name: string) => {
@@ -10634,8 +10688,7 @@ export default function App() {
     setQuickActionDialog({
       open: true,
       name: "",
-      fundingMode:
-        settings.freeFlowRememberedFundingMode || "proportional",
+      fundingMode: settings.freeFlowRememberedFundingMode || "proportional",
       remember: false,
       allowProtectedCurrent: false,
     });
@@ -10677,7 +10730,11 @@ export default function App() {
     });
     setQuickActionInProgress(true);
     setCurrentMode("single");
-    setQuickActionDialog((previous) => ({ ...previous, open: false, name: "" }));
+    setQuickActionDialog((previous) => ({
+      ...previous,
+      open: false,
+      name: "",
+    }));
   };
 
   const applyQuickActionFunding = useCallback(
@@ -16872,8 +16929,8 @@ export default function App() {
                               setSettings((previous) => ({
                                 ...previous,
                                 freeFlowMediumThresholdMinutes: Math.max(
-                                  (previous.freeFlowQuickThresholdMinutes || 2) +
-                                    1,
+                                  (previous.freeFlowQuickThresholdMinutes ||
+                                    2) + 1,
                                   Math.min(
                                     480,
                                     Number(event.target.value) || 10,
@@ -19916,25 +19973,12 @@ export default function App() {
           setTasksHubOpen(true);
         }}
       />
-      <TasksHub
+      <UnifiedOrganizer
         open={tasksHubOpen}
         onClose={() => setTasksHubOpen(false)}
-        onOpenLegacy={() => {
-          setTasksHubOpen(false);
-          setCurrentPage("manage-activities");
-        }}
-        onOpenCatalog={() => {
-          setTasksHubOpen(false);
-          setCatalogManagerOpen(true);
-        }}
-      />
-      <ActivityManager
-        open={catalogManagerOpen}
-        onClose={() => setCatalogManagerOpen(false)}
-        onOpenTimerLists={() => {
-          setCatalogManagerOpen(false);
-          setCurrentPage("manage-activities");
-        }}
+        onTagsChanged={syncOrganizerTags}
+        onTaskChanged={syncOrganizerTask}
+        onDefinitionTagsChanged={syncOrganizerDefinitionTags}
       />
       {quickActionDialog.open && (
         <div

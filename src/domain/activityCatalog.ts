@@ -20,6 +20,8 @@ export type LifeAreaRecord = DurableRecord & {
 export type ActivityFolderRecord = DurableRecord & {
   name: string;
   normalizedName: string;
+  kind: "folder" | "list";
+  color: string;
   parentId: string | null;
   order: number;
 };
@@ -117,6 +119,13 @@ export const normalizeActivityFolder = (
   if (!base) return null;
   return {
     ...base,
+    kind: record.kind === "folder" ? "folder" : "list",
+    color:
+      typeof record.color === "string" && record.color.trim()
+        ? record.color.trim()
+        : record.kind === "folder"
+          ? "#64748b"
+          : "#3b82f6",
     parentId:
       typeof record.parentId === "string" && record.parentId.trim()
         ? record.parentId
@@ -262,6 +271,7 @@ export const canMoveFolder = (
     return folders.some((folder) => folder.id === folderId);
   const byId = new Map(folders.map((folder) => [folder.id, folder]));
   if (!byId.has(folderId) || !byId.has(parentId)) return false;
+  if (byId.get(parentId)?.kind !== "folder") return false;
   const visited = new Set<string>();
   let cursor: string | null = parentId;
   while (cursor) {

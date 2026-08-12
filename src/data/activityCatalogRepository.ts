@@ -20,7 +20,10 @@ export class CatalogRevisionConflictError extends Error {
 }
 
 type EditableLifeArea = Pick<LifeAreaRecord, "name" | "color" | "order">;
-type EditableFolder = Pick<ActivityFolderRecord, "name" | "parentId" | "order">;
+type EditableFolder = Pick<
+  ActivityFolderRecord,
+  "name" | "parentId" | "order" | "kind" | "color"
+>;
 type EditableDefinition = Pick<
   ActivityDefinitionRecord,
   | "name"
@@ -105,7 +108,12 @@ export async function createLifeArea(
 }
 
 export async function createFolder(
-  input: { name: string; parentId?: string | null },
+  input: {
+    name: string;
+    parentId?: string | null;
+    kind?: "folder" | "list";
+    color?: string;
+  },
   mutationId: string = crypto.randomUUID(),
 ) {
   const nowMs = Date.now();
@@ -115,17 +123,21 @@ export async function createFolder(
     ["activityFolders"],
     { id: mutationId, fingerprint: JSON.stringify(command) },
     async (revision) => {
-      if (
-        input.parentId &&
-        !(await timeSliceDb.activityFolders.get(input.parentId))
-      ) {
-        throw new TypeError("The parent folder no longer exists.");
+      if (input.parentId) {
+        const parent = await timeSliceDb.activityFolders.get(input.parentId);
+        if (!parent) throw new TypeError("The parent folder no longer exists.");
+        if (normalizeActivityFolder(parent)?.kind !== "folder")
+          throw new TypeError("Only a folder can contain folders or lists.");
       }
       const siblings = (await timeSliceDb.activityFolders.toArray()).filter(
         (folder) => folder.parentId === (input.parentId || null),
       ).length;
       const folder: ActivityFolderRecord = {
         ...nowRecord(id, cleanName(input.name), revision, nowMs),
+        kind: input.kind === "list" ? "list" : "folder",
+        color:
+          input.color?.trim() ||
+          (input.kind === "list" ? "#3b82f6" : "#64748b"),
         parentId: input.parentId || null,
         order: siblings,
       };
@@ -249,6 +261,13 @@ export async function updateFolder(
         changes.parentId === undefined ? current.parentId : changes.parentId;
       if (!canMoveFolder(folders, id, parentId))
         throw new TypeError("That folder move would create an invalid tree.");
+      const kind =
+        changes.kind || normalizeActivityFolder(current)?.kind || "list";
+      if (
+        kind === "list" &&
+        folders.some((candidate) => candidate.parentId === current.id)
+      )
+        throw new TypeError("A list cannot contain folders or lists.");
       const name =
         changes.name === undefined ? current.name : cleanName(changes.name);
       const updated: ActivityFolderRecord = {
@@ -256,6 +275,8 @@ export async function updateFolder(
         ...changes,
         name,
         normalizedName: normalizeSearchName(name),
+        kind,
+        color: changes.color?.trim() || current.color || "#64748b",
         parentId,
         order:
           changes.order === undefined
@@ -341,7 +362,14 @@ export async function createActivityDefinition(
         input.folderId &&
         !(await timeSliceDb.activityFolders.get(input.folderId))
       ) {
-        throw new TypeError("Choose an existing folder.");
+        throw new TypeError("Choose an existing list.");
+      }
+      if (input.folderId) {
+        const collection = normalizeActivityFolder(
+          await timeSliceDb.activityFolders.get(input.folderId),
+        );
+        if (collection?.kind !== "list")
+          throw new TypeError("Activities can only belong to a list.");
       }
       const definition: ActivityDefinitionRecord = {
         ...nowRecord(id, cleanName(input.name), revision, nowMs),
@@ -410,8 +438,14 @@ export async function updateActivityDefinition(
         if (!area || area.archivedAtMs !== undefined)
           throw new TypeError("Choose an active life area.");
       }
-      if (folderId && !(await timeSliceDb.activityFolders.get(folderId)))
-        throw new TypeError("Choose an existing folder.");
+      if (folderId) {
+        const collection = normalizeActivityFolder(
+          await timeSliceDb.activityFolders.get(folderId),
+        );
+        if (!collection) throw new TypeError("Choose an existing list.");
+        if (collection.kind !== "list")
+          throw new TypeError("Activities can only belong to a list.");
+      }
       const name =
         changes.name === undefined ? current.name : cleanName(changes.name);
       const previousNormalized = normalizeSearchName(current.name);

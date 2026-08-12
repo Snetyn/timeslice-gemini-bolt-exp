@@ -54,6 +54,37 @@ const record = (
 });
 
 describe("tag ratio insights", () => {
+  it("keeps renamed canonical tags connected through legacy aliases", () => {
+    const renamed = [
+      {
+        id: "tag:stable",
+        name: "Deep Work",
+        color: "#2563eb",
+        aliases: ["work", "old-work-id"],
+      },
+    ];
+    const model = buildTagRatioModel({
+      tags: renamed,
+      selectedTagIds: ["tag:stable"],
+      metric: "plan",
+      matchMode: "any",
+      activities: [
+        {
+          id: "legacy",
+          tagIds: ["old-work-id"],
+          planSeconds: 600,
+          remainingSeconds: 600,
+          actualSeconds: 0,
+        },
+      ],
+    });
+    expect(model.totalSeconds).toBe(600);
+    expect(model.segments[0]).toMatchObject({
+      id: "tag:stable",
+      name: "Deep Work",
+    });
+  });
+
   it("splits multi-tag time evenly and keeps an honest 100 percent total", () => {
     const model = buildTagRatioModel({
       tags,

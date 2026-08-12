@@ -6,6 +6,7 @@ export type CanonicalTag = {
   color: string;
   storageValue: string;
   source: TagSource;
+  aliases?: string[];
 };
 
 type TagContainer = { tags?: unknown };
@@ -14,6 +15,7 @@ type RpgTagLike = {
   id?: unknown;
   name?: unknown;
   color?: unknown;
+  aliases?: unknown;
 };
 
 const FALLBACK_TAG_COLOR = "#64748b";
@@ -85,6 +87,12 @@ export function buildCanonicalTags({
         color: safeColor(tag.color, name) || FALLBACK_TAG_COLOR,
         storageValue: id,
         source: "rpg",
+        aliases: [
+          ...new Set([
+            normalizedName,
+            ...normalizeAssignedTags(tag.aliases).map(normalizeTagName),
+          ]),
+        ],
       });
     }
   }
@@ -105,6 +113,7 @@ export function buildCanonicalTags({
       color: tagColor(normalizedName),
       storageValue: normalizedName,
       source: "custom",
+      aliases: [normalizedName],
     });
   }
 
@@ -113,26 +122,40 @@ export function buildCanonicalTags({
 
 export const isTagAssigned = (
   assigned: unknown,
-  tag: Pick<CanonicalTag, "name" | "storageValue">,
+  tag: Pick<CanonicalTag, "name" | "storageValue"> & {
+    aliases?: string[];
+  },
 ) => {
   const values = normalizeAssignedTags(assigned);
   const targetName = normalizeTagName(tag.name);
+  const aliases = new Set(
+    (tag.aliases || []).map(normalizeTagName).filter(Boolean),
+  );
   return values.some(
     (value) =>
-      value === tag.storageValue || normalizeTagName(value) === targetName,
+      value === tag.storageValue ||
+      normalizeTagName(value) === targetName ||
+      aliases.has(normalizeTagName(value)),
   );
 };
 
 export const setTagAssignment = (
   assigned: unknown,
-  tag: Pick<CanonicalTag, "name" | "storageValue">,
+  tag: Pick<CanonicalTag, "name" | "storageValue"> & {
+    aliases?: string[];
+  },
   selected: boolean,
 ): string[] => {
   const values = normalizeAssignedTags(assigned);
   const targetName = normalizeTagName(tag.name);
+  const aliases = new Set(
+    (tag.aliases || []).map(normalizeTagName).filter(Boolean),
+  );
   const without = values.filter(
     (value) =>
-      value !== tag.storageValue && normalizeTagName(value) !== targetName,
+      value !== tag.storageValue &&
+      normalizeTagName(value) !== targetName &&
+      !aliases.has(normalizeTagName(value)),
   );
   return selected ? [...without, tag.storageValue] : without;
 };

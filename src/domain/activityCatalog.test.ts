@@ -16,6 +16,8 @@ const folder = (
   id,
   name: id,
   normalizedName: id,
+  kind: id === "root" || id === "first" ? "folder" : "list",
+  color: "#64748b",
   parentId,
   order,
   revision: 1,
@@ -36,7 +38,9 @@ describe("activity catalog domain", () => {
       folder("first", "root", 0),
       folder("deep", "first", 0),
     ];
-    expect(flattenFolderTree(folders).map(({ id, depth }) => [id, depth])).toEqual([
+    expect(
+      flattenFolderTree(folders).map(({ id, depth }) => [id, depth]),
+    ).toEqual([
       ["root", 0],
       ["first", 1],
       ["deep", 2],
@@ -48,8 +52,9 @@ describe("activity catalog domain", () => {
     const folders = [folder("root", null, 0, true), folder("child", "root", 0)];
     expect(isEffectivelyArchived("child", folders)).toBe(true);
     expect(flattenFolderTree(folders)).toEqual([]);
-    expect(flattenFolderTree(folders, true).find((item) => item.id === "child"))
-      .toMatchObject({ effectivelyArchived: true });
+    expect(
+      flattenFolderTree(folders, true).find((item) => item.id === "child"),
+    ).toMatchObject({ effectivelyArchived: true });
   });
 
   it("rejects self, descendant, missing-parent, and cyclic moves", () => {

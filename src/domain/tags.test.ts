@@ -31,6 +31,7 @@ describe("tags", () => {
       source: "rpg",
       storageValue: "r1",
       color: "#123456",
+      aliases: ["work"],
     });
     expect(
       tags.filter((tag) => normalizeTagName(tag.name) === "work"),
@@ -43,8 +44,13 @@ describe("tags", () => {
   });
 
   it("recognizes legacy names and canonical IDs when toggling", () => {
-    const tag = { name: "Work", storageValue: "r1" };
+    const tag = {
+      name: "Deep Work",
+      storageValue: "r1",
+      aliases: ["work", "old-work-id"],
+    };
     expect(isTagAssigned(["work"], tag)).toBe(true);
+    expect(isTagAssigned(["old-work-id"], tag)).toBe(true);
     expect(setTagAssignment(["work", "home"], tag, true)).toEqual([
       "home",
       "r1",
