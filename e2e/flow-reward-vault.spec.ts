@@ -61,16 +61,18 @@ test("Vault settings persist and the Flow screen does not overflow Android", asy
   await seedRewardBalances(page);
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.locator("#settings-section").selectOption("flow-rewards");
   await page.locator("#flow-vault-max").fill("180");
   await page.locator("#flow-vault-expiry").selectOption("weekly");
   await page.getByRole("button", { name: "Continue activities" }).click();
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Back to TimeSlice" }).click();
 
   await page.reload();
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.locator("#settings-section").selectOption("flow-rewards");
   await expect(page.locator("#flow-vault-max")).toHaveValue("180");
   await expect(page.locator("#flow-vault-expiry")).toHaveValue("weekly");
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Back to TimeSlice" }).click();
   await page.getByRole("tab", { name: "Flowmodoro" }).click();
 
   const overflow = await page.evaluate(

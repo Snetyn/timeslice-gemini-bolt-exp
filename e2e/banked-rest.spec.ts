@@ -126,8 +126,9 @@ test("Bank goal caps auto-fill and display modes persist", async ({ page }) => {
     "Scheduled: 10:00",
   );
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.locator("#settings-section").selectOption("flow-rewards");
   await page.getByRole("button", { name: "Mirrored total" }).click();
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Back to TimeSlice" }).click();
 
   const rest = page.getByTestId("banked-rest-activity");
   await expect(rest).toContainText("Shared total: 30:00");

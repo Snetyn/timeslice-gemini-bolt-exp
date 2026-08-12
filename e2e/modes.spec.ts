@@ -36,6 +36,7 @@ test("the mode workspace remains usable at a mobile viewport", async ({
 test("early-completion redistribution is configurable", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
+  await page.locator("#settings-section").selectOption("session");
 
   const policy = page.locator("#early-completion-policy");
   await expect(policy).toBeVisible();

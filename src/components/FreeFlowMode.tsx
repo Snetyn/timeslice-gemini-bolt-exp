@@ -32,6 +32,8 @@ import {
 } from "../data/activitySessionRepository";
 import { createActivityDefinition } from "../data/activityCatalogRepository";
 import { useElapsedScheduler } from "../hooks/useElapsedScheduler";
+import { useTimerAlerts } from "../hooks/useTimerAlerts";
+import type { AlertEvent, AlertTimerSnapshot } from "../domain/alerts";
 
 type RewardResult = {
   quickBeforeSeconds: number;
@@ -84,7 +86,11 @@ type FreeFlowModeProps = {
     sessionCurrentActivityIndex?: number;
   }) => { fundingTrace?: FreeFlowRun["nodes"][number]["fundingTrace"] } | void;
   onActiveChange?: (active: boolean) => void;
+  alertPreferences?: unknown;
+  onVisualAlert?: (event: AlertEvent, text: string) => void;
 };
+
+const ignoreVisualAlert = () => undefined;
 
 const formatDuration = (seconds: number) => {
   const safe = Math.max(0, Math.floor(seconds || 0));
@@ -117,6 +123,8 @@ export function FreeFlowMode({
   onStartRequestHandled,
   onActionFinished,
   onActiveChange,
+  alertPreferences,
+  onVisualAlert,
 }: FreeFlowModeProps) {
   const freeFlowSettings = useMemo(
     () => normalizeFreeFlowSettings(settings),
@@ -143,6 +151,9 @@ export function FreeFlowMode({
   } | null>(null);
   const [nextSuggestionId, setNextSuggestionId] = useState<string | null>(null);
   const [restCheckpoint, setRestCheckpoint] = useState(false);
+  const [terminalAlertSnapshots, setTerminalAlertSnapshots] = useState<
+    AlertTimerSnapshot[]
+  >([]);
   const [error, setError] = useState("");
 
   const refreshHistory = useCallback(async () => {
@@ -218,6 +229,56 @@ export function FreeFlowMode({
   useElapsedScheduler({
     enabled: Boolean(run?.activeNodeId),
     onElapsed: () => setNowMs(Date.now()),
+  });
+  const alertSnapshots = useMemo<AlertTimerSnapshot[]>(() => {
+    if (!run) return terminalAlertSnapshots;
+    const snapshots: AlertTimerSnapshot[] = run.nodes
+      .filter((node) => node.kind === "action")
+      .map((node) => ({
+        timerKey: `free-flow:${run.id}:${node.id}`,
+        mode: "free-flow" as const,
+        status:
+          node.status === "completed"
+            ? ("completed" as const)
+            : node.status === "active"
+              ? ("running" as const)
+              : ("idle" as const),
+        activityId: node.id,
+        activityName: node.name,
+        observedAtMs: nowMs,
+        elapsedSeconds: elapsedFreeFlowNodeSeconds(node, nowMs),
+        remainingSeconds: null,
+        overtimeSeconds: 0,
+        completionScope: "activity" as const,
+      }));
+    snapshots.push({
+      timerKey: `free-flow:${run.id}:overall`,
+      mode: "free-flow",
+      status:
+        run.status === "completed"
+          ? "completed"
+          : run.activeNodeId
+            ? "running"
+            : "paused",
+      activityName: run.name,
+      observedAtMs: nowMs,
+      elapsedSeconds: run.nodes.reduce(
+        (sum, node) =>
+          node.kind === "action"
+            ? sum + elapsedFreeFlowNodeSeconds(node, nowMs)
+            : sum,
+        0,
+      ),
+      remainingSeconds: null,
+      overtimeSeconds: 0,
+      completionScope: "session",
+    });
+    return snapshots;
+  }, [nowMs, run, terminalAlertSnapshots]);
+  useTimerAlerts({
+    snapshots: alertSnapshots,
+    preferences: alertPreferences,
+    onVisualAlert: onVisualAlert || ignoreVisualAlert,
   });
   useEffect(() => {
     onActiveChange?.(Boolean(run?.activeNodeId));
@@ -492,6 +553,40 @@ export function FreeFlowMode({
       );
     }
     completed.run.rewardEarnedSeconds += reward.timeCreditedSeconds;
+    const completionSnapshots: AlertTimerSnapshot[] = [
+      {
+        timerKey: `free-flow:${run.id}:${classification.nodeId}`,
+        mode: "free-flow",
+        status: "completed",
+        activityId: classification.nodeId,
+        activityName: completed.completedNode.name,
+        observedAtMs: now,
+        elapsedSeconds: classification.elapsedSeconds,
+        remainingSeconds: null,
+        overtimeSeconds: 0,
+        completionScope: "activity",
+      },
+    ];
+    if (completed.run.status === "completed") {
+      completionSnapshots.push({
+        timerKey: `free-flow:${run.id}:overall`,
+        mode: "free-flow",
+        status: "completed",
+        activityName: run.name,
+        observedAtMs: now,
+        elapsedSeconds: completed.run.nodes.reduce(
+          (total, candidate) =>
+            candidate.kind === "action"
+              ? total + candidate.accumulatedSeconds
+              : total,
+          0,
+        ),
+        remainingSeconds: null,
+        overtimeSeconds: 0,
+        completionScope: "session",
+      });
+    }
+    setTerminalAlertSnapshots(completionSnapshots);
     await endActivitySession(
       `free-flow:${run.id}`,
       "completed",

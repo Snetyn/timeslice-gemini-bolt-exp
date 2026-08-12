@@ -145,6 +145,42 @@ describe("App startup regression", () => {
     expect(listSessionReportsMock).toHaveBeenCalledTimes(1);
   });
 
+  it("opens the dedicated compact settings view with opt-in alerts", async () => {
+    await act(async () => {
+      root.render(<App />);
+    });
+    const settings = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="Settings"]',
+    );
+    expect(settings).toBeTruthy();
+    await act(async () => settings?.click());
+
+    expect(
+      host.querySelector<HTMLInputElement>("#settings-search"),
+    ).toBeTruthy();
+    expect(
+      host.querySelector<HTMLInputElement>('[aria-label="Enable alerts"]')
+        ?.checked,
+    ).toBe(false);
+    expect(host.textContent).toContain("Alerts & Voice");
+  });
+
+  it("keeps secondary Android actions in the More sheet", async () => {
+    await act(async () => {
+      root.render(<App />);
+    });
+    const more = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="More actions"]',
+    );
+    await act(async () => more?.click());
+    const dialog = host.querySelector<HTMLElement>(
+      '[role="dialog"][aria-labelledby="mobile-more-title"]',
+    );
+    expect(dialog?.textContent).toContain("History");
+    expect(dialog?.textContent).toContain("Insights");
+    expect(dialog?.textContent).toContain("Choose next");
+  });
+
   it("shows separate Quick and Vault balances and refunds a stopped Vault Rest", async () => {
     const values = new Map<string, string>([
       [

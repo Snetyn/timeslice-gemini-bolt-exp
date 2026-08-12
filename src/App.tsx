@@ -4,6 +4,7 @@ import React, {
   useEffect,
   useRef,
   useCallback,
+  useMemo,
   useSyncExternalStore,
 } from "react";
 import { appStorage, flushAppStorage } from "./lib/storage";
@@ -25,6 +26,7 @@ import { TimeAllocationDialog } from "./components/TimeAllocationDialog";
 import { TagRatioPanel } from "./components/TagRatioPanel";
 import { DailyProgressDisplay } from "./components/DailyProgressDisplay";
 import { FreeFlowMode } from "./components/FreeFlowMode";
+import { AlertSettingsSection } from "./components/AlertSettingsSection";
 import {
   ActivityTagButton,
   ActivityTagPicker,
@@ -60,6 +62,12 @@ import { resolveVaultPredictionMode } from "./domain/workspaceSettings";
 import { fundQuickActionElapsed } from "./domain/quickActionFunding";
 import { normalizeFreeFlowSettings } from "./domain/freeFlow";
 import { getActiveFreeFlowRun } from "./data/freeFlowRepository";
+import {
+  normalizeAlertPreferences,
+  type AlertEvent,
+  type AlertTimerSnapshot,
+} from "./domain/alerts";
+import { useTimerAlerts } from "./hooks/useTimerAlerts";
 import {
   DecisionCheckpoint,
   type DecisionStart,
@@ -8124,6 +8132,26 @@ export default function App() {
   });
   const [quickActionInProgress, setQuickActionInProgress] = useState(false);
   const [freeFlowActive, setFreeFlowActive] = useState(false);
+  const [visualAlerts, setVisualAlerts] = useState<
+    Array<{ id: string; text: string; priority: AlertEvent["priority"] }>
+  >([]);
+  const [alertObservedAtMs, setAlertObservedAtMs] = useState(Date.now());
+  const [flowBreakCompletedAtMs, setFlowBreakCompletedAtMs] = useState(0);
+  const showVisualAlert = useCallback((event: AlertEvent, text: string) => {
+    setVisualAlerts((current) =>
+      [
+        ...current.filter((item) => item.id !== event.id),
+        { id: event.id, text, priority: event.priority },
+      ].slice(-3),
+    );
+    window.setTimeout(
+      () =>
+        setVisualAlerts((current) =>
+          current.filter((item) => item.id !== event.id),
+        ),
+      event.priority >= 4 ? 7_000 : 5_000,
+    );
+  }, []);
   const quickActionSessionContextRef = useRef<any>(null);
   const [recentCanonicalActivities, setRecentCanonicalActivities] = useState(
     [],
@@ -8323,6 +8351,9 @@ export default function App() {
     return false;
   });
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsSearch, setSettingsSearch] = useState("");
+  const [settingsSection, setSettingsSection] = useState("alerts");
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   // Removed colorPickerState - using simple random colors instead
   // Removed favoriteColors state - using simple random colors instead
 
@@ -8416,6 +8447,7 @@ export default function App() {
       freeFlowQuickThresholdMinutes: 2,
       freeFlowMediumThresholdMinutes: 10,
       freeFlowRememberedFundingMode: null,
+      alertPreferences: normalizeAlertPreferences(null),
     };
     try {
       const saved = localStorage.getItem("timeSliceSettings");
@@ -8423,17 +8455,18 @@ export default function App() {
       const parsed = JSON.parse(saved);
       const bankSettings = normalizeFlowRewardBankSettings(parsed);
       const freeFlowSettings = normalizeFreeFlowSettings(parsed);
+      const alertPreferences = normalizeAlertPreferences(
+        parsed.alertPreferences,
+      );
       return {
         ...defaultValue,
         ...parsed,
         ...bankSettings,
         freeFlowRewardMode: freeFlowSettings.rewardMode,
-        freeFlowQuickThresholdMinutes:
-          freeFlowSettings.quickThresholdMinutes,
-        freeFlowMediumThresholdMinutes:
-          freeFlowSettings.mediumThresholdMinutes,
-        freeFlowRememberedFundingMode:
-          freeFlowSettings.rememberedFundingMode,
+        freeFlowQuickThresholdMinutes: freeFlowSettings.quickThresholdMinutes,
+        freeFlowMediumThresholdMinutes: freeFlowSettings.mediumThresholdMinutes,
+        freeFlowRememberedFundingMode: freeFlowSettings.rememberedFundingMode,
+        alertPreferences,
         vaultPredictionMode: resolveVaultPredictionMode(parsed),
         tagRatioMetric:
           parsed.tagRatioMetric === "remaining" ||
@@ -10107,6 +10140,7 @@ export default function App() {
     source: "reserve" | "vault" | "combined" = "reserve",
   ) => {
     if (!settings.flowmodoroEnabled) return;
+    setFlowBreakCompletedAtMs(0);
     window.dispatchEvent(new Event("timeslice:flow-rest-start"));
     const now = new Date();
     const current = flowmodoroStateRef.current;
@@ -10201,6 +10235,7 @@ export default function App() {
   };
 
   const skipFlowmodoroBreak = () => {
+    setFlowBreakCompletedAtMs(0);
     flowBreakDrainSourceRef.current = null;
     const now = new Date();
     const currentPeriodKey = flowRewardPeriodKey(
@@ -10634,8 +10669,7 @@ export default function App() {
     setQuickActionDialog({
       open: true,
       name: "",
-      fundingMode:
-        settings.freeFlowRememberedFundingMode || "proportional",
+      fundingMode: settings.freeFlowRememberedFundingMode || "proportional",
       remember: false,
       allowProtectedCurrent: false,
     });
@@ -10677,7 +10711,11 @@ export default function App() {
     });
     setQuickActionInProgress(true);
     setCurrentMode("single");
-    setQuickActionDialog((previous) => ({ ...previous, open: false, name: "" }));
+    setQuickActionDialog((previous) => ({
+      ...previous,
+      open: false,
+      name: "",
+    }));
   };
 
   const applyQuickActionFunding = useCallback(
@@ -11442,6 +11480,7 @@ export default function App() {
 
   const handleTimerTick = useCallback(
     (elapsedSeconds: number, observedAtMs = Date.now()) => {
+      setAlertObservedAtMs(observedAtMs);
       // Check for daily flowmodoro reset
       const now = new Date();
       if (currentMode === "daily") {
@@ -11533,6 +11572,7 @@ export default function App() {
             observedAtMs -
             Math.max(0, elapsedSeconds - flowmodoroState.breakTimeRemaining) *
               1_000;
+          setFlowBreakCompletedAtMs(completedAtMs);
           resumeTimersAfterFlowBreak(flowmodoroState, completedAtMs);
           void persistModeTimer("flowmodoro:break", "complete").catch((error) =>
             console.error("Failed to complete Flowmodoro break timer", error),
@@ -11771,6 +11811,208 @@ export default function App() {
     );
   const hasActiveFlowmodoroBreak =
     flowmodoroState.isOnBreak && flowmodoroState.breakTimeRemaining > 0;
+  const timerAlertSnapshots = useMemo<AlertTimerSnapshot[]>(() => {
+    const observedAtMs = alertObservedAtMs;
+    const snapshots: AlertTimerSnapshot[] = activities.map(
+      (activity, index) => {
+        const plannedSeconds = Math.max(
+          0,
+          Number(activity.originalPlannedSeconds) ||
+            Number(activity.duration || 0) * 60,
+        );
+        const rawRemaining = Number(activity.timeRemaining || 0);
+        const overtimeSeconds = activity.countUp
+          ? 0
+          : Math.max(0, -rawRemaining);
+        const elapsedSeconds = activity.countUp
+          ? Math.max(
+              0,
+              activity.isCompleted
+                ? Number(activity.completedElapsedSeconds || 0)
+                : rawRemaining,
+            )
+          : Math.max(
+              0,
+              activity.isCompleted &&
+                Number.isFinite(activity.completedElapsedSeconds)
+                ? Number(activity.completedElapsedSeconds)
+                : plannedSeconds - Math.max(0, rawRemaining),
+            );
+        const isCurrent = index === currentActivityIndex;
+        const status = activity.isCompleted
+          ? "completed"
+          : isCurrent && isTimerActive
+            ? isPaused
+              ? "paused"
+              : overtimeSeconds > 0
+                ? "overtime"
+                : "running"
+            : "idle";
+        return {
+          timerKey: `session:${activity.id}`,
+          mode: "session",
+          status,
+          activityId: activity.id,
+          activityName: activity.name,
+          observedAtMs,
+          elapsedSeconds,
+          remainingSeconds: activity.countUp ? null : Math.max(0, rawRemaining),
+          overtimeSeconds,
+          completionScope: "activity",
+        };
+      },
+    );
+    const countdownActivities = activities.filter(
+      (activity) => !activity.countUp && !activity.isRewardRest,
+    );
+    const sessionFinished =
+      sessionPlanFrozen &&
+      !isTimerActive &&
+      countdownActivities.length > 0 &&
+      countdownActivities.every(
+        (activity) =>
+          activity.isCompleted || Number(activity.timeRemaining) <= 0,
+      );
+    snapshots.push({
+      timerKey: "session:overall",
+      mode: "session",
+      status: sessionFinished
+        ? "completed"
+        : isTimerActive
+          ? isPaused
+            ? "paused"
+            : "running"
+          : "idle",
+      activityName: "Session",
+      observedAtMs,
+      elapsedSeconds: activities.reduce(
+        (sum, activity) =>
+          sum +
+          Math.max(
+            0,
+            (Number(activity.originalPlannedSeconds) ||
+              Number(activity.duration || 0) * 60) -
+              Math.max(0, Number(activity.timeRemaining || 0)),
+          ),
+        0,
+      ),
+      remainingSeconds: null,
+      overtimeSeconds: activities.reduce(
+        (sum, activity) =>
+          sum + Math.max(0, -Number(activity.timeRemaining || 0)),
+        0,
+      ),
+      completionScope: "session",
+    });
+    const now = new Date(observedAtMs);
+    const currentMinute = now.getHours() * 60 + now.getMinutes();
+    dailyActivities.forEach((activity) => {
+      const plannedSeconds = Math.max(0, Number(activity.duration || 0) * 60);
+      const liveElapsed =
+        activity.isActive && activity.startedAt
+          ? Math.max(
+              0,
+              Math.floor(
+                (observedAtMs - new Date(activity.startedAt).getTime()) / 1_000,
+              ),
+            )
+          : 0;
+      const elapsedSeconds =
+        Math.max(
+          0,
+          Number(activity.timeSpentSeconds) ||
+            Number(activity.timeSpent || 0) * 60,
+        ) + liveElapsed;
+      const overtimeSeconds = Math.max(0, elapsedSeconds - plannedSeconds);
+      const [startHour, startMinute] = String(activity.startTime || "")
+        .split(":")
+        .map(Number);
+      const dueMinute =
+        Number.isFinite(startHour) && Number.isFinite(startMinute)
+          ? startHour * 60 + startMinute
+          : null;
+      snapshots.push({
+        timerKey: `daily:${activity.id}`,
+        mode: "daily",
+        status:
+          activity.status === "completed"
+            ? "completed"
+            : activity.isActive
+              ? overtimeSeconds > 0
+                ? "overtime"
+                : "running"
+              : "idle",
+        activityId: activity.id,
+        activityName: activity.name,
+        observedAtMs,
+        elapsedSeconds,
+        remainingSeconds: Math.max(0, plannedSeconds - elapsedSeconds),
+        overtimeSeconds,
+        scheduledTaskDue:
+          dueMinute !== null &&
+          currentMinute >= dueMinute &&
+          activity.status !== "completed" &&
+          !activity.isActive,
+        completionScope: "activity",
+      });
+    });
+    snapshots.push({
+      timerKey: "flowmodoro:break-alert",
+      mode: "flow-break",
+      status: flowmodoroState.isOnBreak
+        ? "running"
+        : flowBreakCompletedAtMs > 0
+          ? "completed"
+          : "idle",
+      activityName: "Flow break",
+      observedAtMs,
+      elapsedSeconds: Math.max(
+        0,
+        Number(flowmodoroState.initialBreakDuration || 0) -
+          Number(flowmodoroState.breakTimeRemaining || 0),
+      ),
+      remainingSeconds: Math.max(
+        0,
+        Number(flowmodoroState.breakTimeRemaining || 0),
+      ),
+      overtimeSeconds: 0,
+      completionScope: "break",
+    });
+    snapshots.push({
+      timerKey: "flowmodoro:quick-reserve",
+      mode: "flow-break",
+      status: "idle",
+      activityName: "Quick Reserve",
+      observedAtMs,
+      elapsedSeconds: 0,
+      remainingSeconds: null,
+      overtimeSeconds: 0,
+      quickReserveFull:
+        Number(settings.flowmodoroQuickReserveMinutes || 0) > 0 &&
+        Number(flowmodoroState.availableRestTime || 0) >=
+          Number(settings.flowmodoroQuickReserveMinutes || 0) * 60,
+    });
+    return snapshots;
+  }, [
+    activities,
+    alertObservedAtMs,
+    currentActivityIndex,
+    dailyActivities,
+    flowBreakCompletedAtMs,
+    flowmodoroState.availableRestTime,
+    flowmodoroState.breakTimeRemaining,
+    flowmodoroState.initialBreakDuration,
+    flowmodoroState.isOnBreak,
+    isPaused,
+    isTimerActive,
+    sessionPlanFrozen,
+    settings.flowmodoroQuickReserveMinutes,
+  ]);
+  const alertEngine = useTimerAlerts({
+    snapshots: timerAlertSnapshots,
+    preferences: settings.alertPreferences,
+    onVisualAlert: showVisualAlert,
+  });
   useTimerLifecycle({
     enabled:
       (isTimerActive && !isPaused) ||
@@ -16095,1821 +16337,1996 @@ export default function App() {
           />
         )}
         <Card className="overflow-hidden">
-          <CardHeader>
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
-              <CardTitle className="text-2xl sm:text-3xl font-bold">
-                TimeSlice
-              </CardTitle>
-              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          <CardHeader
+            className={
+              showSettings
+                ? "sticky top-0 z-30 border-b bg-white/95 p-2 backdrop-blur sm:p-4"
+                : undefined
+            }
+          >
+            {showSettings ? (
+              <div className="flex min-h-12 items-center gap-2">
                 <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setTasksHubOpen(true)}
-                  aria-label="Manage Activities and Tasks"
-                  className="flex-1 sm:flex-none h-9 text-sm"
-                >
-                  <Icon name="settings" className="h-4 w-4 mr-2" />
-                  Tasks
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setActivityHistoryOpen(true)}
-                  className="flex-1 sm:flex-none h-9 text-sm"
-                >
-                  History
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setInsightsOpen(true)}
-                  className="flex-1 sm:flex-none h-9 text-sm"
-                >
-                  Insights
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setDecisionCheckpoint({
-                      open: true,
-                      reason: "manual",
-                      sourceKey: "idle",
-                      foregroundBackgroundMs: 0,
-                    })
-                  }
-                  className="flex-1 sm:flex-none h-9 text-sm"
-                >
-                  Choose next
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={openQuickAction}
-                  className="flex-1 border-amber-300 text-amber-800 sm:flex-none h-9 text-sm hover:bg-amber-50"
-                  aria-label="Start a Quick Action"
-                >
-                  ⚡ Quick action
-                </Button>
-                {/* Spider Chart button removed */}
-                {/* RPG Stats button removed */}
-                <Button
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
                   onClick={() => {
-                    console.log("showSettings before toggle:", showSettings);
-                    setShowSettings(!showSettings);
+                    setShowSettings(false);
+                    setSettingsSearch("");
                   }}
-                  className="flex-1 sm:flex-none h-9 text-sm"
+                  className="min-h-11 min-w-11 shrink-0 px-2"
+                  aria-label="Back to TimeSlice"
                 >
-                  <Icon name="settings" className="h-4 w-4 mr-2" />
-                  Settings
+                  ←
                 </Button>
+                <div className="min-w-0 flex-1">
+                  <CardTitle className="text-lg font-bold">Settings</CardTitle>
+                  <label htmlFor="settings-search" className="sr-only">
+                    Search settings
+                  </label>
+                  <Input
+                    id="settings-search"
+                    type="search"
+                    value={settingsSearch}
+                    onChange={(event) => {
+                      const query = event.target.value;
+                      setSettingsSearch(query);
+                      const normalized = query.trim().toLowerCase();
+                      if (!normalized) return;
+                      const section = [
+                        ["alerts", "alert voice speech sound vibration buzz"],
+                        ["timer", "timer overtime predicted end checkpoint"],
+                        ["display", "display progress color zoom ring bar"],
+                        ["session", "session allocation completion report"],
+                        ["daily", "daily reset schedule timeline"],
+                        ["free-flow", "free flow quick medium hard"],
+                        ["flow-rewards", "flow reward reserve bank break"],
+                        ["data", "data storage pwa persist offline"],
+                        ["advanced", "advanced tags drag aggregation"],
+                      ].find(([, terms]) => terms.includes(normalized))?.[0];
+                      if (section) setSettingsSection(section);
+                    }}
+                    placeholder="Search settings"
+                    className="mt-1 h-9 w-full text-base sm:max-w-sm"
+                  />
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
+                <CardTitle className="text-2xl sm:text-3xl font-bold">
+                  TimeSlice
+                </CardTitle>
+                <div className="hidden flex-wrap items-center gap-2 w-full sm:flex sm:w-auto">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setTasksHubOpen(true)}
+                    aria-label="Manage Activities and Tasks"
+                    className="flex-1 sm:flex-none h-9 text-sm"
+                  >
+                    <Icon name="settings" className="h-4 w-4 mr-2" />
+                    Tasks
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setActivityHistoryOpen(true)}
+                    className="flex-1 sm:flex-none h-9 text-sm"
+                  >
+                    History
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setInsightsOpen(true)}
+                    className="flex-1 sm:flex-none h-9 text-sm"
+                  >
+                    Insights
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setDecisionCheckpoint({
+                        open: true,
+                        reason: "manual",
+                        sourceKey: "idle",
+                        foregroundBackgroundMs: 0,
+                      })
+                    }
+                    className="flex-1 sm:flex-none h-9 text-sm"
+                  >
+                    Choose next
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={openQuickAction}
+                    className="flex-1 border-amber-300 text-amber-800 sm:flex-none h-9 text-sm hover:bg-amber-50"
+                    aria-label="Start a Quick Action"
+                  >
+                    ⚡ Quick action
+                  </Button>
+                  {/* Spider Chart button removed */}
+                  {/* RPG Stats button removed */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setShowSettings(true);
+                    }}
+                    className="flex-1 sm:flex-none h-9 text-sm"
+                  >
+                    <Icon name="settings" className="h-4 w-4 mr-2" />
+                    Settings
+                  </Button>
+                </div>
+                <div className="grid w-full grid-cols-4 gap-1 sm:hidden">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setTasksHubOpen(true)}
+                    className="min-h-11 min-w-0 flex-col gap-0 px-1 text-[11px]"
+                    aria-label="Tasks"
+                  >
+                    <span aria-hidden="true">☷</span>
+                    Tasks
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={openQuickAction}
+                    className="min-h-11 min-w-0 flex-col gap-0 border-amber-300 px-1 text-[11px] text-amber-800"
+                    aria-label="Start a Quick Action"
+                  >
+                    <span aria-hidden="true">⚡</span>
+                    Quick
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowSettings(true)}
+                    className="min-h-11 min-w-0 flex-col gap-0 px-1 text-[11px]"
+                    aria-label="Settings"
+                  >
+                    <Icon name="settings" className="h-4 w-4" />
+                    Settings
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setMobileMoreOpen(true)}
+                    className="min-h-11 min-w-0 flex-col gap-0 px-1 text-[11px]"
+                    aria-label="More actions"
+                    aria-expanded={mobileMoreOpen}
+                  >
+                    <span aria-hidden="true">•••</span>
+                    More
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardHeader>
           <CardContent className="space-y-6 p-4 sm:p-6">
             {showSettings && (
               <Card className="bg-gray-50">
                 <CardHeader>
-                  <CardTitle className="text-lg">Timer Settings</CardTitle>
+                  <CardTitle className="text-lg">TimeSlice Settings</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
-                    <Label htmlFor="vault-prediction-mode">
-                      Time Vault and Predicted End
-                    </Label>
+                  <div className="sticky top-[98px] z-20 -mx-1 rounded-xl border border-slate-200 bg-white/95 p-2 shadow-sm backdrop-blur sm:static sm:mx-0">
+                    <label
+                      htmlFor="settings-section"
+                      className="mb-1 block text-xs font-semibold text-slate-600"
+                    >
+                      Section
+                    </label>
                     <select
-                      id="vault-prediction-mode"
-                      value={settings.vaultPredictionMode || "linked"}
+                      id="settings-section"
+                      value={settingsSection}
                       onChange={(event) =>
+                        setSettingsSection(event.target.value)
+                      }
+                      className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base sm:text-sm"
+                    >
+                      <option value="alerts">Alerts &amp; Voice</option>
+                      <option value="timer">Timer</option>
+                      <option value="display">Display</option>
+                      <option value="session">Session</option>
+                      <option value="daily">Daily</option>
+                      <option value="free-flow">Free Flow</option>
+                      <option value="flow-rewards">Flow Rewards</option>
+                      <option value="data">Data / PWA</option>
+                      <option value="advanced">Advanced</option>
+                    </select>
+                  </div>
+                  {(settingsSection === "alerts" ||
+                    /alert|voice|sound|speech|vibrat/i.test(
+                      settingsSearch,
+                    )) && (
+                    <AlertSettingsSection
+                      value={settings.alertPreferences}
+                      onChange={(alertPreferences) =>
                         setSettings((previous) => ({
                           ...previous,
-                          vaultPredictionMode: event.target.value,
+                          alertPreferences,
                         }))
                       }
-                      className="mt-2 min-h-11 w-full rounded-lg border border-blue-200 bg-white px-3 text-sm"
-                    >
-                      <option value="linked">
-                        Linked · task allocation controls the end
-                      </option>
-                      <option value="independent">
-                        Independent · preserve task + Vault schedule
-                        (recommended)
-                      </option>
-                    </select>
-                    <p className="mt-2 text-xs text-slate-600">
-                      Independent keeps Predicted End stable when time moves
-                      between a task and the Vault. It never rewrites
-                      allocations or history.
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-violet-100 bg-violet-50 p-3">
-                    <Label htmlFor="color-intensity">Color intensity</Label>
-                    <select
-                      id="color-intensity"
-                      value={settings.colorIntensity || "standard"}
-                      onChange={(event) =>
-                        setSettings((previous) => ({
-                          ...previous,
-                          colorIntensity: event.target.value,
-                        }))
-                      }
-                      className="mt-2 min-h-11 w-full rounded-lg border border-violet-200 bg-white px-3 text-sm"
-                    >
-                      <option value="standard">Standard</option>
-                      <option value="vivid">Vivid</option>
-                    </select>
-                    <p className="mt-2 text-xs text-slate-600">
-                      Vivid adjusts display saturation only. Stored activity
-                      colors are unchanged.
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white p-3">
-                    <Label>Decision checkpoint</Label>
-                    <p className="mt-1 text-xs text-slate-600">
-                      The manual Choose next action is always available while
-                      idle.
-                    </p>
-                    <label className="mt-2 flex min-h-11 items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(settings.promptAfterActivity)}
-                        onChange={(event) =>
-                          setSettings((previous) => ({
-                            ...previous,
-                            promptAfterActivity: event.target.checked,
-                          }))
-                        }
-                      />
-                      Prompt after an activity stops
-                    </label>
-                    <label className="flex min-h-11 items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(settings.promptWhenReturningIdle)}
-                        onChange={(event) =>
-                          setSettings((previous) => ({
-                            ...previous,
-                            promptWhenReturningIdle: event.target.checked,
-                          }))
-                        }
-                      />
-                      Prompt when returning idle after 15 minutes
-                    </label>
-                  </div>
-                  {navigator.storage?.persist && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3">
-                      <div>
-                        <Label>Keep TimeSlice data on this device</Label>
-                        <p className="mt-1 text-xs text-slate-600">
-                          Requests protected IndexedDB storage for installed PWA
-                          use.
-                        </p>
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => void requestPersistentStorage()}
-                      >
-                        {storagePersistent === true
-                          ? "Storage protected"
-                          : "Protect storage"}
-                      </Button>
+                      voices={alertEngine.voices}
+                      support={alertEngine.support}
+                      onTestSound={alertEngine.testSound}
+                      onTestVibration={alertEngine.testVibration}
+                      onTestSpeech={alertEngine.testSpeech}
+                    />
+                  )}
+                  {settingsSection !== "alerts" && (
+                    <div className="mb-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                      Existing {settingsSection.replace("-", " ")} controls are
+                      shown below without changing their stored keys. Search is
+                      used to jump between compact top-level sections.
                     </div>
                   )}
-                  <div className="space-y-2">
-                    <Label>Overtime Behavior</Label>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.overtimeType === "none"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            overtimeType: "none",
-                          }))
-                        }
-                      >
-                        Off
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.overtimeType === "postpone"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            overtimeType: "postpone",
-                          }))
-                        }
-                      >
-                        Postpone
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.overtimeType === "drain"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            overtimeType: "drain",
-                          }))
-                        }
-                      >
-                        Drain
-                      </Button>
-                    </div>
-                    {settings.overtimeType === "drain" && (
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
-                        <div className="mb-1 text-xs font-medium text-slate-600">
-                          Drain donors
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button
-                            size="sm"
-                            variant={
-                              settings.overtimeDrainStrategy === "proportional"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              setSettings((current) => ({
-                                ...current,
-                                overtimeDrainStrategy: "proportional",
-                              }))
-                            }
-                          >
-                            All proportionally
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant={
-                              settings.overtimeDrainStrategy === "next"
-                                ? "default"
-                                : "outline"
-                            }
-                            onClick={() =>
-                              setSettings((current) => ({
-                                ...current,
-                                overtimeDrainStrategy: "next",
-                              }))
-                            }
-                          >
-                            Next in order
-                          </Button>
-                        </div>
-                        <p className="mt-1 text-xs text-slate-500">
-                          Starred activities are always protected. Lock only
-                          affects manual allocation editing.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                  <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-                    <div>
-                      <Label htmlFor="early-completion-policy">
-                        Early completion
+                  <div
+                    className={
+                      settingsSection === "alerts" && !settingsSearch
+                        ? "hidden sm:block"
+                        : "space-y-3"
+                    }
+                  >
+                    <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                      <Label htmlFor="vault-prediction-mode">
+                        Time Vault and Predicted End
                       </Label>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Choose where unused countdown time goes when a task is
-                        marked complete.
+                      <select
+                        id="vault-prediction-mode"
+                        value={settings.vaultPredictionMode || "linked"}
+                        onChange={(event) =>
+                          setSettings((previous) => ({
+                            ...previous,
+                            vaultPredictionMode: event.target.value,
+                          }))
+                        }
+                        className="mt-2 min-h-11 w-full rounded-lg border border-blue-200 bg-white px-3 text-sm"
+                      >
+                        <option value="linked">
+                          Linked · task allocation controls the end
+                        </option>
+                        <option value="independent">
+                          Independent · preserve task + Vault schedule
+                          (recommended)
+                        </option>
+                      </select>
+                      <p className="mt-2 text-xs text-slate-600">
+                        Independent keeps Predicted End stable when time moves
+                        between a task and the Vault. It never rewrites
+                        allocations or history.
                       </p>
                     </div>
-                    <select
-                      id="early-completion-policy"
-                      className="w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
-                      value={settings.earlyCompletionPolicy}
-                      onChange={(event) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          earlyCompletionPolicy: event.target.value,
-                          earlyCompletionTargetId:
-                            event.target.value === "target"
-                              ? prev.earlyCompletionTargetId
-                              : "",
-                        }))
-                      }
-                    >
-                      <option value="vault">Send unused time to vault</option>
-                      <option value="target">
-                        Add it to one task (keep session end)
-                      </option>
-                      <option value="distribute">
-                        Distribute it across remaining tasks (keep session end)
-                      </option>
-                    </select>
-                    {settings.earlyCompletionPolicy === "target" && (
+                    <div className="rounded-lg border border-violet-100 bg-violet-50 p-3">
+                      <Label htmlFor="color-intensity">Color intensity</Label>
                       <select
-                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
-                        value={settings.earlyCompletionTargetId}
+                        id="color-intensity"
+                        value={settings.colorIntensity || "standard"}
                         onChange={(event) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            earlyCompletionTargetId: event.target.value,
+                          setSettings((previous) => ({
+                            ...previous,
+                            colorIntensity: event.target.value,
                           }))
                         }
+                        className="mt-2 min-h-11 w-full rounded-lg border border-violet-200 bg-white px-3 text-sm"
                       >
-                        <option value="">Choose a target task</option>
-                        {activities
-                          .filter(
-                            (activity) =>
-                              !activity.isCompleted && !activity.countUp,
-                          )
-                          .map((activity) => (
-                            <option key={activity.id} value={activity.id}>
-                              {activity.name}
-                            </option>
-                          ))}
+                        <option value="standard">Standard</option>
+                        <option value="vivid">Vivid</option>
                       </select>
-                    )}
-                  </div>
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label>Progress View</Label>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.progressView === "linear"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            progressView: "linear",
-                          }))
-                        }
-                      >
-                        Linear
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.progressView === "circular"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            progressView: "circular",
-                          }))
-                        }
-                      >
-                        Circular
-                      </Button>
+                      <p className="mt-2 text-xs text-slate-600">
+                        Vivid adjusts display saturation only. Stored activity
+                        colors are unchanged.
+                      </p>
                     </div>
-                  </div>
-                  {settings.progressView === "linear" && (
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="show-circular-allocation">
-                        Show circular allocation ring
-                      </Label>
-                      <Switch
-                        id="show-circular-allocation"
-                        checked={settings.showCircularAllocation}
-                        onCheckedChange={(checked) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            showCircularAllocation: checked,
-                          }))
-                        }
-                      />
-                    </div>
-                  )}
-                  {settings.progressView === "linear" && (
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="show-drain-overlay">
-                        Show drain overlay bar
-                      </Label>
-                      <Switch
-                        id="show-drain-overlay"
-                        checked={settings.showDrainOverlay}
-                        onCheckedChange={(checked) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            showDrainOverlay: checked,
-                          }))
-                        }
-                      />
-                    </div>
-                  )}
-                  <div className="space-y-2">
-                    <Label>Progress Bar Style</Label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-600">Aggregate:</span>
-                      <select
-                        className="border rounded px-2 py-1 text-xs"
-                        value={settings.progressAggregationMode}
-                        onChange={(e) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            progressAggregationMode: e.target.value as any,
-                          }))
-                        }
-                      >
-                        <option value="activity">By Activity</option>
-                        <option value="tag">By Tag</option>
-                        {/* Future: <option value="category">By Category</option> */}
-                      </select>
-                      <label className="flex items-center gap-1 text-xs ml-2">
+                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                      <Label>Decision checkpoint</Label>
+                      <p className="mt-1 text-xs text-slate-600">
+                        The manual Choose next action is always available while
+                        idle.
+                      </p>
+                      <label className="mt-2 flex min-h-11 items-center gap-2 text-sm">
                         <input
                           type="checkbox"
-                          checked={settings.showActivityPercentOnlyDuringRun}
-                          onChange={(e) =>
-                            setSettings((prev) => ({
-                              ...prev,
-                              showActivityPercentOnlyDuringRun:
-                                e.target.checked,
+                          checked={Boolean(settings.promptAfterActivity)}
+                          onChange={(event) =>
+                            setSettings((previous) => ({
+                              ...previous,
+                              promptAfterActivity: event.target.checked,
                             }))
                           }
                         />
-                        % only while running
+                        Prompt after an activity stops
+                      </label>
+                      <label className="flex min-h-11 items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settings.promptWhenReturningIdle)}
+                          onChange={(event) =>
+                            setSettings((previous) => ({
+                              ...previous,
+                              promptWhenReturningIdle: event.target.checked,
+                            }))
+                          }
+                        />
+                        Prompt when returning idle after 15 minutes
                       </label>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.progressBarStyle === "default"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            progressBarStyle: "default",
-                          }))
-                        }
-                      >
-                        Default
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.progressBarStyle === "dynamicColor"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            progressBarStyle: "dynamicColor",
-                          }))
-                        }
-                      >
-                        Dynamic
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.progressBarStyle === "segmented"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            progressBarStyle: "segmented",
-                          }))
-                        }
-                      >
-                        Segmented
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-allocation-percentage">
-                      Show allocation %
-                    </Label>
-                    <Switch
-                      id="show-allocation-percentage"
-                      checked={settings.showAllocationPercentage}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showAllocationPercentage: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <Separator />
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-progress">
-                      Show main progress bar
-                    </Label>
-                    <Switch
-                      id="show-progress"
-                      checked={settings.showMainProgress}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showMainProgress: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-overall">
-                      Show overall remaining time
-                    </Label>
-                    <Switch
-                      id="show-overall"
-                      checked={settings.showOverallTime}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showOverallTime: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-end">Show predicted end time</Label>
-                    <Switch
-                      id="show-end"
-                      checked={settings.showEndTime}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showEndTime: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-dual-end">
-                      Show Active/Session end
-                    </Label>
-                    <Switch
-                      id="show-dual-end"
-                      checked={settings.showDualEndTime}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showDualEndTime: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-session-report">
-                      Show end-of-session report
-                    </Label>
-                    <Switch
-                      id="show-session-report"
-                      checked={settings.showSessionEndReport}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showSessionEndReport: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-activity-timer">
-                      Show activity timer display
-                    </Label>
-                    <Switch
-                      id="show-activity-timer"
-                      checked={settings.showActivityTimer}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showActivityTimer: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-activity-progress">
-                      Show individual activity progress
-                    </Label>
-                    <Switch
-                      id="show-activity-progress"
-                      checked={settings.showActivityProgress}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showActivityProgress: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Show Activity Time</Label>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={settings.showActivityTime}
-                        onCheckedChange={(checked) =>
-                          setSettings((s) => ({
-                            ...s,
-                            showActivityTime: checked,
-                          }))
-                        }
-                        id="show-activity-time-toggle"
-                      />
-                      <span className="text-sm">
-                        Show time remaining for each activity
-                      </span>
-                    </div>
-                  </div>
-                  {settings.showActivityProgress && (
-                    <div className="flex items-center justify-between pl-4">
-                      <Label>Progress bar style</Label>
-                      <div className="flex items-center gap-4">
+                    {navigator.storage?.persist && (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3">
+                        <div>
+                          <Label>Keep TimeSlice data on this device</Label>
+                          <p className="mt-1 text-xs text-slate-600">
+                            Requests protected IndexedDB storage for installed
+                            PWA use.
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void requestPersistentStorage()}
+                        >
+                          {storagePersistent === true
+                            ? "Storage protected"
+                            : "Protect storage"}
+                        </Button>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label>Overtime Behavior</Label>
+                      <div className="flex items-center gap-2">
                         <Button
                           size="sm"
                           variant={
-                            settings.activityProgressType === "fill"
+                            settings.overtimeType === "none"
                               ? "default"
                               : "outline"
                           }
                           onClick={() =>
                             setSettings((prev) => ({
                               ...prev,
-                              activityProgressType: "fill",
+                              overtimeType: "none",
                             }))
                           }
                         >
-                          Fill Up
+                          Off
                         </Button>
                         <Button
                           size="sm"
                           variant={
-                            settings.activityProgressType === "drain"
+                            settings.overtimeType === "postpone"
                               ? "default"
                               : "outline"
                           }
                           onClick={() =>
                             setSettings((prev) => ({
                               ...prev,
-                              activityProgressType: "drain",
+                              overtimeType: "postpone",
                             }))
                           }
                         >
-                          Drain Down
+                          Postpone
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.overtimeType === "drain"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              overtimeType: "drain",
+                            }))
+                          }
+                        >
+                          Drain
+                        </Button>
+                      </div>
+                      {settings.overtimeType === "drain" && (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                          <div className="mb-1 text-xs font-medium text-slate-600">
+                            Drain donors
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <Button
+                              size="sm"
+                              variant={
+                                settings.overtimeDrainStrategy ===
+                                "proportional"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                setSettings((current) => ({
+                                  ...current,
+                                  overtimeDrainStrategy: "proportional",
+                                }))
+                              }
+                            >
+                              All proportionally
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant={
+                                settings.overtimeDrainStrategy === "next"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                setSettings((current) => ({
+                                  ...current,
+                                  overtimeDrainStrategy: "next",
+                                }))
+                              }
+                            >
+                              Next in order
+                            </Button>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Starred activities are always protected. Lock only
+                            affects manual allocation editing.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
+                      <div>
+                        <Label htmlFor="early-completion-policy">
+                          Early completion
+                        </Label>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Choose where unused countdown time goes when a task is
+                          marked complete.
+                        </p>
+                      </div>
+                      <select
+                        id="early-completion-policy"
+                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                        value={settings.earlyCompletionPolicy}
+                        onChange={(event) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            earlyCompletionPolicy: event.target.value,
+                            earlyCompletionTargetId:
+                              event.target.value === "target"
+                                ? prev.earlyCompletionTargetId
+                                : "",
+                          }))
+                        }
+                      >
+                        <option value="vault">Send unused time to vault</option>
+                        <option value="target">
+                          Add it to one task (keep session end)
+                        </option>
+                        <option value="distribute">
+                          Distribute it across remaining tasks (keep session
+                          end)
+                        </option>
+                      </select>
+                      {settings.earlyCompletionPolicy === "target" && (
+                        <select
+                          className="w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-sm"
+                          value={settings.earlyCompletionTargetId}
+                          onChange={(event) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              earlyCompletionTargetId: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Choose a target task</option>
+                          {activities
+                            .filter(
+                              (activity) =>
+                                !activity.isCompleted && !activity.countUp,
+                            )
+                            .map((activity) => (
+                              <option key={activity.id} value={activity.id}>
+                                {activity.name}
+                              </option>
+                            ))}
+                        </select>
+                      )}
+                    </div>
+                    <Separator />
+                    <div className="space-y-2">
+                      <Label>Progress View</Label>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.progressView === "linear"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              progressView: "linear",
+                            }))
+                          }
+                        >
+                          Linear
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.progressView === "circular"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              progressView: "circular",
+                            }))
+                          }
+                        >
+                          Circular
                         </Button>
                       </div>
                     </div>
-                  )}
-                  {/* Tag Chips Settings */}
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="show-tag-chips">Show tag chips</Label>
-                    <Switch
-                      id="show-tag-chips"
-                      checked={settings.showTagChips}
-                      onCheckedChange={(checked) =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          showTagChips: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  {settings.showTagChips && (
-                    <div className="flex items-center justify-between pl-4">
-                      <Label htmlFor="compact-tag-chips">
-                        Compact tag chips
-                      </Label>
-                      <Switch
-                        id="compact-tag-chips"
-                        checked={settings.compactTagChips}
-                        onCheckedChange={(checked) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            compactTagChips: checked,
-                          }))
-                        }
-                      />
-                    </div>
-                  )}
-                  <Separator />
-                  <div className="space-y-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
-                    <div>
-                      <Label className="font-semibold text-violet-900">
-                        Free Flow rewards
-                      </Label>
-                      <p className="text-xs text-slate-600">
-                        Class suggestions use active time; you always confirm
-                        Quick, Medium, or Hard.
-                      </p>
-                    </div>
-                    <div className="grid grid-cols-3 gap-1">
-                      {[
-                        ["time", "Time"],
-                        ["hybrid", "Hybrid"],
-                        ["completion", "Completion"],
-                      ].map(([value, label]) => (
+                    {settings.progressView === "linear" && (
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="show-circular-allocation">
+                          Show circular allocation ring
+                        </Label>
+                        <Switch
+                          id="show-circular-allocation"
+                          checked={settings.showCircularAllocation}
+                          onCheckedChange={(checked) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              showCircularAllocation: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    )}
+                    {settings.progressView === "linear" && (
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="show-drain-overlay">
+                          Show drain overlay bar
+                        </Label>
+                        <Switch
+                          id="show-drain-overlay"
+                          checked={settings.showDrainOverlay}
+                          onCheckedChange={(checked) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              showDrainOverlay: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label>Progress Bar Style</Label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-600">
+                          Aggregate:
+                        </span>
+                        <select
+                          className="border rounded px-2 py-1 text-xs"
+                          value={settings.progressAggregationMode}
+                          onChange={(e) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              progressAggregationMode: e.target.value as any,
+                            }))
+                          }
+                        >
+                          <option value="activity">By Activity</option>
+                          <option value="tag">By Tag</option>
+                          {/* Future: <option value="category">By Category</option> */}
+                        </select>
+                        <label className="flex items-center gap-1 text-xs ml-2">
+                          <input
+                            type="checkbox"
+                            checked={settings.showActivityPercentOnlyDuringRun}
+                            onChange={(e) =>
+                              setSettings((prev) => ({
+                                ...prev,
+                                showActivityPercentOnlyDuringRun:
+                                  e.target.checked,
+                              }))
+                            }
+                          />
+                          % only while running
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-2">
                         <Button
-                          key={value}
                           size="sm"
                           variant={
-                            settings.freeFlowRewardMode === value
+                            settings.progressBarStyle === "default"
                               ? "default"
                               : "outline"
                           }
                           onClick={() =>
-                            setSettings((previous) => ({
-                              ...previous,
-                              freeFlowRewardMode: value,
+                            setSettings((prev) => ({
+                              ...prev,
+                              progressBarStyle: "default",
                             }))
                           }
                         >
-                          {label}
+                          Default
                         </Button>
-                      ))}
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.progressBarStyle === "dynamicColor"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              progressBarStyle: "dynamicColor",
+                            }))
+                          }
+                        >
+                          Dynamic
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.progressBarStyle === "segmented"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              progressBarStyle: "segmented",
+                            }))
+                          }
+                        >
+                          Segmented
+                        </Button>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <label className="space-y-1 text-sm">
-                        <span>Quick up to</span>
-                        <div className="flex items-center gap-1">
-                          <Input
-                            type="number"
-                            min="1"
-                            max="120"
-                            value={settings.freeFlowQuickThresholdMinutes}
-                            onChange={(event) => {
-                              const quick = Math.max(
-                                1,
-                                Math.min(120, Number(event.target.value) || 2),
-                              );
-                              setSettings((previous) => ({
-                                ...previous,
-                                freeFlowQuickThresholdMinutes: quick,
-                                freeFlowMediumThresholdMinutes: Math.max(
-                                  quick + 1,
-                                  previous.freeFlowMediumThresholdMinutes || 10,
-                                ),
-                              }));
-                            }}
-                          />
-                          <span className="text-xs">min</span>
-                        </div>
-                      </label>
-                      <label className="space-y-1 text-sm">
-                        <span>Medium up to</span>
-                        <div className="flex items-center gap-1">
-                          <Input
-                            type="number"
-                            min={settings.freeFlowQuickThresholdMinutes + 1}
-                            max="480"
-                            value={settings.freeFlowMediumThresholdMinutes}
-                            onChange={(event) =>
-                              setSettings((previous) => ({
-                                ...previous,
-                                freeFlowMediumThresholdMinutes: Math.max(
-                                  (previous.freeFlowQuickThresholdMinutes || 2) +
-                                    1,
-                                  Math.min(
-                                    480,
-                                    Number(event.target.value) || 10,
-                                  ),
-                                ),
-                              }))
-                            }
-                          />
-                          <span className="text-xs">min</span>
-                        </div>
-                      </label>
-                    </div>
-                    <p className="text-[11px] text-slate-500">
-                      Hybrid adds 15/30/60 seconds plus a gentle capped streak
-                      bonus to the normal work-time reward.
-                    </p>
-                  </div>
-                  <Separator />
-                  {/* Flowmodoro Enhancements */}
-                  <div className="space-y-2">
-                    <Label className="font-semibold">Flowmodoro</Label>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm">Off-screen catch-up</span>
+                      <Label htmlFor="show-allocation-percentage">
+                        Show allocation %
+                      </Label>
                       <Switch
-                        checked={settings.flowmodoroAutoCatchup}
+                        id="show-allocation-percentage"
+                        checked={settings.showAllocationPercentage}
                         onCheckedChange={(checked) =>
-                          setSettings((p) => ({
-                            ...p,
-                            flowmodoroAutoCatchup: checked,
-                          }))
-                        }
-                      />
-                    </div>
-                    <p className="text-xs text-slate-500 pl-1">
-                      Automatically earn missed rest time when you return after
-                      the timer was running in the background.
-                    </p>
-                    <div className="flex items-center justify-between pl-4">
-                      <span className="text-sm">
-                        Smooth large catch-up awards
-                      </span>
-                      <Switch
-                        checked={settings.flowmodoroSmoothCatchup}
-                        disabled={!settings.flowmodoroAutoCatchup}
-                        onCheckedChange={(checked) =>
-                          setSettings((p) => ({
-                            ...p,
-                            flowmodoroSmoothCatchup: checked,
-                          }))
-                        }
-                      />
-                    </div>
-                    <p className="text-xs text-slate-500 pl-5">
-                      When enabled, big catch-up deposits trickle in over
-                      several ticks instead of hitting the reserve all at once.
-                    </p>
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setFlowmodoroState((prev) => ({
+                          setSettings((prev) => ({
                             ...prev,
-                            availableRestTime: 0,
-                            availableRestMinutes: 0,
-                            accumulatedFractionalTime: 0,
-                            pendingCatchup: 0,
+                            showAllocationPercentage: checked,
                           }))
                         }
-                      >
-                        Reset Reserve
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setFlowmodoroState((prev) => ({
-                            availableRestTime: 0,
-                            totalEarnedToday: 0,
-                            cycleCount: 0,
-                            isOnBreak: false,
-                            breakTimeRemaining: 0,
-                            initialBreakDuration: 0,
-                            lastResetDate: new Date().toDateString(),
-                            accumulatedFractionalTime: 0,
-                          }))
-                        }
-                      >
-                        Full Flow Reset
-                      </Button>
+                      />
                     </div>
-                  </div>
-                  <Separator />
-                  {/* Segment Visualization */}
-                  <div className="space-y-2">
-                    <Label className="font-semibold">
-                      Segment Visualization
-                    </Label>
+                    <Separator />
                     <div className="flex items-center justify-between">
-                      <span className="text-sm">Highlight current segment</span>
-                      <div className="flex gap-1">
-                        {["pulse", "bracket", "none"].map((opt) => (
+                      <Label htmlFor="show-progress">
+                        Show main progress bar
+                      </Label>
+                      <Switch
+                        id="show-progress"
+                        checked={settings.showMainProgress}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showMainProgress: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="show-overall">
+                        Show overall remaining time
+                      </Label>
+                      <Switch
+                        id="show-overall"
+                        checked={settings.showOverallTime}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showOverallTime: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="show-end">Show predicted end time</Label>
+                      <Switch
+                        id="show-end"
+                        checked={settings.showEndTime}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showEndTime: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="show-dual-end">
+                        Show Active/Session end
+                      </Label>
+                      <Switch
+                        id="show-dual-end"
+                        checked={settings.showDualEndTime}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showDualEndTime: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="show-session-report">
+                        Show end-of-session report
+                      </Label>
+                      <Switch
+                        id="show-session-report"
+                        checked={settings.showSessionEndReport}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showSessionEndReport: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="show-activity-timer">
+                        Show activity timer display
+                      </Label>
+                      <Switch
+                        id="show-activity-timer"
+                        checked={settings.showActivityTimer}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showActivityTimer: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="show-activity-progress">
+                        Show individual activity progress
+                      </Label>
+                      <Switch
+                        id="show-activity-progress"
+                        checked={settings.showActivityProgress}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showActivityProgress: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Show Activity Time</Label>
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={settings.showActivityTime}
+                          onCheckedChange={(checked) =>
+                            setSettings((s) => ({
+                              ...s,
+                              showActivityTime: checked,
+                            }))
+                          }
+                          id="show-activity-time-toggle"
+                        />
+                        <span className="text-sm">
+                          Show time remaining for each activity
+                        </span>
+                      </div>
+                    </div>
+                    {settings.showActivityProgress && (
+                      <div className="flex items-center justify-between pl-4">
+                        <Label>Progress bar style</Label>
+                        <div className="flex items-center gap-4">
                           <Button
-                            key={opt}
                             size="sm"
                             variant={
-                              settings.segmentHighlightStyle === opt
+                              settings.activityProgressType === "fill"
                                 ? "default"
                                 : "outline"
                             }
                             onClick={() =>
-                              setSettings((p) => ({
-                                ...p,
-                                segmentHighlightStyle: opt,
+                              setSettings((prev) => ({
+                                ...prev,
+                                activityProgressType: "fill",
                               }))
                             }
                           >
-                            {opt}
+                            Fill Up
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={
+                              settings.activityProgressType === "drain"
+                                ? "default"
+                                : "outline"
+                            }
+                            onClick={() =>
+                              setSettings((prev) => ({
+                                ...prev,
+                                activityProgressType: "drain",
+                              }))
+                            }
+                          >
+                            Drain Down
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {/* Tag Chips Settings */}
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="show-tag-chips">Show tag chips</Label>
+                      <Switch
+                        id="show-tag-chips"
+                        checked={settings.showTagChips}
+                        onCheckedChange={(checked) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            showTagChips: checked,
+                          }))
+                        }
+                      />
+                    </div>
+                    {settings.showTagChips && (
+                      <div className="flex items-center justify-between pl-4">
+                        <Label htmlFor="compact-tag-chips">
+                          Compact tag chips
+                        </Label>
+                        <Switch
+                          id="compact-tag-chips"
+                          checked={settings.compactTagChips}
+                          onCheckedChange={(checked) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              compactTagChips: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    )}
+                    <Separator />
+                    <div className="space-y-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
+                      <div>
+                        <Label className="font-semibold text-violet-900">
+                          Free Flow rewards
+                        </Label>
+                        <p className="text-xs text-slate-600">
+                          Class suggestions use active time; you always confirm
+                          Quick, Medium, or Hard.
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1">
+                        {[
+                          ["time", "Time"],
+                          ["hybrid", "Hybrid"],
+                          ["completion", "Completion"],
+                        ].map(([value, label]) => (
+                          <Button
+                            key={value}
+                            size="sm"
+                            variant={
+                              settings.freeFlowRewardMode === value
+                                ? "default"
+                                : "outline"
+                            }
+                            onClick={() =>
+                              setSettings((previous) => ({
+                                ...previous,
+                                freeFlowRewardMode: value,
+                              }))
+                            }
+                          >
+                            {label}
                           </Button>
                         ))}
                       </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className="space-y-1 text-sm">
+                          <span>Quick up to</span>
+                          <div className="flex items-center gap-1">
+                            <Input
+                              type="number"
+                              min="1"
+                              max="120"
+                              value={settings.freeFlowQuickThresholdMinutes}
+                              onChange={(event) => {
+                                const quick = Math.max(
+                                  1,
+                                  Math.min(
+                                    120,
+                                    Number(event.target.value) || 2,
+                                  ),
+                                );
+                                setSettings((previous) => ({
+                                  ...previous,
+                                  freeFlowQuickThresholdMinutes: quick,
+                                  freeFlowMediumThresholdMinutes: Math.max(
+                                    quick + 1,
+                                    previous.freeFlowMediumThresholdMinutes ||
+                                      10,
+                                  ),
+                                }));
+                              }}
+                            />
+                            <span className="text-xs">min</span>
+                          </div>
+                        </label>
+                        <label className="space-y-1 text-sm">
+                          <span>Medium up to</span>
+                          <div className="flex items-center gap-1">
+                            <Input
+                              type="number"
+                              min={settings.freeFlowQuickThresholdMinutes + 1}
+                              max="480"
+                              value={settings.freeFlowMediumThresholdMinutes}
+                              onChange={(event) =>
+                                setSettings((previous) => ({
+                                  ...previous,
+                                  freeFlowMediumThresholdMinutes: Math.max(
+                                    (previous.freeFlowQuickThresholdMinutes ||
+                                      2) + 1,
+                                    Math.min(
+                                      480,
+                                      Number(event.target.value) || 10,
+                                    ),
+                                  ),
+                                }))
+                              }
+                            />
+                            <span className="text-xs">min</span>
+                          </div>
+                        </label>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Hybrid adds 15/30/60 seconds plus a gentle capped streak
+                        bonus to the normal work-time reward.
+                      </p>
                     </div>
+                    <Separator />
+                    {/* Flowmodoro Enhancements */}
+                    <div className="space-y-2">
+                      <Label className="font-semibold">Flowmodoro</Label>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Off-screen catch-up</span>
+                        <Switch
+                          checked={settings.flowmodoroAutoCatchup}
+                          onCheckedChange={(checked) =>
+                            setSettings((p) => ({
+                              ...p,
+                              flowmodoroAutoCatchup: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 pl-1">
+                        Automatically earn missed rest time when you return
+                        after the timer was running in the background.
+                      </p>
+                      <div className="flex items-center justify-between pl-4">
+                        <span className="text-sm">
+                          Smooth large catch-up awards
+                        </span>
+                        <Switch
+                          checked={settings.flowmodoroSmoothCatchup}
+                          disabled={!settings.flowmodoroAutoCatchup}
+                          onCheckedChange={(checked) =>
+                            setSettings((p) => ({
+                              ...p,
+                              flowmodoroSmoothCatchup: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500 pl-5">
+                        When enabled, big catch-up deposits trickle in over
+                        several ticks instead of hitting the reserve all at
+                        once.
+                      </p>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            setFlowmodoroState((prev) => ({
+                              ...prev,
+                              availableRestTime: 0,
+                              availableRestMinutes: 0,
+                              accumulatedFractionalTime: 0,
+                              pendingCatchup: 0,
+                            }))
+                          }
+                        >
+                          Reset Reserve
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            setFlowmodoroState((prev) => ({
+                              availableRestTime: 0,
+                              totalEarnedToday: 0,
+                              cycleCount: 0,
+                              isOnBreak: false,
+                              breakTimeRemaining: 0,
+                              initialBreakDuration: 0,
+                              lastResetDate: new Date().toDateString(),
+                              accumulatedFractionalTime: 0,
+                            }))
+                          }
+                        >
+                          Full Flow Reset
+                        </Button>
+                      </div>
+                    </div>
+                    <Separator />
+                    {/* Segment Visualization */}
+                    <div className="space-y-2">
+                      <Label className="font-semibold">
+                        Segment Visualization
+                      </Label>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">
+                          Highlight current segment
+                        </span>
+                        <div className="flex gap-1">
+                          {["pulse", "bracket", "none"].map((opt) => (
+                            <Button
+                              key={opt}
+                              size="sm"
+                              variant={
+                                settings.segmentHighlightStyle === opt
+                                  ? "default"
+                                  : "outline"
+                              }
+                              onClick={() =>
+                                setSettings((p) => ({
+                                  ...p,
+                                  segmentHighlightStyle: opt,
+                                }))
+                              }
+                            >
+                              {opt}
+                            </Button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">
+                          Completed segment stripes
+                        </span>
+                        <Switch
+                          checked={settings.segmentShowCompletedStripes}
+                          onCheckedChange={(checked) =>
+                            setSettings((p) => ({
+                              ...p,
+                              segmentShowCompletedStripes: checked,
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+                    <Separator />
                     <div className="flex items-center justify-between">
-                      <span className="text-sm">Completed segment stripes</span>
+                      <Label htmlFor="drag-placeholders">
+                        Show drag placeholders
+                      </Label>
                       <Switch
-                        checked={settings.segmentShowCompletedStripes}
+                        id="drag-placeholders"
+                        checked={settings.showDragPlaceholders}
                         onCheckedChange={(checked) =>
                           setSettings((p) => ({
                             ...p,
-                            segmentShowCompletedStripes: checked,
+                            showDragPlaceholders: checked,
                           }))
                         }
                       />
                     </div>
-                  </div>
-                  <Separator />
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="drag-placeholders">
-                      Show drag placeholders
-                    </Label>
-                    <Switch
-                      id="drag-placeholders"
-                      checked={settings.showDragPlaceholders}
-                      onCheckedChange={(checked) =>
-                        setSettings((p) => ({
-                          ...p,
-                          showDragPlaceholders: checked,
-                        }))
-                      }
-                    />
-                  </div>
-                  <Separator />
-                  <div className="space-y-2">
-                    <Label>Mobile Zoom Level</Label>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.mobileZoomLevel === "compact"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            mobileZoomLevel: "compact",
-                          }))
-                        }
-                      >
-                        Compact
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.mobileZoomLevel === "normal"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            mobileZoomLevel: "normal",
-                          }))
-                        }
-                      >
-                        Normal
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={
-                          settings.mobileZoomLevel === "large"
-                            ? "default"
-                            : "outline"
-                        }
-                        onClick={() =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            mobileZoomLevel: "large",
-                          }))
-                        }
-                      >
-                        Large
-                      </Button>
-                    </div>
-                    <p className="text-xs text-gray-500">
-                      Adjust interface size for better mobile experience
-                    </p>
-                  </div>
-                  <Separator />
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <Label className="text-base font-semibold text-purple-700">
-                          Flowmodoro Rest Timer
-                        </Label>
-                        <p className="text-sm text-gray-600">
-                          Automatically earn rest time while working
-                        </p>
+                    <Separator />
+                    <div className="space-y-2">
+                      <Label>Mobile Zoom Level</Label>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.mobileZoomLevel === "compact"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              mobileZoomLevel: "compact",
+                            }))
+                          }
+                        >
+                          Compact
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.mobileZoomLevel === "normal"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              mobileZoomLevel: "normal",
+                            }))
+                          }
+                        >
+                          Normal
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={
+                            settings.mobileZoomLevel === "large"
+                              ? "default"
+                              : "outline"
+                          }
+                          onClick={() =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              mobileZoomLevel: "large",
+                            }))
+                          }
+                        >
+                          Large
+                        </Button>
                       </div>
-                      <Switch
-                        id="flowmodoro-enabled"
-                        checked={settings.flowmodoroEnabled}
-                        onCheckedChange={(checked) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            flowmodoroEnabled: checked,
-                          }))
-                        }
-                      />
+                      <p className="text-xs text-gray-500">
+                        Adjust interface size for better mobile experience
+                      </p>
                     </div>
+                    <Separator />
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <Label className="text-base font-semibold text-purple-700">
+                            Flowmodoro Rest Timer
+                          </Label>
+                          <p className="text-sm text-gray-600">
+                            Automatically earn rest time while working
+                          </p>
+                        </div>
+                        <Switch
+                          id="flowmodoro-enabled"
+                          checked={settings.flowmodoroEnabled}
+                          onCheckedChange={(checked) =>
+                            setSettings((prev) => ({
+                              ...prev,
+                              flowmodoroEnabled: checked,
+                            }))
+                          }
+                        />
+                      </div>
 
-                    {settings.flowmodoroEnabled && (
-                      <div className="pl-4 space-y-3 border-l-2 border-purple-200">
-                        <div className="grid grid-cols-1 gap-4">
-                          <div className="space-y-1">
-                            <Label>Work:Rest Ratio</Label>
-                            <div className="flex items-center space-x-2">
-                              <Input
-                                type="number"
-                                min="1"
-                                max="60"
-                                value={settings.flowmodoroRatio}
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  if (value === "") {
-                                    setSettings((prev) => ({
-                                      ...prev,
-                                      flowmodoroRatio: 5,
-                                    }));
-                                  } else {
+                      {settings.flowmodoroEnabled && (
+                        <div className="pl-4 space-y-3 border-l-2 border-purple-200">
+                          <div className="grid grid-cols-1 gap-4">
+                            <div className="space-y-1">
+                              <Label>Work:Rest Ratio</Label>
+                              <div className="flex items-center space-x-2">
+                                <Input
+                                  type="number"
+                                  min="1"
+                                  max="60"
+                                  value={settings.flowmodoroRatio}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    if (value === "") {
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroRatio: 5,
+                                      }));
+                                    } else {
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroRatio: Math.max(
+                                          1,
+                                          Math.min(60, Number(value) || 5),
+                                        ),
+                                      }));
+                                    }
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = Number(e.target.value) || 5;
                                     setSettings((prev) => ({
                                       ...prev,
                                       flowmodoroRatio: Math.max(
                                         1,
-                                        Math.min(60, Number(value) || 5),
+                                        Math.min(60, value),
                                       ),
                                     }));
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  const value = Number(e.target.value) || 5;
-                                  setSettings((prev) => ({
-                                    ...prev,
-                                    flowmodoroRatio: Math.max(
-                                      1,
-                                      Math.min(60, value),
-                                    ),
-                                  }));
-                                }}
-                                className="w-16"
-                              />
-                              <span className="text-sm text-gray-600">
-                                :1 (work:rest)
-                              </span>
+                                  }}
+                                  className="w-16"
+                                />
+                                <span className="text-sm text-gray-600">
+                                  :1 (work:rest)
+                                </span>
+                              </div>
                             </div>
-                          </div>
 
-                          <div className="space-y-1">
-                            <Label>Max Progress Time</Label>
-                            <div className="flex items-center space-x-2">
-                              <Input
-                                type="number"
-                                min="10"
-                                max="120"
-                                value={settings.flowmodoroMaxProgressMinutes}
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  if (value === "") {
-                                    setSettings((prev) => ({
-                                      ...prev,
-                                      flowmodoroMaxProgressMinutes: 30,
-                                    }));
-                                  } else {
+                            <div className="space-y-1">
+                              <Label>Max Progress Time</Label>
+                              <div className="flex items-center space-x-2">
+                                <Input
+                                  type="number"
+                                  min="10"
+                                  max="120"
+                                  value={settings.flowmodoroMaxProgressMinutes}
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    if (value === "") {
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroMaxProgressMinutes: 30,
+                                      }));
+                                    } else {
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroMaxProgressMinutes: Math.max(
+                                          10,
+                                          Math.min(120, Number(value) || 30),
+                                        ),
+                                      }));
+                                    }
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = Number(e.target.value) || 30;
                                     setSettings((prev) => ({
                                       ...prev,
                                       flowmodoroMaxProgressMinutes: Math.max(
                                         10,
-                                        Math.min(120, Number(value) || 30),
+                                        Math.min(120, value),
                                       ),
                                     }));
-                                  }
-                                }}
-                                onBlur={(e) => {
-                                  const value = Number(e.target.value) || 30;
+                                  }}
+                                  className="w-16"
+                                />
+                                <span className="text-sm text-gray-600">
+                                  minutes (time for progress bar to reach 100%)
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">
+                                Controls when dynamic scaling transitions from
+                                configured ratio to 1:1. Longer tasks benefit
+                                from higher values.
+                              </p>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <Label>Show Progress Bar</Label>
+                              <Switch
+                                id="flowmodoro-show-progress"
+                                checked={settings.flowmodoroShowProgress}
+                                onCheckedChange={(checked) =>
                                   setSettings((prev) => ({
                                     ...prev,
-                                    flowmodoroMaxProgressMinutes: Math.max(
-                                      10,
-                                      Math.min(120, value),
-                                    ),
-                                  }));
-                                }}
-                                className="w-16"
+                                    flowmodoroShowProgress: checked,
+                                  }))
+                                }
                               />
-                              <span className="text-sm text-gray-600">
-                                minutes (time for progress bar to reach 100%)
-                              </span>
                             </div>
-                            <p className="text-xs text-gray-500 mt-1">
-                              Controls when dynamic scaling transitions from
-                              configured ratio to 1:1. Longer tasks benefit from
-                              higher values.
-                            </p>
-                          </div>
 
-                          <div className="flex items-center justify-between">
-                            <Label>Show Progress Bar</Label>
-                            <Switch
-                              id="flowmodoro-show-progress"
-                              checked={settings.flowmodoroShowProgress}
-                              onCheckedChange={(checked) =>
-                                setSettings((prev) => ({
-                                  ...prev,
-                                  flowmodoroShowProgress: checked,
-                                }))
-                              }
-                            />
-                          </div>
+                            {settings.flowmodoroShowProgress && (
+                              <div className="space-y-2">
+                                <Label>Progress Bar Style</Label>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant={
+                                      settings.flowmodoroProgressType === "fill"
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    onClick={() =>
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroProgressType: "fill",
+                                      }))
+                                    }
+                                  >
+                                    Fill Up
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant={
+                                      settings.flowmodoroProgressType ===
+                                      "drain"
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    onClick={() =>
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroProgressType: "drain",
+                                      }))
+                                    }
+                                  >
+                                    Drain Down
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
 
-                          {settings.flowmodoroShowProgress && (
                             <div className="space-y-2">
-                              <Label>Progress Bar Style</Label>
+                              <Label>Flowmodoro Mode</Label>
                               <div className="flex items-center gap-2">
                                 <Button
                                   size="sm"
                                   variant={
-                                    settings.flowmodoroProgressType === "fill"
+                                    settings.flowmodoroMode === "drain"
                                       ? "default"
                                       : "outline"
                                   }
                                   onClick={() =>
                                     setSettings((prev) => ({
                                       ...prev,
-                                      flowmodoroProgressType: "fill",
+                                      flowmodoroMode: "drain",
                                     }))
                                   }
                                 >
-                                  Fill Up
+                                  In-session drain
                                 </Button>
                                 <Button
                                   size="sm"
                                   variant={
-                                    settings.flowmodoroProgressType === "drain"
+                                    settings.flowmodoroMode === "postpone"
                                       ? "default"
                                       : "outline"
                                   }
                                   onClick={() =>
                                     setSettings((prev) => ({
                                       ...prev,
-                                      flowmodoroProgressType: "drain",
+                                      flowmodoroMode: "postpone",
                                     }))
                                   }
                                 >
-                                  Drain Down
+                                  Postpone during break
                                 </Button>
                               </div>
+                              <p className="text-xs text-gray-500">
+                                Drain: activities keep counting down during
+                                breaks. Postpone: pause draining while on a
+                                break.
+                              </p>
                             </div>
-                          )}
 
-                          <div className="space-y-2">
-                            <Label>Flowmodoro Mode</Label>
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant={
-                                  settings.flowmodoroMode === "drain"
-                                    ? "default"
-                                    : "outline"
-                                }
-                                onClick={() =>
-                                  setSettings((prev) => ({
-                                    ...prev,
-                                    flowmodoroMode: "drain",
-                                  }))
-                                }
-                              >
-                                In-session drain
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant={
-                                  settings.flowmodoroMode === "postpone"
-                                    ? "default"
-                                    : "outline"
-                                }
-                                onClick={() =>
-                                  setSettings((prev) => ({
-                                    ...prev,
-                                    flowmodoroMode: "postpone",
-                                  }))
-                                }
-                              >
-                                Postpone during break
-                              </Button>
-                            </div>
-                            <p className="text-xs text-gray-500">
-                              Drain: activities keep counting down during
-                              breaks. Postpone: pause draining while on a break.
-                            </p>
-                          </div>
-
-                          <div className="space-y-3 pt-2">
-                            <Label className="font-medium">
-                              Pseudo Activity Segment
-                            </Label>
-                            <div className="flex items-center justify-between">
-                              <div className="pr-4">
-                                <p className="text-sm text-gray-700">
-                                  Show Flowmodoro as its own segment
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  Appears only in drain mode; reserves visual
-                                  capacity.
-                                </p>
+                            <div className="space-y-3 pt-2">
+                              <Label className="font-medium">
+                                Pseudo Activity Segment
+                              </Label>
+                              <div className="flex items-center justify-between">
+                                <div className="pr-4">
+                                  <p className="text-sm text-gray-700">
+                                    Show Flowmodoro as its own segment
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    Appears only in drain mode; reserves visual
+                                    capacity.
+                                  </p>
+                                </div>
+                                <Switch
+                                  id="flowmodoro-show-as-activity"
+                                  checked={settings.flowmodoroShowAsActivity}
+                                  onCheckedChange={(checked) =>
+                                    setSettings((p) => ({
+                                      ...p,
+                                      flowmodoroShowAsActivity: checked,
+                                    }))
+                                  }
+                                />
                               </div>
-                              <Switch
-                                id="flowmodoro-show-as-activity"
-                                checked={settings.flowmodoroShowAsActivity}
-                                onCheckedChange={(checked) =>
-                                  setSettings((p) => ({
-                                    ...p,
-                                    flowmodoroShowAsActivity: checked,
-                                  }))
-                                }
-                              />
-                            </div>
-                            {settings.flowmodoroShowAsActivity && (
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <div className="space-y-1">
-                                  <Label className="text-sm">
-                                    Quick Break Capacity
-                                  </Label>
-                                  <div className="flex items-center gap-2">
-                                    <Input
-                                      type="number"
-                                      min={1}
-                                      max={240}
-                                      value={
-                                        settings.flowmodoroSessionActivityMinutes
-                                      }
-                                      onChange={(e) => {
-                                        const raw = e.target.value;
-                                        if (raw === "") {
-                                          setSettings((p) => ({
-                                            ...p,
-                                            flowmodoroSessionActivityMinutes: 10,
-                                          }));
-                                        } else {
+                              {settings.flowmodoroShowAsActivity && (
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                  <div className="space-y-1">
+                                    <Label className="text-sm">
+                                      Quick Break Capacity
+                                    </Label>
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        type="number"
+                                        min={1}
+                                        max={240}
+                                        value={
+                                          settings.flowmodoroSessionActivityMinutes
+                                        }
+                                        onChange={(e) => {
+                                          const raw = e.target.value;
+                                          if (raw === "") {
+                                            setSettings((p) => ({
+                                              ...p,
+                                              flowmodoroSessionActivityMinutes: 10,
+                                            }));
+                                          } else {
+                                            const v = Math.max(
+                                              1,
+                                              Math.min(240, Number(raw) || 10),
+                                            );
+                                            setSettings((p) => ({
+                                              ...p,
+                                              flowmodoroSessionActivityMinutes:
+                                                v,
+                                            }));
+                                          }
+                                        }}
+                                        onBlur={(e) => {
                                           const v = Math.max(
                                             1,
-                                            Math.min(240, Number(raw) || 10),
+                                            Math.min(
+                                              240,
+                                              Number(e.target.value) || 10,
+                                            ),
                                           );
                                           setSettings((p) => ({
                                             ...p,
                                             flowmodoroSessionActivityMinutes: v,
                                           }));
+                                        }}
+                                        className="w-24"
+                                      />
+                                      <span className="text-xs text-gray-500">
+                                        capacity
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label className="text-sm">
+                                      Segment Icon
+                                    </Label>
+                                    <div className="flex items-center gap-2">
+                                      <Input
+                                        type="text"
+                                        maxLength={3}
+                                        value={settings.flowmodoroIcon}
+                                        onChange={(e) =>
+                                          setSettings((p) => ({
+                                            ...p,
+                                            flowmodoroIcon:
+                                              e.target.value || "🌟",
+                                          }))
                                         }
-                                      }}
-                                      onBlur={(e) => {
-                                        const v = Math.max(
-                                          1,
-                                          Math.min(
-                                            240,
-                                            Number(e.target.value) || 10,
-                                          ),
-                                        );
-                                        setSettings((p) => ({
-                                          ...p,
-                                          flowmodoroSessionActivityMinutes: v,
-                                        }));
-                                      }}
+                                        className="w-20 text-center"
+                                      />
+                                      <div className="flex flex-wrap gap-1">
+                                        {[
+                                          "🌟",
+                                          "🔆",
+                                          "💠",
+                                          "🌀",
+                                          "⚡",
+                                          "🧠",
+                                          "☕",
+                                        ].map((ic) => (
+                                          <button
+                                            key={ic}
+                                            type="button"
+                                            onClick={() =>
+                                              setSettings((p) => ({
+                                                ...p,
+                                                flowmodoroIcon: ic,
+                                              }))
+                                            }
+                                            className={`h-7 w-7 rounded-md flex items-center justify-center border text-base hover:bg-purple-50 ${settings.flowmodoroIcon === ic ? "bg-purple-100 border-purple-400" : "border-gray-200"}`}
+                                            title={ic}
+                                          >
+                                            {ic}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <p className="text-xs text-gray-500">
+                                      Pick an emoji / symbol (1–2 chars).
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <Separator />
+
+                            <div className="space-y-3">
+                              <div>
+                                <Label className="font-medium text-violet-800">
+                                  Reward Bank
+                                </Label>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Reward earned above Quick Reserve capacity is
+                                  banked here. Available and scheduled Reward
+                                  Rest are one shared holding and never change
+                                  Predicted End.
+                                </p>
+                              </div>
+                              <label className="flex items-start gap-3 rounded-md border border-violet-200 bg-violet-50 p-3">
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5 h-4 w-4"
+                                  checked={Boolean(
+                                    settings.flowmodoroAutoScheduleBankedRest,
+                                  )}
+                                  onChange={(event) =>
+                                    setSettings((previous) => ({
+                                      ...previous,
+                                      flowmodoroAutoScheduleBankedRest:
+                                        event.target.checked,
+                                    }))
+                                  }
+                                />
+                                <span>
+                                  <span className="block text-sm font-medium text-violet-900">
+                                    Auto-fill Session Reward Rest
+                                  </span>
+                                  <span className="mt-1 block text-xs text-violet-700">
+                                    During Session setup, fill Reward Rest from
+                                    available Bank time up to its goal and
+                                    proportionally reduce non-starred countdown
+                                    tasks. The Session end stays unchanged.
+                                  </span>
+                                </span>
+                              </label>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                  <Label
+                                    htmlFor="flow-quick-cap"
+                                    className="text-sm"
+                                  >
+                                    Quick Reserve capacity
+                                  </Label>
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      id="flow-quick-cap"
+                                      type="number"
+                                      inputMode="numeric"
+                                      min={0}
+                                      max={1440}
+                                      value={
+                                        settings.flowmodoroQuickReserveMinutes
+                                      }
+                                      onChange={(event) =>
+                                        setSettings((previous) => ({
+                                          ...previous,
+                                          flowmodoroQuickReserveMinutes:
+                                            Math.max(
+                                              0,
+                                              Math.min(
+                                                1440,
+                                                Number(event.target.value) || 0,
+                                              ),
+                                            ),
+                                        }))
+                                      }
                                       className="w-24"
                                     />
                                     <span className="text-xs text-gray-500">
-                                      capacity
+                                      minutes
                                     </span>
                                   </div>
                                 </div>
                                 <div className="space-y-1">
-                                  <Label className="text-sm">
-                                    Segment Icon
+                                  <Label
+                                    htmlFor="flow-bank-goal"
+                                    className="text-sm"
+                                  >
+                                    Reward Bank goal
                                   </Label>
                                   <div className="flex items-center gap-2">
                                     <Input
-                                      type="text"
-                                      maxLength={3}
-                                      value={settings.flowmodoroIcon}
-                                      onChange={(e) =>
-                                        setSettings((p) => ({
-                                          ...p,
-                                          flowmodoroIcon:
-                                            e.target.value || "🌟",
-                                        }))
-                                      }
-                                      className="w-20 text-center"
-                                    />
-                                    <div className="flex flex-wrap gap-1">
-                                      {[
-                                        "🌟",
-                                        "🔆",
-                                        "💠",
-                                        "🌀",
-                                        "⚡",
-                                        "🧠",
-                                        "☕",
-                                      ].map((ic) => (
-                                        <button
-                                          key={ic}
-                                          type="button"
-                                          onClick={() =>
-                                            setSettings((p) => ({
-                                              ...p,
-                                              flowmodoroIcon: ic,
-                                            }))
-                                          }
-                                          className={`h-7 w-7 rounded-md flex items-center justify-center border text-base hover:bg-purple-50 ${settings.flowmodoroIcon === ic ? "bg-purple-100 border-purple-400" : "border-gray-200"}`}
-                                          title={ic}
-                                        >
-                                          {ic}
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                  <p className="text-xs text-gray-500">
-                                    Pick an emoji / symbol (1–2 chars).
-                                  </p>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-
-                          <Separator />
-
-                          <div className="space-y-3">
-                            <div>
-                              <Label className="font-medium text-violet-800">
-                                Reward Bank
-                              </Label>
-                              <p className="text-xs text-gray-500 mt-1">
-                                Reward earned above Quick Reserve capacity is
-                                banked here. Available and scheduled Reward Rest
-                                are one shared holding and never change
-                                Predicted End.
-                              </p>
-                            </div>
-                            <label className="flex items-start gap-3 rounded-md border border-violet-200 bg-violet-50 p-3">
-                              <input
-                                type="checkbox"
-                                className="mt-0.5 h-4 w-4"
-                                checked={Boolean(
-                                  settings.flowmodoroAutoScheduleBankedRest,
-                                )}
-                                onChange={(event) =>
-                                  setSettings((previous) => ({
-                                    ...previous,
-                                    flowmodoroAutoScheduleBankedRest:
-                                      event.target.checked,
-                                  }))
-                                }
-                              />
-                              <span>
-                                <span className="block text-sm font-medium text-violet-900">
-                                  Auto-fill Session Reward Rest
-                                </span>
-                                <span className="mt-1 block text-xs text-violet-700">
-                                  During Session setup, fill Reward Rest from
-                                  available Bank time up to its goal and
-                                  proportionally reduce non-starred countdown
-                                  tasks. The Session end stays unchanged.
-                                </span>
-                              </span>
-                            </label>
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <div className="space-y-1">
-                                <Label
-                                  htmlFor="flow-quick-cap"
-                                  className="text-sm"
-                                >
-                                  Quick Reserve capacity
-                                </Label>
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    id="flow-quick-cap"
-                                    type="number"
-                                    inputMode="numeric"
-                                    min={0}
-                                    max={1440}
-                                    value={
-                                      settings.flowmodoroQuickReserveMinutes
-                                    }
-                                    onChange={(event) =>
-                                      setSettings((previous) => ({
-                                        ...previous,
-                                        flowmodoroQuickReserveMinutes: Math.max(
-                                          0,
-                                          Math.min(
-                                            1440,
-                                            Number(event.target.value) || 0,
-                                          ),
-                                        ),
-                                      }))
-                                    }
-                                    className="w-24"
-                                  />
-                                  <span className="text-xs text-gray-500">
-                                    minutes
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="space-y-1">
-                                <Label
-                                  htmlFor="flow-bank-goal"
-                                  className="text-sm"
-                                >
-                                  Reward Bank goal
-                                </Label>
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    id="flow-bank-goal"
-                                    type="number"
-                                    inputMode="numeric"
-                                    min={0}
-                                    max={10080}
-                                    value={settings.flowmodoroBankGoalMinutes}
-                                    onChange={(event) =>
-                                      setSettings((previous) => ({
-                                        ...previous,
-                                        flowmodoroBankGoalMinutes: Math.max(
-                                          0,
-                                          Math.min(
-                                            10080,
-                                            Number(event.target.value) || 0,
-                                          ),
-                                        ),
-                                      }))
-                                    }
-                                    className="w-24"
-                                  />
-                                  <span className="text-xs text-gray-500">
-                                    minutes (0 = disabled)
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="space-y-1">
-                                <Label
-                                  htmlFor="flow-vault-max"
-                                  className="text-sm"
-                                >
-                                  Bank hard maximum
-                                </Label>
-                                <div className="flex items-center gap-2">
-                                  <Input
-                                    id="flow-vault-max"
-                                    type="number"
-                                    inputMode="numeric"
-                                    min={0}
-                                    max={10080}
-                                    value={
-                                      settings.flowmodoroRelaxationVaultMaxMinutes
-                                    }
-                                    onChange={(event) =>
-                                      setSettings((previous) => ({
-                                        ...previous,
-                                        flowmodoroRelaxationVaultMaxMinutes:
-                                          Math.max(
+                                      id="flow-bank-goal"
+                                      type="number"
+                                      inputMode="numeric"
+                                      min={0}
+                                      max={10080}
+                                      value={settings.flowmodoroBankGoalMinutes}
+                                      onChange={(event) =>
+                                        setSettings((previous) => ({
+                                          ...previous,
+                                          flowmodoroBankGoalMinutes: Math.max(
                                             0,
                                             Math.min(
                                               10080,
                                               Number(event.target.value) || 0,
                                             ),
                                           ),
+                                        }))
+                                      }
+                                      className="w-24"
+                                    />
+                                    <span className="text-xs text-gray-500">
+                                      minutes (0 = disabled)
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label
+                                    htmlFor="flow-vault-max"
+                                    className="text-sm"
+                                  >
+                                    Bank hard maximum
+                                  </Label>
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      id="flow-vault-max"
+                                      type="number"
+                                      inputMode="numeric"
+                                      min={0}
+                                      max={10080}
+                                      value={
+                                        settings.flowmodoroRelaxationVaultMaxMinutes
+                                      }
+                                      onChange={(event) =>
+                                        setSettings((previous) => ({
+                                          ...previous,
+                                          flowmodoroRelaxationVaultMaxMinutes:
+                                            Math.max(
+                                              0,
+                                              Math.min(
+                                                10080,
+                                                Number(event.target.value) || 0,
+                                              ),
+                                            ),
+                                        }))
+                                      }
+                                      className="w-24"
+                                    />
+                                    <span className="text-xs text-gray-500">
+                                      minutes (0 = unlimited)
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label
+                                    htmlFor="flow-vault-expiry"
+                                    className="text-sm"
+                                  >
+                                    Vault expiry
+                                  </Label>
+                                  <select
+                                    id="flow-vault-expiry"
+                                    value={
+                                      settings.flowmodoroRelaxationVaultExpiry
+                                    }
+                                    onChange={(event) =>
+                                      setSettings((previous) => ({
+                                        ...previous,
+                                        flowmodoroRelaxationVaultExpiry:
+                                          event.target.value,
                                       }))
                                     }
-                                    className="w-24"
-                                  />
-                                  <span className="text-xs text-gray-500">
-                                    minutes (0 = unlimited)
-                                  </span>
+                                    className="h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-sm"
+                                  >
+                                    <option value="never">Never</option>
+                                    <option value="daily">Daily</option>
+                                    <option value="weekly">Weekly</option>
+                                    <option value="monthly">Monthly</option>
+                                  </select>
                                 </div>
                               </div>
-                              <div className="space-y-1">
-                                <Label
-                                  htmlFor="flow-vault-expiry"
-                                  className="text-sm"
-                                >
-                                  Vault expiry
-                                </Label>
-                                <select
-                                  id="flow-vault-expiry"
-                                  value={
-                                    settings.flowmodoroRelaxationVaultExpiry
-                                  }
-                                  onChange={(event) =>
-                                    setSettings((previous) => ({
-                                      ...previous,
-                                      flowmodoroRelaxationVaultExpiry:
-                                        event.target.value,
-                                    }))
-                                  }
-                                  className="h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-sm"
-                                >
-                                  <option value="never">Never</option>
-                                  <option value="daily">Daily</option>
-                                  <option value="weekly">Weekly</option>
-                                  <option value="monthly">Monthly</option>
-                                </select>
+                              <div className="space-y-2">
+                                <Label className="text-sm">Bank display</Label>
+                                <div className="grid grid-cols-3 gap-2">
+                                  {(
+                                    [
+                                      ["split", "Total + split"],
+                                      ["available", "Available"],
+                                      ["mirrored", "Mirrored total"],
+                                    ] as const
+                                  ).map(([value, label]) => (
+                                    <Button
+                                      key={value}
+                                      size="sm"
+                                      variant={
+                                        settings.flowmodoroBankDisplayMode ===
+                                        value
+                                          ? "default"
+                                          : "outline"
+                                      }
+                                      className="h-11 px-2 text-xs"
+                                      onClick={() =>
+                                        setSettings((previous) => ({
+                                          ...previous,
+                                          flowmodoroBankDisplayMode: value,
+                                        }))
+                                      }
+                                    >
+                                      {label}
+                                    </Button>
+                                  ))}
+                                </div>
                               </div>
-                            </div>
-                            <div className="space-y-2">
-                              <Label className="text-sm">Bank display</Label>
-                              <div className="grid grid-cols-3 gap-2">
-                                {(
-                                  [
-                                    ["split", "Total + split"],
-                                    ["available", "Available"],
-                                    ["mirrored", "Mirrored total"],
-                                  ] as const
-                                ).map(([value, label]) => (
+                              <div className="space-y-2">
+                                <Label className="text-sm">
+                                  During a Vault Rest
+                                </Label>
+                                <div className="grid grid-cols-2 gap-2">
                                   <Button
-                                    key={value}
                                     size="sm"
                                     variant={
-                                      settings.flowmodoroBankDisplayMode ===
-                                      value
+                                      settings.flowmodoroRelaxationVaultMode ===
+                                      "drain"
                                         ? "default"
                                         : "outline"
                                     }
-                                    className="h-11 px-2 text-xs"
                                     onClick={() =>
                                       setSettings((previous) => ({
                                         ...previous,
-                                        flowmodoroBankDisplayMode: value,
+                                        flowmodoroRelaxationVaultMode: "drain",
                                       }))
                                     }
                                   >
-                                    {label}
+                                    Continue activities
                                   </Button>
-                                ))}
+                                  <Button
+                                    size="sm"
+                                    variant={
+                                      settings.flowmodoroRelaxationVaultMode ===
+                                      "postpone"
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    onClick={() =>
+                                      setSettings((previous) => ({
+                                        ...previous,
+                                        flowmodoroRelaxationVaultMode:
+                                          "postpone",
+                                      }))
+                                    }
+                                  >
+                                    Postpone activities
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between gap-3 rounded-md bg-violet-50 p-2">
+                                <span className="text-sm text-violet-800">
+                                  Bank total:{" "}
+                                  <strong>
+                                    {formatTime(rewardBank.totalSeconds)}
+                                  </strong>
+                                </span>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={rewardBank.totalSeconds <= 0}
+                                  onClick={() => {
+                                    if (
+                                      window.confirm(
+                                        "Reset the Reward Bank and remove scheduled Reward Rest? Remaining Session time will be restored to activities. Quick Reserve is not affected.",
+                                      )
+                                    )
+                                      resetRelaxationVault();
+                                  }}
+                                  className="text-red-600"
+                                >
+                                  Reset Bank
+                                </Button>
                               </div>
                             </div>
+
+                            <Separator />
+
                             <div className="space-y-2">
-                              <Label className="text-sm">
-                                During a Vault Rest
-                              </Label>
+                              <Label>Daily Reset Times</Label>
                               <div className="grid grid-cols-2 gap-2">
-                                <Button
-                                  size="sm"
-                                  variant={
-                                    settings.flowmodoroRelaxationVaultMode ===
-                                    "drain"
-                                      ? "default"
-                                      : "outline"
-                                  }
-                                  onClick={() =>
-                                    setSettings((previous) => ({
-                                      ...previous,
-                                      flowmodoroRelaxationVaultMode: "drain",
-                                    }))
-                                  }
-                                >
-                                  Continue activities
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant={
-                                    settings.flowmodoroRelaxationVaultMode ===
-                                    "postpone"
-                                      ? "default"
-                                      : "outline"
-                                  }
-                                  onClick={() =>
-                                    setSettings((previous) => ({
-                                      ...previous,
-                                      flowmodoroRelaxationVaultMode: "postpone",
-                                    }))
-                                  }
-                                >
-                                  Postpone activities
-                                </Button>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Start Time</Label>
+                                  <Input
+                                    type="time"
+                                    value={settings.flowmodoroResetStartTime}
+                                    onChange={(e) =>
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroResetStartTime:
+                                          e.target.value,
+                                      }))
+                                    }
+                                    className="text-sm"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">End Time</Label>
+                                  <Input
+                                    type="time"
+                                    value={settings.flowmodoroResetEndTime}
+                                    onChange={(e) =>
+                                      setSettings((prev) => ({
+                                        ...prev,
+                                        flowmodoroResetEndTime: e.target.value,
+                                      }))
+                                    }
+                                    className="text-sm"
+                                  />
+                                </div>
                               </div>
+                              <p className="text-xs text-gray-500">
+                                Quick Break time resets at these times. Vault
+                                expiry uses the start time.
+                              </p>
                             </div>
-                            <div className="flex items-center justify-between gap-3 rounded-md bg-violet-50 p-2">
-                              <span className="text-sm text-violet-800">
-                                Bank total:{" "}
-                                <strong>
-                                  {formatTime(rewardBank.totalSeconds)}
-                                </strong>
-                              </span>
+
+                            <div className="pt-2">
                               <Button
                                 size="sm"
                                 variant="outline"
-                                disabled={rewardBank.totalSeconds <= 0}
-                                onClick={() => {
-                                  if (
-                                    window.confirm(
-                                      "Reset the Reward Bank and remove scheduled Reward Rest? Remaining Session time will be restored to activities. Quick Reserve is not affected.",
-                                    )
-                                  )
-                                    resetRelaxationVault();
-                                }}
-                                className="text-red-600"
+                                onClick={resetFlowmodoroState}
+                                className="text-red-600 border-red-200 hover:bg-red-50"
                               >
-                                Reset Bank
+                                Reset Today's Quick Break Time
                               </Button>
                             </div>
                           </div>
-
-                          <Separator />
-
-                          <div className="space-y-2">
-                            <Label>Daily Reset Times</Label>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div className="space-y-1">
-                                <Label className="text-xs">Start Time</Label>
-                                <Input
-                                  type="time"
-                                  value={settings.flowmodoroResetStartTime}
-                                  onChange={(e) =>
-                                    setSettings((prev) => ({
-                                      ...prev,
-                                      flowmodoroResetStartTime: e.target.value,
-                                    }))
-                                  }
-                                  className="text-sm"
-                                />
-                              </div>
-                              <div className="space-y-1">
-                                <Label className="text-xs">End Time</Label>
-                                <Input
-                                  type="time"
-                                  value={settings.flowmodoroResetEndTime}
-                                  onChange={(e) =>
-                                    setSettings((prev) => ({
-                                      ...prev,
-                                      flowmodoroResetEndTime: e.target.value,
-                                    }))
-                                  }
-                                  className="text-sm"
-                                />
-                              </div>
-                            </div>
-                            <p className="text-xs text-gray-500">
-                              Quick Break time resets at these times. Vault
-                              expiry uses the start time.
-                            </p>
-                          </div>
-
-                          <div className="pt-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={resetFlowmodoroState}
-                              className="text-red-600 border-red-200 hover:bg-red-50"
-                            >
-                              Reset Today's Quick Break Time
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <Separator />
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <Label className="text-base font-semibold text-green-700">
-                          Daily Mode Settings
-                        </Label>
-                        <p className="text-sm text-gray-600">
-                          Configure how daily activities are displayed
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="pl-4 space-y-3 border-l-2 border-green-200">
-                      <div className="flex items-center justify-between py-2">
-                        <div>
-                          <Label className="text-sm font-medium">
-                            Show Activity Progress Bars
-                          </Label>
-                          <p className="text-xs text-gray-500 mt-1">
-                            Display progress indicators on activity cards
-                          </p>
-                        </div>
-                        <Switch
-                          id="daily-show-activity-progress"
-                          checked={settings.dailyShowActivityProgress}
-                          onCheckedChange={(checked) =>
-                            setSettings((prev) => ({
-                              ...prev,
-                              dailyShowActivityProgress: checked,
-                            }))
-                          }
-                        />
-                      </div>
-
-                      {settings.dailyShowActivityProgress && (
-                        <div className="space-y-2">
-                          <Label className="text-sm font-medium">
-                            Progress Bar Style
-                          </Label>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              variant={
-                                settings.dailyActivityProgressType === "fill"
-                                  ? "default"
-                                  : "outline"
-                              }
-                              onClick={() =>
-                                setSettings((prev) => ({
-                                  ...prev,
-                                  dailyActivityProgressType: "fill",
-                                }))
-                              }
-                              className="flex-1 h-9 text-sm"
-                              style={{ touchAction: "manipulation" }}
-                            >
-                              📈 Fill Up
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant={
-                                settings.dailyActivityProgressType === "drain"
-                                  ? "default"
-                                  : "outline"
-                              }
-                              onClick={() =>
-                                setSettings((prev) => ({
-                                  ...prev,
-                                  dailyActivityProgressType: "drain",
-                                }))
-                              }
-                              className="flex-1 h-9 text-sm"
-                              style={{ touchAction: "manipulation" }}
-                            >
-                              📉 Drain Down
-                            </Button>
-                          </div>
-                          <p className="text-xs text-gray-500 leading-relaxed">
-                            <strong>Fill Up:</strong> Progress bar fills as time
-                            is spent.
-                            <br />
-                            <strong>Drain Down:</strong> Progress bar drains
-                            showing time remaining.
-                          </p>
                         </div>
                       )}
-
-                      {/* Daily progress animation setting */}
-                      <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    </div>
+                    <Separator />
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
                         <div>
-                          <Label className="text-sm font-medium">
-                            Daily Progress Animation
+                          <Label className="text-base font-semibold text-green-700">
+                            Daily Mode Settings
                           </Label>
-                          <p className="text-xs text-gray-500 mt-1">
-                            Smoothly animate progress fills while keeping task
-                            segment sizes fixed
+                          <p className="text-sm text-gray-600">
+                            Configure how daily activities are displayed
                           </p>
                         </div>
-                        <Switch
-                          id="daily-timeline-animation"
-                          checked={settings.dailyTimelineAnimation}
-                          onCheckedChange={(checked) =>
-                            setSettings((prev) => ({
-                              ...prev,
-                              dailyTimelineAnimation: checked,
-                            }))
-                          }
-                        />
                       </div>
 
-                      {/* Elapsed Day Overlay Setting */}
-                      <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                        <div>
-                          <Label className="text-sm font-medium">
-                            Elapsed Day Shading
-                          </Label>
-                          <p className="text-xs text-gray-500 mt-1">
-                            Subtle darker segment shows the elapsed portion of
-                            the day (full-day view)
-                          </p>
+                      <div className="pl-4 space-y-3 border-l-2 border-green-200">
+                        <div className="flex items-center justify-between py-2">
+                          <div>
+                            <Label className="text-sm font-medium">
+                              Show Activity Progress Bars
+                            </Label>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Display progress indicators on activity cards
+                            </p>
+                          </div>
+                          <Switch
+                            id="daily-show-activity-progress"
+                            checked={settings.dailyShowActivityProgress}
+                            onCheckedChange={(checked) =>
+                              setSettings((prev) => ({
+                                ...prev,
+                                dailyShowActivityProgress: checked,
+                              }))
+                            }
+                          />
                         </div>
-                        <Switch
-                          id="daily-elapsed-overlay"
-                          checked={settings.dailyShowElapsedDayOverlay}
-                          onCheckedChange={(checked) =>
-                            setSettings((prev) => ({
-                              ...prev,
-                              dailyShowElapsedDayOverlay: checked,
-                            }))
-                          }
-                        />
-                      </div>
 
-                      {/* Time Window Filtering Toggle */}
-                      <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                        <div>
-                          <Label className="text-sm font-medium">
-                            Filter by Time Windows
-                          </Label>
-                          <p className="text-xs text-gray-500 mt-1">
-                            When on, only activities within their time windows
-                            appear in scheduled views
-                          </p>
+                        {settings.dailyShowActivityProgress && (
+                          <div className="space-y-2">
+                            <Label className="text-sm font-medium">
+                              Progress Bar Style
+                            </Label>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant={
+                                  settings.dailyActivityProgressType === "fill"
+                                    ? "default"
+                                    : "outline"
+                                }
+                                onClick={() =>
+                                  setSettings((prev) => ({
+                                    ...prev,
+                                    dailyActivityProgressType: "fill",
+                                  }))
+                                }
+                                className="flex-1 h-9 text-sm"
+                                style={{ touchAction: "manipulation" }}
+                              >
+                                📈 Fill Up
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant={
+                                  settings.dailyActivityProgressType === "drain"
+                                    ? "default"
+                                    : "outline"
+                                }
+                                onClick={() =>
+                                  setSettings((prev) => ({
+                                    ...prev,
+                                    dailyActivityProgressType: "drain",
+                                  }))
+                                }
+                                className="flex-1 h-9 text-sm"
+                                style={{ touchAction: "manipulation" }}
+                              >
+                                📉 Drain Down
+                              </Button>
+                            </div>
+                            <p className="text-xs text-gray-500 leading-relaxed">
+                              <strong>Fill Up:</strong> Progress bar fills as
+                              time is spent.
+                              <br />
+                              <strong>Drain Down:</strong> Progress bar drains
+                              showing time remaining.
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Daily progress animation setting */}
+                        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                          <div>
+                            <Label className="text-sm font-medium">
+                              Daily Progress Animation
+                            </Label>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Smoothly animate progress fills while keeping task
+                              segment sizes fixed
+                            </p>
+                          </div>
+                          <Switch
+                            id="daily-timeline-animation"
+                            checked={settings.dailyTimelineAnimation}
+                            onCheckedChange={(checked) =>
+                              setSettings((prev) => ({
+                                ...prev,
+                                dailyTimelineAnimation: checked,
+                              }))
+                            }
+                          />
                         </div>
-                        <Switch
-                          id="enable-time-window-filtering"
-                          checked={settings.enableTimeWindowFiltering}
-                          onCheckedChange={(checked) =>
-                            setSettings((prev) => ({
-                              ...prev,
-                              enableTimeWindowFiltering: checked,
-                            }))
-                          }
-                        />
+
+                        {/* Elapsed Day Overlay Setting */}
+                        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                          <div>
+                            <Label className="text-sm font-medium">
+                              Elapsed Day Shading
+                            </Label>
+                            <p className="text-xs text-gray-500 mt-1">
+                              Subtle darker segment shows the elapsed portion of
+                              the day (full-day view)
+                            </p>
+                          </div>
+                          <Switch
+                            id="daily-elapsed-overlay"
+                            checked={settings.dailyShowElapsedDayOverlay}
+                            onCheckedChange={(checked) =>
+                              setSettings((prev) => ({
+                                ...prev,
+                                dailyShowElapsedDayOverlay: checked,
+                              }))
+                            }
+                          />
+                        </div>
+
+                        {/* Time Window Filtering Toggle */}
+                        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                          <div>
+                            <Label className="text-sm font-medium">
+                              Filter by Time Windows
+                            </Label>
+                            <p className="text-xs text-gray-500 mt-1">
+                              When on, only activities within their time windows
+                              appear in scheduled views
+                            </p>
+                          </div>
+                          <Switch
+                            id="enable-time-window-filtering"
+                            checked={settings.enableTimeWindowFiltering}
+                            onCheckedChange={(checked) =>
+                              setSettings((prev) => ({
+                                ...prev,
+                                enableTimeWindowFiltering: checked,
+                              }))
+                            }
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -17917,7 +18334,7 @@ export default function App() {
               </Card>
             )}
 
-            <div className="space-y-4">
+            <div className={showSettings ? "hidden" : "space-y-4"}>
               {/* Mode Selector */}
               <div className="rounded-xl border border-slate-200/80 bg-white/80 p-2 shadow-sm backdrop-blur-sm">
                 <div
@@ -19113,6 +19530,8 @@ export default function App() {
                   }
                   onActionFinished={applyQuickActionFunding}
                   onActiveChange={setFreeFlowActive}
+                  alertPreferences={settings.alertPreferences}
+                  onVisualAlert={showVisualAlert}
                 />
               ) : currentMode === "flowmodoro" ? (
                 // Standalone Flowmodoro Mode Content
@@ -19880,6 +20299,39 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-2 sm:p-4 font-sans">
+      <div
+        className="pointer-events-none fixed inset-x-2 top-[calc(env(safe-area-inset-top)+0.5rem)] z-[100] mx-auto flex max-w-md flex-col gap-2"
+        aria-live="assertive"
+        aria-atomic="false"
+      >
+        {visualAlerts.map((alert) => (
+          <div
+            key={alert.id}
+            role={alert.priority >= 4 ? "alert" : "status"}
+            className={`pointer-events-auto flex min-h-11 items-center justify-between gap-3 rounded-xl border px-3 py-2 text-sm font-semibold shadow-lg backdrop-blur ${
+              alert.priority >= 4
+                ? "border-rose-300 bg-rose-50/95 text-rose-950"
+                : alert.priority >= 3
+                  ? "border-amber-300 bg-amber-50/95 text-amber-950"
+                  : "border-blue-200 bg-white/95 text-slate-900"
+            }`}
+          >
+            <span className="min-w-0 flex-1">{alert.text}</span>
+            <button
+              type="button"
+              className="min-h-11 min-w-11 shrink-0 rounded-lg text-xl font-normal"
+              aria-label="Dismiss alert"
+              onClick={() =>
+                setVisualAlerts((current) =>
+                  current.filter((item) => item.id !== alert.id),
+                )
+              }
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
       {!controller.isController && (
         <div
           className="mx-auto mb-3 flex max-w-4xl items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
@@ -19936,6 +20388,70 @@ export default function App() {
           setCurrentPage("manage-activities");
         }}
       />
+      {mobileMoreOpen && (
+        <div
+          className="fixed inset-0 z-[65] flex items-end bg-black/45 sm:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="mobile-more-title"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setMobileMoreOpen(false);
+          }}
+        >
+          <div className="w-full rounded-t-2xl bg-white p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-2xl">
+            <div className="mb-2 flex min-h-11 items-center justify-between">
+              <h2 id="mobile-more-title" className="text-lg font-bold">
+                More
+              </h2>
+              <button
+                type="button"
+                className="min-h-11 min-w-11 rounded-lg border text-xl"
+                aria-label="Close more actions"
+                onClick={() => setMobileMoreOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="grid gap-2">
+              <Button
+                variant="outline"
+                className="min-h-11 justify-start"
+                onClick={() => {
+                  setMobileMoreOpen(false);
+                  setActivityHistoryOpen(true);
+                }}
+              >
+                History
+              </Button>
+              <Button
+                variant="outline"
+                className="min-h-11 justify-start"
+                onClick={() => {
+                  setMobileMoreOpen(false);
+                  setInsightsOpen(true);
+                }}
+              >
+                Insights
+              </Button>
+              <Button
+                variant="outline"
+                className="min-h-11 justify-start"
+                onClick={() => {
+                  setMobileMoreOpen(false);
+                  setDecisionCheckpoint({
+                    open: true,
+                    reason: "manual",
+                    sourceKey: "idle",
+                    foregroundBackgroundMs: 0,
+                  });
+                }}
+              >
+                Choose next
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       {quickActionDialog.open && (
         <div
           className="fixed inset-0 z-[70] flex items-end justify-center bg-black/45 sm:items-center"
