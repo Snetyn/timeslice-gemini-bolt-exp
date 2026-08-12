@@ -128,18 +128,24 @@ describe("TagRatioPanel", () => {
     expect(container.textContent).toContain("Select one or more tags");
   });
 
-  it("shows the radar minimum and configurable RPG feedback", async () => {
+  it("renders small-selection radar and configurable RPG feedback", async () => {
     const { levelChange } = await render(["work", "health"]);
     await click(
       [...container.querySelectorAll("button")].find(
         (button) => button.textContent === "Radar",
       )!,
     );
-    expect(container.textContent).toContain("Select at least three tags");
+    expect(container.querySelector('[data-testid="tag-ratio-radar"]')).not.toBe(
+      null,
+    );
+    expect(container.textContent).toContain("Work · 50.0%");
     await click(
       [...container.querySelectorAll("button")].find(
         (button) => button.textContent === "RPG",
       )!,
+    );
+    expect(container.querySelector('[data-testid="tag-rpg-radar"]')).not.toBe(
+      null,
     );
     expect(container.textContent).toContain("Level 0");
     expect(container.textContent).toContain("Level 1");

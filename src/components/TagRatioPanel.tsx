@@ -119,70 +119,100 @@ function Radar({
   label: string;
   testId: string;
 }) {
-  if (values.length < 3)
+  if (values.length === 0)
     return (
       <p className="rounded-lg bg-slate-50 p-3 text-center text-sm text-slate-600">
-        Select at least three tags to draw a meaningful radar.
+        No tag values are available for this chart yet.
       </p>
     );
-  const axes = values.map((_, index) => radarPoint(index, values.length, 1));
-  const points = values
-    .map((item, index) => radarPoint(index, values.length, item.value))
+
+  // A polygon needs at least three points. Mirroring one or two real axes keeps
+  // the chart useful for small selections without inventing another tag/value.
+  const chartValues =
+    values.length === 1
+      ? [values[0], values[0], values[0], values[0]]
+      : values.length === 2
+        ? [values[0], values[1], values[0], values[1]]
+        : values;
+  const axes = chartValues.map((_, index) =>
+    radarPoint(index, chartValues.length, 1),
+  );
+  const points = chartValues
+    .map((item, index) => radarPoint(index, chartValues.length, item.value))
     .join(" ");
   return (
-    <svg
-      viewBox="0 0 120 120"
-      className="mx-auto h-[210px] w-[210px] max-w-full"
-      role="img"
-      aria-label={`${label}. ${values.map((item) => `${item.name}: ${item.display}`).join(", ")}`}
-      data-testid={testId}
-    >
-      {[0.25, 0.5, 0.75, 1].map((scale) => (
-        <polygon
-          key={scale}
-          points={values
-            .map((_, index) => radarPoint(index, values.length, scale))
-            .join(" ")}
-          fill={scale === 1 ? "#f8fafc" : "none"}
-          stroke="#cbd5e1"
-          strokeWidth="0.7"
-        />
-      ))}
-      {axes.map((point, index) => (
-        <line
-          key={values[index].id}
-          x1="60"
-          y1="60"
-          x2={point.split(",")[0]}
-          y2={point.split(",")[1]}
-          stroke="#cbd5e1"
-          strokeWidth="0.7"
-        />
-      ))}
-      <polygon
-        points={points}
-        fill="rgba(99,102,241,.24)"
-        stroke="#4f46e5"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-      {values.map((item, index) => {
-        const [cx, cy] = radarPoint(index, values.length, item.value).split(
-          ",",
-        );
-        return (
-          <circle
-            key={item.id}
-            cx={cx}
-            cy={cy}
-            r="2.3"
-            fill={item.color}
-            stroke="white"
-            strokeWidth="1"
+    <div className="mx-auto w-[220px] max-w-full">
+      <svg
+        viewBox="-12 -12 144 144"
+        className="h-auto w-full"
+        role="img"
+        aria-label={`${label}. ${values.map((item) => `${item.name}: ${item.display}`).join(", ")}`}
+        data-testid={testId}
+      >
+        {[0.25, 0.5, 0.75, 1].map((scale) => (
+          <polygon
+            key={scale}
+            points={chartValues
+              .map((_, index) => radarPoint(index, chartValues.length, scale))
+              .join(" ")}
+            fill={scale === 1 ? "#f8fafc" : "none"}
+            stroke="#cbd5e1"
+            strokeWidth="0.7"
           />
-        );
-      })}
-    </svg>
+        ))}
+        {axes.map((point, index) => (
+          <line
+            key={`${chartValues[index].id}-${index}`}
+            x1="60"
+            y1="60"
+            x2={point.split(",")[0]}
+            y2={point.split(",")[1]}
+            stroke={chartValues[index].color}
+            strokeOpacity="0.45"
+            strokeWidth="0.9"
+          />
+        ))}
+        <polygon
+          points={points}
+          fill="rgba(99,102,241,.24)"
+          stroke="#4f46e5"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+        {chartValues.map((item, index) => {
+          const [cx, cy] = radarPoint(
+            index,
+            chartValues.length,
+            item.value,
+          ).split(",");
+          return (
+            <circle
+              key={`${item.id}-${index}`}
+              cx={cx}
+              cy={cy}
+              r="2.3"
+              fill={item.color}
+              stroke="white"
+              strokeWidth="1"
+            />
+          );
+        })}
+      </svg>
+      <div
+        className="mt-1 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[11px] font-semibold text-slate-700"
+        aria-hidden="true"
+      >
+        {values.map((item) => (
+          <span key={item.id} className="inline-flex items-center gap-1">
+            <span
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: item.color }}
+            />
+            {item.name} · {item.display}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
