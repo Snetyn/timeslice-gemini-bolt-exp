@@ -205,4 +205,48 @@ describe("persisted Session run snapshot", () => {
     expect(normalized?.activities[2].parentActivityId).toBeUndefined();
     expect(normalized?.activities[3].parentActivityId).toBeUndefined();
   });
+
+  it("preserves and normalizes an active Session Reward contract", () => {
+    const snapshot = createSessionRunSnapshot({
+      status: "running",
+      currentActivityIndex: 0,
+      lastReconciledAtMs: 10_000,
+      sessionPlanFrozen: true,
+      sessionRewardContract: {
+        version: 1,
+        mode: "live",
+        status: "active",
+        targetSeconds: 3_600,
+        sessionTotalSeconds: 12_600,
+        plannedWorkSeconds: 9_000,
+        eligibleFocusedSeconds: 150,
+        earnedSeconds: 60,
+        consumedSeconds: 10,
+        bankedSeconds: 0,
+        discardedSeconds: 0,
+        donatedSecondsById: { focus: 60 },
+        visualPlannedSecondsById: {
+          focus: 9_000,
+          "timeslice-banked-rest": 3_600,
+        },
+        operations: [
+          { fundedSeconds: 60, donatedSecondsById: { focus: 60 } },
+        ],
+      },
+    });
+    expect(snapshot.sessionRewardContract).toMatchObject({
+      mode: "live",
+      earnedSeconds: 60,
+      visualPlannedSecondsById: { focus: 9_000 },
+    });
+    expect(
+      normalizeSessionRunSnapshot({
+        ...snapshot,
+        sessionRewardContract: {
+          ...snapshot.sessionRewardContract,
+          earnedSeconds: Number.NaN,
+        },
+      })?.sessionRewardContract?.earnedSeconds,
+    ).toBe(0);
+  });
 });

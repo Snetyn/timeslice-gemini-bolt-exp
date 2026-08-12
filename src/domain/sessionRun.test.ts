@@ -14,6 +14,28 @@ const task = (
 });
 
 describe("session run batch transition", () => {
+  it("never auto-starts a manual-only Reward Rest activity", () => {
+    const result = advanceSessionRun({
+      activities: [
+        task("work", 1),
+        task("timeslice-banked-rest", 30, { manualOnly: true }),
+      ],
+      currentActivityIndex: 0,
+      elapsedSeconds: 5,
+      overtimeMode: "none",
+    });
+    expect(result.activitySlices).toEqual([
+      {
+        activityId: "work",
+        offsetSeconds: 0,
+        durationSeconds: 1,
+        kind: "countdown",
+      },
+    ]);
+    expect(result.activities[1].timeRemaining).toBe(30);
+    expect(result.isComplete).toBe(false);
+  });
+
   it("uses the same batch to complete multiple countdown tasks", () => {
     const result = advanceSessionRun({
       activities: [task("first", 2), task("second", 4)],

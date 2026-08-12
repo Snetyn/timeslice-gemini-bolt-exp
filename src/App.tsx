@@ -94,6 +94,17 @@ import {
   createSessionRunSnapshot,
   normalizeSessionRunSnapshot,
 } from "./domain/sessionSnapshot";
+import {
+  applySessionRewardSlices,
+  createSessionRewardContract,
+  normalizeSessionRewardContract,
+  restoreSessionRewardContract,
+  sessionRewardAvailableSeconds,
+  sessionRewardFeasibility,
+  sessionRewardLockedSeconds,
+  type SessionRewardContract,
+  type SessionRewardMode,
+} from "./domain/sessionRewardGoal";
 import { deleteSessionRun, saveSessionRun } from "./data/sessionRunRepository";
 import {
   listRecentActivityDefinitions,
@@ -185,6 +196,10 @@ interface Activity {
   // Special Session activity funded from the Flow Relaxation Vault.
   isRewardRest?: boolean;
   rewardRestFunding?: RewardRestFunding;
+  sessionRewardTargetSeconds?: number;
+  manualOnly?: boolean;
+  sessionRewardEarnedSeconds?: number;
+  sessionRewardConsumedSeconds?: number;
   parentActivityId?: string;
   ownTimerCompleted?: boolean;
   subActivityFunding?: SubActivityFunding;
@@ -2622,6 +2637,26 @@ const VisualProgress = ({
                 }}
                 className="h-full absolute top-0 left-0"
               />
+              {activity.isRewardRest &&
+                Number(activity.sessionRewardConsumedSeconds || 0) > 0 &&
+                activityTime > 0 && (
+                  <div
+                    className="absolute inset-y-0 left-0"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        (Number(activity.sessionRewardConsumedSeconds || 0) /
+                          activityTime) *
+                          100,
+                      )}%`,
+                      backgroundImage:
+                        "repeating-linear-gradient(45deg, rgba(255,255,255,.72) 0, rgba(255,255,255,.72) 3px, rgba(76,29,149,.28) 3px, rgba(76,29,149,.28) 6px)",
+                    }}
+                    title={`Reward Rest used: ${formatTime(
+                      Number(activity.sessionRewardConsumedSeconds || 0),
+                    )}`}
+                  />
+                )}
               {isFlowPseudo && (
                 <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/90 pointer-events-none select-none">
                   {flowmodoroActivityIcon}
@@ -3099,6 +3134,17 @@ const CircularProgress = ({
         const maskId = shouldStripe
           ? `segment-stripe-mask-${idx}-${activity.id}`
           : undefined;
+        const sessionRewardConsumedArc = activity.isRewardRest
+          ? segmentArcLength *
+            Math.min(
+              1,
+              Math.max(
+                0,
+                Number(activity.sessionRewardConsumedSeconds || 0) /
+                  Math.max(1, planned),
+              ),
+            )
+          : 0;
 
         const rotation = cumulativeRotation;
         cumulativeRotation += segmentAngle;
@@ -3162,6 +3208,22 @@ const CircularProgress = ({
                   </>
                 )}
               </>
+            )}
+            {sessionRewardConsumedArc > 0 && (
+              <circle
+                stroke="rgba(255,255,255,.9)"
+                fill="transparent"
+                strokeWidth={strokeWidth - 2}
+                strokeDasharray={`3 3 ${Math.max(
+                  0,
+                  sessionRewardConsumedArc - 6,
+                )} ${circumference}`}
+                r={radius}
+                cx={center}
+                cy={center}
+                strokeLinecap="butt"
+                opacity={0.9}
+              />
             )}
             {settings.segmentHighlightStyle !== "none" &&
               idx === currentActivityIndex &&
@@ -8249,6 +8311,28 @@ export default function App() {
     activitiesRef.current = activities;
   }, [activities]);
 
+  const [sessionRewardEnabled, setSessionRewardEnabled] = useState(false);
+  const [sessionRewardMinutesDraft, setSessionRewardMinutesDraft] =
+    useState("");
+  const [sessionRewardMode, setSessionRewardMode] =
+    useState<SessionRewardMode>("reserved");
+  const [sessionRewardContract, setSessionRewardContract] =
+    useState<SessionRewardContract | undefined>(() => {
+      try {
+        const saved = localStorage.getItem("timeSliceSessionState");
+        if (!saved) return undefined;
+        return normalizeSessionRewardContract(
+          JSON.parse(saved)?.sessionRewardContract,
+        );
+      } catch {
+        return undefined;
+      }
+    });
+  const sessionRewardContractRef = useRef(sessionRewardContract);
+  useEffect(() => {
+    sessionRewardContractRef.current = sessionRewardContract;
+  }, [sessionRewardContract]);
+
   const [totalHours, setTotalHours] = useState(() => {
     try {
       const saved = localStorage.getItem("timeSliceTotalHours");
@@ -9893,6 +9977,7 @@ export default function App() {
         flowmodoroState?: typeof flowmodoroState;
         sessionPlanFrozen?: boolean;
         observedAtMs?: number;
+        sessionRewardContract?: SessionRewardContract;
       } = {},
     ) => {
       if (!timerController.getSnapshot().isController) return Promise.resolve();
@@ -9908,6 +9993,8 @@ export default function App() {
           initialTotalAllocatedRef.current > 0
             ? initialTotalAllocatedRef.current
             : null,
+        sessionRewardContract:
+          overrides.sessionRewardContract ?? sessionRewardContractRef.current,
       });
       return saveSessionRun({
         snapshot,
@@ -10161,6 +10248,12 @@ export default function App() {
     source: "reserve" | "vault" | "combined" = "reserve",
   ) => {
     if (!settings.flowmodoroEnabled) return;
+    if (isTimerActive && sessionRewardContractRef.current?.status === "active") {
+      window.alert(
+        "Quick Reserve is paused while this Session Reward Goal is active. Use earned Reward Rest instead.",
+      );
+      return;
+    }
     window.dispatchEvent(new Event("timeslice:flow-rest-start"));
     const now = new Date();
     const current = flowmodoroStateRef.current;
@@ -10814,6 +10907,7 @@ export default function App() {
           initialTotalAllocatedRef.current > 0
             ? initialTotalAllocatedRef.current
             : null,
+        sessionRewardContract: sessionRewardContractRef.current,
       });
       localStorage.setItem(
         "timeSliceSessionState",
@@ -10822,7 +10916,13 @@ export default function App() {
     } catch (e) {
       console.error("Failed to save session state to localStorage:", e);
     }
-  }, [isTimerActive, isPaused, currentActivityIndex, sessionPlanFrozen]);
+  }, [
+    isTimerActive,
+    isPaused,
+    currentActivityIndex,
+    sessionPlanFrozen,
+    sessionRewardContract,
+  ]);
 
   useEffect(() => {
     if (!hasRestoredSessionStateRef.current || !isTimerActive || isPaused)
@@ -11052,7 +11152,7 @@ export default function App() {
               settings.flowmodoroEnabled &&
               flowmodoroState.isOnBreak &&
               flowmodoroState.breakTimeRemaining > 0;
-            const transition = advanceSessionRun({
+            const restoreAdvanceInput = {
               activities: activitiesRef.current,
               currentActivityIndex: sessionState.currentActivityIndex || 0,
               elapsedSeconds: timeGapSeconds,
@@ -11072,9 +11172,66 @@ export default function App() {
               donorCursor: lastDrainedIndex.current,
               earlyCompletionPolicy: settings.earlyCompletionPolicy,
               earlyCompletionTargetId: settings.earlyCompletionTargetId,
-            });
+            };
+            let transition = advanceSessionRun(restoreAdvanceInput);
+            const activeSessionReward = sessionRewardContractRef.current;
+            if (activeSessionReward?.status === "active") {
+              const liveFunding =
+                activeSessionReward.mode === "live"
+                  ? applySessionRewardSlices({
+                      activities: activitiesRef.current,
+                      contract: activeSessionReward,
+                      slices: transition.activitySlices.filter(
+                        (slice) =>
+                          slice.activityId !== BANKED_REST_ACTIVITY_ID,
+                      ),
+                    })
+                  : null;
+              if (liveFunding) {
+                transition = advanceSessionRun({
+                  ...restoreAdvanceInput,
+                  activities: liveFunding.activities,
+                });
+              }
+              const rewardUpdate = applySessionRewardSlices({
+                activities: transition.activities as Activity[],
+                contract: liveFunding?.contract || activeSessionReward,
+                slices: liveFunding
+                  ? transition.activitySlices.filter(
+                      (slice) =>
+                        slice.activityId === BANKED_REST_ACTIVITY_ID,
+                    )
+                  : transition.activitySlices,
+              });
+              sessionRewardContractRef.current = rewardUpdate.contract;
+              setSessionRewardContract(rewardUpdate.contract);
+              transition = {
+                ...transition,
+                activities: rewardUpdate.activities,
+                isComplete:
+                  rewardUpdate.activities.length > 0 &&
+                  rewardUpdate.activities.every(
+                    (activity) =>
+                      activity.isCompleted || activity.ownTimerCompleted,
+                  ),
+              };
+            }
             activitiesRef.current = transition.activities as Activity[];
             setActivities(transition.activities as Activity[]);
+            const restoredRewardContract = sessionRewardContractRef.current;
+            const waitingForRest = Boolean(
+              restoredRewardContract?.status === "active" &&
+                sessionRewardAvailableSeconds(restoredRewardContract) > 0 &&
+                !(transition.activities as Activity[]).some(
+                  (activity) =>
+                    !activity.isRewardRest &&
+                    !activity.countUp &&
+                    !activity.isCompleted &&
+                    !activity.ownTimerCompleted &&
+                    Number(activity.timeRemaining || 0) > 0,
+                ),
+            );
+            if (waitingForRest) setIsPaused(true);
             setCurrentActivityIndex(transition.currentActivityIndex);
             currentActivityIndexRef.current = transition.currentActivityIndex;
             flowBreakDrainSourceRef.current = transition.flowDrainSourceId;
@@ -11113,7 +11270,7 @@ export default function App() {
                   nextCurrent && !transition.isComplete
                     ? sessionRecordingContext(nextCurrent as Activity)
                     : null,
-                continues: !transition.isComplete,
+                continues: !transition.isComplete && !waitingForRest,
               }).catch((error) =>
                 console.error(
                   "Failed to restore Session activity trace",
@@ -11121,13 +11278,17 @@ export default function App() {
                 ),
               );
             }
-            void persistSessionRunSnapshot("running", {
+            void persistSessionRunSnapshot(
+              waitingForRest ? "paused" : "running",
+              {
               activities: transition.activities as Activity[],
               currentActivityIndex: transition.currentActivityIndex,
               vaultSeconds: transition.vaultSeconds,
               sessionPlanFrozen: true,
               observedAtMs,
-            });
+              sessionRewardContract: restoredRewardContract,
+            },
+            );
             Object.entries(transition.donatedSecondsById).forEach(
               ([activityId, seconds]) => {
                 drainStatsRef.current.donated[activityId] =
@@ -11140,7 +11301,8 @@ export default function App() {
                   (drainStatsRef.current.received[activityId] || 0) + seconds;
               },
             );
-            if (transition.isComplete) setIsTimerActive(false);
+            if (transition.isComplete && !waitingForRest)
+              setIsTimerActive(false);
           }
         }
       }
@@ -11377,6 +11539,11 @@ export default function App() {
 
   const scheduleBankedRest = useCallback(
     (requestedSeconds: number) => {
+      if (
+        sessionRewardEnabled ||
+        sessionRewardContractRef.current?.status === "active"
+      )
+        return 0;
       const totalSessionSeconds = calculateTotalSessionMinutes() * 60;
       const currentFlow = flowmodoroStateRef.current;
       const rewardRestGoalSeconds = Math.max(
@@ -11402,6 +11569,7 @@ export default function App() {
           countUp: false,
           priority: true,
           isRewardRest: true,
+          manualOnly: true,
           tags: [],
         }),
       });
@@ -11438,6 +11606,7 @@ export default function App() {
       calculateTotalSessionMinutes,
       isTimerActive,
       persistSessionRunSnapshot,
+      sessionRewardEnabled,
       settings.flowmodoroBankGoalMinutes,
     ],
   );
@@ -11456,6 +11625,8 @@ export default function App() {
   useEffect(() => {
     if (
       !settings.flowmodoroAutoScheduleBankedRest ||
+      sessionRewardEnabled ||
+      sessionRewardContractRef.current?.status === "active" ||
       isTimerActive ||
       (flowmodoroState.relaxationVaultSeconds || 0) <= 0
     )
@@ -11474,6 +11645,7 @@ export default function App() {
     scheduleBankedRest,
     settings.flowmodoroAutoScheduleBankedRest,
     settings.flowmodoroBankGoalMinutes,
+    sessionRewardEnabled,
   ]);
 
   useEffect(() => {
@@ -11546,7 +11718,11 @@ export default function App() {
       if (elapsedSeconds <= 0) return;
 
       // Smooth catch-up awards (if any queued from off-screen reconciliation) before normal accrual
-      if (settings.flowmodoroEnabled && settings.flowmodoroSmoothCatchup) {
+      if (
+        settings.flowmodoroEnabled &&
+        settings.flowmodoroSmoothCatchup &&
+        !(isTimerActive && sessionRewardContractRef.current)
+      ) {
         setFlowmodoroState((prev) => {
           const pending = (prev as any).pendingCatchup || 0;
           if (!pending) return prev;
@@ -11648,7 +11824,7 @@ export default function App() {
           ? flowmodoroState.activeBreakBehavior ||
             (settings.flowmodoroMode === "postpone" ? "postpone" : "drain")
           : "none";
-        const transition = advanceSessionRun({
+        const sessionAdvanceInput = {
           activities: activitiesRef.current,
           currentActivityIndex,
           elapsedSeconds: hasRunningSession
@@ -11665,12 +11841,55 @@ export default function App() {
           donorCursor: lastDrainedIndex.current,
           earlyCompletionPolicy: settings.earlyCompletionPolicy,
           earlyCompletionTargetId: settings.earlyCompletionTargetId,
-        });
+        };
+        let transition = advanceSessionRun(sessionAdvanceInput);
+
+        const activeSessionReward = sessionRewardContractRef.current;
+        if (hasRunningSession && activeSessionReward?.status === "active") {
+          const liveFunding =
+            activeSessionReward.mode === "live"
+              ? applySessionRewardSlices({
+                  activities: activitiesRef.current,
+                  contract: activeSessionReward,
+                  slices: transition.activitySlices.filter(
+                    (slice) => slice.activityId !== BANKED_REST_ACTIVITY_ID,
+                  ),
+                })
+              : null;
+          if (liveFunding) {
+            transition = advanceSessionRun({
+              ...sessionAdvanceInput,
+              activities: liveFunding.activities,
+            });
+          }
+          const rewardUpdate = applySessionRewardSlices({
+            activities: transition.activities as Activity[],
+            contract: liveFunding?.contract || activeSessionReward,
+            slices: liveFunding
+              ? transition.activitySlices.filter(
+                  (slice) => slice.activityId === BANKED_REST_ACTIVITY_ID,
+                )
+              : transition.activitySlices,
+          });
+          sessionRewardContractRef.current = rewardUpdate.contract;
+          setSessionRewardContract(rewardUpdate.contract);
+          transition = {
+            ...transition,
+            activities: rewardUpdate.activities,
+            isComplete:
+              rewardUpdate.activities.length > 0 &&
+              rewardUpdate.activities.every(
+                (activity) =>
+                  activity.isCompleted || activity.ownTimerCompleted,
+              ),
+          };
+        }
 
         if (
           settings.flowmodoroEnabled &&
           !flowmodoroState.isOnBreak &&
-          hasRunningSession
+          hasRunningSession &&
+          !sessionRewardContractRef.current
         ) {
           const rewardEligibleSeconds = rewardEligibleSessionSeconds(
             transition.activities as Activity[],
@@ -11681,6 +11900,33 @@ export default function App() {
 
         activitiesRef.current = transition.activities as Activity[];
         setActivities(transition.activities as Activity[]);
+        const rewardContractAfterTick = sessionRewardContractRef.current;
+        const waitingForManualRewardRest = Boolean(
+          hasRunningSession &&
+            rewardContractAfterTick?.status === "active" &&
+            sessionRewardAvailableSeconds(rewardContractAfterTick) > 0 &&
+            !(transition.activities as Activity[]).some(
+              (activity) =>
+                !activity.isRewardRest &&
+                !activity.countUp &&
+                !activity.isCompleted &&
+                !activity.ownTimerCompleted &&
+                Number(activity.timeRemaining || 0) > 0,
+            ),
+        );
+        if (waitingForManualRewardRest) {
+          ensuredSessionRecordingRef.current = "";
+          setIsPaused(true);
+          void persistSessionTimer(
+            "pause",
+            { endReason: "paused" },
+            observedAtMs,
+          );
+          void persistSessionRunSnapshot("paused", {
+            activities: transition.activities as Activity[],
+            sessionRewardContract: rewardContractAfterTick,
+          });
+        }
         flowBreakDrainSourceRef.current = transition.flowDrainSourceId;
         lastDrainedIndex.current = transition.donorCursor;
         if (transition.vaultSeconds !== vaultTimeRef.current) {
@@ -11754,7 +12000,22 @@ export default function App() {
             console.error("Failed to persist automatic Session switch", error),
           );
         }
-        if (hasRunningSession && transition.isComplete) {
+        if (
+          hasRunningSession &&
+          transition.isComplete &&
+          !waitingForManualRewardRest
+        ) {
+          if (sessionRewardContractRef.current?.status === "active") {
+            const completedContract: SessionRewardContract = {
+              ...sessionRewardContractRef.current,
+              status: "completed",
+            };
+            sessionRewardContractRef.current = completedContract;
+            setSessionRewardContract(completedContract);
+            setSessionRewardEnabled(false);
+            setSessionRewardMinutesDraft("");
+            setSessionRewardMode("reserved");
+          }
           setIsTimerActive(false);
           localStorage.removeItem("timeSliceSessionState");
           void deleteSessionRun();
@@ -14258,18 +14519,80 @@ export default function App() {
   const startSession = (options = {}) => {
     if (Math.abs(totalPercentage - 100) < 0.1 && activities.length > 0) {
       const nowMs = Date.now();
+      let startingActivities = activities;
+      let startingRewardContract = sessionRewardContractRef.current;
+      if (
+        sessionPlanFrozen &&
+        startingRewardContract &&
+        startingRewardContract.status !== "active"
+      ) {
+        startingRewardContract = undefined;
+        sessionRewardContractRef.current = undefined;
+        setSessionRewardContract(undefined);
+      }
+      if (!sessionPlanFrozen && sessionRewardEnabled) {
+        if (scheduledRewardRestSeconds(activities) > 0) {
+          window.alert(
+            "Unschedule bank-funded Reward Rest before enabling a Session Reward Goal.",
+          );
+          return;
+        }
+        const targetSeconds =
+          Math.max(
+            0,
+            Number.parseInt(sessionRewardMinutesDraft || "0", 10) || 0,
+          ) * 60;
+        const created = createSessionRewardContract<Activity>({
+          activities,
+          sessionTotalSeconds: calculateTotalSessionMinutes() * 60,
+          targetSeconds,
+          mode: sessionRewardMode,
+          createRestActivity: () => ({
+            id: BANKED_REST_ACTIVITY_ID,
+            name: "Reward Rest",
+            color: "hsl(270, 70%, 55%)",
+            percentage: 0,
+            duration: 0,
+            timeRemaining: 0,
+            originalPlannedSeconds: 0,
+            isCompleted: true,
+            isLocked: true,
+            countUp: false,
+            priority: true,
+            isRewardRest: true,
+            manualOnly: true,
+            tags: [],
+          }),
+        });
+        if (!created.contract) {
+          window.alert(
+            "This Reward Rest goal cannot be funded by the current unstarred countdown activities. Use Fit goal or adjust the Session.",
+          );
+          return;
+        }
+        startingActivities = created.activities;
+        startingRewardContract = created.contract;
+        activitiesRef.current = startingActivities;
+        sessionRewardContractRef.current = startingRewardContract;
+        setActivities(startingActivities);
+        setSessionRewardContract(startingRewardContract);
+      }
       const requestedIndex = Number(options.activityIndex);
       const firstIncompleteIndex =
         Number.isInteger(requestedIndex) &&
-        activities[requestedIndex] &&
-        !activities[requestedIndex].isCompleted &&
-        !activities[requestedIndex].ownTimerCompleted
+        startingActivities[requestedIndex] &&
+        !startingActivities[requestedIndex].isCompleted &&
+        !startingActivities[requestedIndex].ownTimerCompleted
           ? requestedIndex
-          : activities.findIndex((a) => !a.isCompleted && !a.ownTimerCompleted);
+          : startingActivities.findIndex(
+              (a) => !a.isCompleted && !a.ownTimerCompleted,
+            );
       const newIndex = firstIncompleteIndex !== -1 ? firstIncompleteIndex : 0;
-      const startingContext = sessionRecordingContext(activities[newIndex]);
+      const startingContext = sessionRecordingContext(
+        startingActivities[newIndex],
+      );
       ensuredSessionRecordingRef.current = `${startingContext.activityId}:${startingContext.kind}`;
-      console.log("Starting session with activities:", activities);
+      console.log("Starting session with activities:", startingActivities);
       setIsTimerActive(true);
       setIsPaused(false);
       void persistSessionTimer(
@@ -14289,7 +14612,7 @@ export default function App() {
           sharedElapsedSnapshotRef.current = {};
         } catch {}
         try {
-          const baseline = activities.reduce(
+          const baseline = startingActivities.reduce(
             (sum, act) => sum + getAllocatedSeconds(act),
             0,
           );
@@ -14302,8 +14625,12 @@ export default function App() {
         try {
           const totalSeconds = calculateTotalSessionMinutes() * 60;
           const snapshot: Record<string, number> = {};
-          activities.forEach((a) => {
-            if (a.countUp) {
+          startingActivities.forEach((a) => {
+            const rewardVisualPlan =
+              startingRewardContract?.visualPlannedSecondsById[a.id];
+            if (Number.isFinite(rewardVisualPlan)) {
+              snapshot[a.id] = Math.max(0, rewardVisualPlan || 0);
+            } else if (a.countUp) {
               snapshot[a.id] = 0;
             } else {
               const pct = Math.max(0, Number(a.percentage || 0));
@@ -14315,7 +14642,7 @@ export default function App() {
       } else {
         // Resuming: compute totals per sharedId so daily sync continues monotonic
         const byShared: Record<string, number> = {};
-        activities.forEach((sa) => {
+        startingActivities.forEach((sa) => {
           if (!sa.sharedId) return;
           const durationSec = Math.max(0, (sa.duration || 0) * 60);
           let elapsed = 0;
@@ -14336,13 +14663,14 @@ export default function App() {
         "Setting current activity index to:",
         newIndex,
         "activity:",
-        activities[newIndex],
+        startingActivities[newIndex],
       );
       setCurrentActivityIndex(newIndex);
       void persistSessionRunSnapshot("running", {
-        activities,
+        activities: startingActivities,
         currentActivityIndex: newIndex,
         sessionPlanFrozen: true,
+        sessionRewardContract: startingRewardContract,
       }).catch((error) =>
         console.error("Failed to persist Session start snapshot", error),
       );
@@ -14387,17 +14715,46 @@ export default function App() {
     sessionQuickActionsRef.current = [];
     quickActionDonatedRef.current = {};
     const totalMins = calculateTotalSessionMinutes();
-    setActivities((prev) =>
-      prev.map((activity) => ({
-        ...activity,
-        timeRemaining: activity.countUp
+    const activeRewardContract = sessionRewardContractRef.current;
+    setActivities((prev) => {
+      const restored = activeRewardContract
+        ? restoreSessionRewardContract(prev, activeRewardContract)
+        : prev;
+      const totalSeconds = totalMins * 60;
+      const next = restored.map((activity) => {
+        const planned = activity.countUp
           ? 0
-          : Math.round((activity.percentage / 100) * totalMins) * 60,
-        isCompleted: false,
-        ownTimerCompleted: false,
-        completedElapsedSeconds: 0,
-      })),
-    );
+          : Math.max(
+              0,
+              Math.round(
+                Number(
+                  activity.originalPlannedSeconds ??
+                    ((activity.percentage || 0) / 100) * totalSeconds,
+                ) || 0,
+              ),
+            );
+        return {
+          ...activity,
+          percentage:
+            totalSeconds > 0 && !activity.countUp
+              ? (planned / totalSeconds) * 100
+              : 0,
+          duration: planned / 60,
+          originalPlannedSeconds: planned,
+          timeRemaining: planned,
+          isCompleted: false,
+          ownTimerCompleted: false,
+          completedElapsedSeconds: 0,
+        };
+      });
+      activitiesRef.current = next;
+      return next;
+    });
+    sessionRewardContractRef.current = undefined;
+    setSessionRewardContract(undefined);
+    setSessionRewardEnabled(false);
+    setSessionRewardMinutesDraft("");
+    setSessionRewardMode("reserved");
     setCurrentActivityIndex(0);
     void persistSessionTimer("reset", { endReason: "reset" }, nowMs).catch(
       (error) =>
@@ -14680,6 +15037,62 @@ export default function App() {
   // Exit session without resetting progress; preserves remaining times for resume
   const exitSession = () => {
     const nowMs = Date.now();
+    const activeReward = sessionRewardContractRef.current;
+    if (activeReward?.status === "active") {
+      const available = sessionRewardAvailableSeconds(activeReward);
+      const currentFlow = flowmodoroStateRef.current;
+      const hardCapSeconds = Math.max(
+        0,
+        Number(settings.flowmodoroRelaxationVaultMaxMinutes || 0) * 60,
+      );
+      const room =
+        hardCapSeconds > 0
+          ? Math.max(
+              0,
+              hardCapSeconds -
+                Math.max(0, Number(currentFlow.relaxationVaultSeconds) || 0),
+            )
+          : available;
+      const banked = Math.min(available, room);
+      const discarded = Math.max(0, available - banked);
+      const nextFlow = {
+        ...currentFlow,
+        relaxationVaultSeconds:
+          Math.max(0, Number(currentFlow.relaxationVaultSeconds) || 0) +
+          banked,
+      };
+      const finalizedContract: SessionRewardContract = {
+        ...activeReward,
+        status: "banked",
+        bankedSeconds: activeReward.bankedSeconds + banked,
+        discardedSeconds: activeReward.discardedSeconds + discarded,
+      };
+      const nextActivities = restoreSessionRewardContract(
+        activitiesRef.current,
+        activeReward,
+        activeReward.mode === "reserved"
+          ? sessionRewardLockedSeconds(activeReward)
+          : 0,
+      );
+      flowmodoroStateRef.current = nextFlow;
+      activitiesRef.current = nextActivities;
+      sessionRewardContractRef.current = finalizedContract;
+      setFlowmodoroState(nextFlow);
+      setActivities(nextActivities);
+      setSessionRewardContract(finalizedContract);
+      setSessionRewardEnabled(false);
+      setSessionRewardMinutesDraft("");
+      setSessionRewardMode("reserved");
+      if (discarded > 0) {
+        window.setTimeout(
+          () =>
+            window.alert(
+              `${formatTime(banked)} was banked. ${formatTime(discarded)} exceeded the Reward Bank cap and was discarded.`,
+            ),
+          0,
+        );
+      }
+    }
     ensuredSessionRecordingRef.current = "";
     setSessionPlanFrozen(true);
     setIsPaused(false);
@@ -14917,11 +15330,39 @@ export default function App() {
     // - Ignore completed activities
     // - Ignore count-up activities (they represent elapsed, not remaining)
     // - Do NOT include vault time (banked time isn't a commitment)
-    return predictedScheduleSeconds(
+    const scheduled = predictedScheduleSeconds(
       activities,
       vaultTime,
       settings.vaultPredictionMode === "independent" ? "independent" : "linked",
     );
+    return (
+      scheduled +
+      (sessionRewardContract?.status === "active" &&
+      sessionRewardContract.mode === "reserved"
+        ? sessionRewardLockedSeconds(sessionRewardContract)
+        : 0)
+    );
+  };
+
+  const startEarnedRewardRest = () => {
+    const index = activitiesRef.current.findIndex(
+      (activity) =>
+        activity.isRewardRest && Number(activity.timeRemaining || 0) > 0,
+    );
+    if (index < 0) return;
+    const activity = activitiesRef.current[index];
+    const nowMs = Date.now();
+    const context = sessionRecordingContext(activity);
+    currentActivityIndexRef.current = index;
+    ensuredSessionRecordingRef.current = `${context.activityId}:${context.kind}`;
+    setCurrentActivityIndex(index);
+    setIsPaused(false);
+    void persistSessionTimer("start", { context }, nowMs);
+    void persistSessionRunSnapshot("running", {
+      currentActivityIndex: index,
+      observedAtMs: nowMs,
+      sessionRewardContract: sessionRewardContractRef.current,
+    });
   };
 
   const getOverallProgress = () => {
@@ -14961,10 +15402,15 @@ export default function App() {
     if (!Number.isFinite(totalAllocatedSeconds) || totalAllocatedSeconds <= 0)
       return 0;
     // Compute elapsed as baseline minus remaining to avoid drift from changing allocations
-    const totalRemaining = activities.reduce((sum, act) => {
-      if (act.countUp) return sum; // count-up doesn't contribute to baseline
-      return sum + Math.max(0, act.timeRemaining || 0);
-    }, 0);
+    const totalRemaining =
+      activities.reduce((sum, act) => {
+        if (act.countUp) return sum; // count-up doesn't contribute to baseline
+        return sum + Math.max(0, act.timeRemaining || 0);
+      }, 0) +
+      (sessionRewardContract?.status === "active" &&
+      sessionRewardContract.mode === "reserved"
+        ? sessionRewardLockedSeconds(sessionRewardContract)
+        : 0);
     const totalElapsedSeconds = Math.max(
       0,
       totalAllocatedSeconds - totalRemaining,
@@ -15101,8 +15547,27 @@ export default function App() {
     const totalsDelta = totals.actual - totals.planned;
     const totalsPct =
       totals.planned > 0 ? (totals.actual / totals.planned) * 100 : 0;
-    return { rows, totals: { ...totals, delta: totalsDelta, pct: totalsPct } };
-  }, [activities]);
+    const reward = sessionRewardContract
+      ? {
+          mode: sessionRewardContract.mode,
+          target: sessionRewardContract.targetSeconds,
+          earned: sessionRewardContract.earnedSeconds,
+          consumed: sessionRewardContract.consumedSeconds,
+          banked: sessionRewardContract.bankedSeconds,
+          discarded: sessionRewardContract.discardedSeconds,
+          shortfall: Math.max(
+            0,
+            sessionRewardContract.targetSeconds -
+              sessionRewardContract.earnedSeconds,
+          ),
+        }
+      : undefined;
+    return {
+      rows,
+      totals: { ...totals, delta: totalsDelta, pct: totalsPct },
+      ...(reward ? { reward } : {}),
+    };
+  }, [activities, sessionRewardContract]);
 
   useEffect(() => {
     // Show session report ONLY when a session truly ends: timer was active, now stopped, and there was real session work.
@@ -15173,10 +15638,53 @@ export default function App() {
     Math.min(currentActivityIndex, activities.length - 1),
   );
   const currentActivity = activities[validCurrentActivityIndex] || null;
+  const activeSessionRewardContract = sessionRewardContract;
   const displayActivities = activities
     .filter((activity) => activity.showOnBar !== false)
     .map((activity) => ({
       ...activity,
+      ...(activeSessionRewardContract?.status === "active"
+        ? (() => {
+            const planned =
+              activeSessionRewardContract.visualPlannedSecondsById[
+                activity.id
+              ];
+            if (!Number.isFinite(planned)) return {};
+            if (activity.isRewardRest) {
+              return {
+                percentage:
+                  (planned /
+                    Math.max(
+                      1,
+                      activeSessionRewardContract.sessionTotalSeconds,
+                    )) *
+                  100,
+                duration: planned / 60,
+                originalPlannedSeconds: planned,
+                timeRemaining: Math.max(
+                  0,
+                  planned - activeSessionRewardContract.earnedSeconds,
+                ),
+                isCompleted: false,
+                sessionRewardEarnedSeconds:
+                  activeSessionRewardContract.earnedSeconds,
+                sessionRewardConsumedSeconds:
+                  activeSessionRewardContract.consumedSeconds,
+              };
+            }
+            return {
+              percentage:
+                (planned /
+                  Math.max(
+                    1,
+                    activeSessionRewardContract.sessionTotalSeconds,
+                  )) *
+                100,
+              duration: planned / 60,
+              originalPlannedSeconds: planned,
+            };
+          })()
+        : {}),
       color: displayActivityColor(
         activity.color,
         settings.colorIntensity === "vivid" ? "vivid" : "standard",
@@ -15314,7 +15822,9 @@ export default function App() {
       : 0;
   const rewardBank = rewardBankHoldings(
     flowmodoroState.relaxationVaultSeconds,
-    activities,
+    sessionRewardContract?.status === "active"
+      ? activities.filter((activity) => !activity.isRewardRest)
+      : activities,
   );
   const rewardBankGoalSeconds = Math.max(
     0,
@@ -15324,6 +15834,16 @@ export default function App() {
     rewardBankGoalSeconds > 0 &&
     rewardBank.totalSeconds >= rewardBankGoalSeconds;
   const rewardBankDisplayMode = settings.flowmodoroBankDisplayMode || "split";
+  const sessionRewardDraftSeconds =
+    Math.max(
+      0,
+      Number.parseInt(sessionRewardMinutesDraft || "0", 10) || 0,
+    ) * 60;
+  const sessionRewardDraftFeasibility = sessionRewardFeasibility(
+    activities.filter((activity) => !activity.isRewardRest),
+    totalSessionMinutes * 60,
+    sessionRewardDraftSeconds,
+  );
 
   const mainContent =
     currentPage === "manage-activities" ? (
@@ -15515,6 +16035,7 @@ export default function App() {
                   showAllocationRing={settings.showCircularAllocation}
                   flowmodoroOverlaySeconds={
                     settings.flowmodoroEnabled &&
+                    sessionRewardContract?.status !== "active" &&
                     settings.flowmodoroMode === "drain" &&
                     flowmodoroState.availableRestTime > 0
                       ? flowmodoroState.availableRestTime
@@ -15543,6 +16064,7 @@ export default function App() {
                   showDrainOverlay={settings.showDrainOverlay}
                   flowmodoroOverlaySeconds={
                     settings.flowmodoroEnabled &&
+                    sessionRewardContract?.status !== "active" &&
                     settings.flowmodoroMode === "drain" &&
                     flowmodoroState.availableRestTime > 0
                       ? flowmodoroState.availableRestTime
@@ -15626,13 +16148,21 @@ export default function App() {
             <Separator />
 
             {/* Flowmodoro Rest Timer - hide when pseudo "Flow Reserve" row is active in drain mode and not currently on break */}
-            {!(
-              settings.flowmodoroEnabled &&
-              settings.flowmodoroShowAsActivity &&
-              settings.flowmodoroMode === "drain" &&
-              (settings.flowmodoroQuickReserveMinutes || 0) > 0 &&
-              !flowmodoroState.isOnBreak
-            ) && (
+            {sessionRewardContract?.status === "active" ? (
+              <div
+                className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-800"
+                role="status"
+              >
+                Quick Reserve is paused for this Session. Earn and manually
+                select Reward Rest below.
+              </div>
+            ) : !(
+                settings.flowmodoroEnabled &&
+                settings.flowmodoroShowAsActivity &&
+                settings.flowmodoroMode === "drain" &&
+                (settings.flowmodoroQuickReserveMinutes || 0) > 0 &&
+                !flowmodoroState.isOnBreak
+              ) ? (
               <FlowmodoroActivity
                 flowState={flowmodoroState}
                 scheduledRewardRest={rewardBank.scheduledSeconds}
@@ -15643,7 +16173,48 @@ export default function App() {
                 isTimerActive={isTimerActive}
                 formatTime={formatTime}
               />
-            )}
+            ) : null}
+
+            {sessionRewardContract?.status === "active" &&
+              sessionRewardAvailableSeconds(sessionRewardContract) > 0 &&
+              !activities.some(
+                (activity) =>
+                  !activity.isRewardRest &&
+                  !activity.countUp &&
+                  !activity.isCompleted &&
+                  !activity.ownTimerCompleted &&
+                  Number(activity.timeRemaining || 0) > 0,
+              ) && (
+                <div className="rounded-xl border border-violet-300 bg-violet-50 p-3">
+                  <strong className="text-sm text-violet-950">
+                    Focus work is finished
+                  </strong>
+                  <p className="mt-1 text-xs text-violet-800">
+                    {formatTime(
+                      sessionRewardAvailableSeconds(sessionRewardContract),
+                    )}{" "}
+                    of earned Reward Rest remains. Use it now or move it to the
+                    global Reward Bank and finish.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      className="min-h-11 bg-violet-600 hover:bg-violet-700"
+                      onClick={startEarnedRewardRest}
+                    >
+                      Use Reward Rest
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="min-h-11 border-violet-300 bg-white"
+                      onClick={exitSession}
+                    >
+                      Bank &amp; finish
+                    </Button>
+                  </div>
+                </div>
+              )}
 
             <div className="space-y-2">
               <TagSectionBoundary
@@ -15689,6 +16260,7 @@ export default function App() {
               <h3 className="font-semibold text-sm">Activities</h3>
               <div className="space-y-1">
                 {settings.flowmodoroEnabled &&
+                  sessionRewardContract?.status !== "active" &&
                   settings.flowmodoroShowAsActivity &&
                   settings.flowmodoroMode === "drain" &&
                   (() => {
@@ -15814,7 +16386,12 @@ export default function App() {
                         !candidate.isCompleted,
                     );
                     const activityProgress =
-                      activity.duration > 0
+                      activity.isRewardRest &&
+                      sessionRewardContract?.status === "active"
+                        ? (sessionRewardContract.earnedSeconds /
+                            Math.max(1, sessionRewardContract.targetSeconds)) *
+                          100
+                        : activity.duration > 0
                         ? ((activity.duration * 60 -
                             Math.max(0, activity.timeRemaining)) /
                             (activity.duration * 60)) *
@@ -15857,9 +16434,13 @@ export default function App() {
                       settings.showActivityPercentOnlyDuringRun &&
                       isTimerActive &&
                       !isPaused;
+                    const isSessionGoalRest =
+                      activity.isRewardRest &&
+                      sessionRewardContract?.status === "active";
                     const isVisuallyInactive =
-                      activity.isCompleted ||
-                      Number(activity.timeRemaining || 0) === 0;
+                      !isSessionGoalRest &&
+                      (activity.isCompleted ||
+                        Number(activity.timeRemaining || 0) === 0);
                     return (
                       <div
                         key={activity.id}
@@ -15937,6 +16518,7 @@ export default function App() {
                             aria-label={`Complete ${activity.name}`}
                             checked={activity.isCompleted}
                             disabled={
+                              activity.isRewardRest ||
                               activity.isCompleted ||
                               unfinishedChildren.length > 0
                             }
@@ -15963,6 +16545,28 @@ export default function App() {
                           >
                             {activity.name}
                           </span>
+                          {isSessionGoalRest && (
+                            <span className="text-[10px] font-medium text-violet-700">
+                              {formatTime(
+                                sessionRewardAvailableSeconds(
+                                  sessionRewardContract,
+                                ),
+                              )}{" "}
+                              available /{" "}
+                              {formatTime(sessionRewardContract.targetSeconds)}{" "}
+                              goal ·{" "}
+                              {formatTime(
+                                sessionRewardLockedSeconds(
+                                  sessionRewardContract,
+                                ),
+                              )}{" "}
+                              locked ·{" "}
+                              {formatTime(
+                                sessionRewardContract.consumedSeconds,
+                              )}{" "}
+                              used
+                            </span>
+                          )}
                           {activity.ownTimerCompleted &&
                             !activity.isCompleted && (
                               <span className="text-[10px] font-medium text-slate-500">
@@ -19252,7 +19856,10 @@ export default function App() {
                         size="sm"
                         variant="outline"
                         className="min-h-11 border-violet-300 bg-white"
-                        disabled={rewardBank.availableSeconds <= 0}
+                        disabled={
+                          rewardBank.availableSeconds <= 0 ||
+                          sessionRewardEnabled
+                        }
                         onClick={() => {
                           const banked = Math.max(
                             0,
@@ -19267,7 +19874,7 @@ export default function App() {
                           setBankedRestDialogOpen(true);
                         }}
                       >
-                        Add time
+                        {sessionRewardEnabled ? "Goal active" : "Add time"}
                       </Button>
                       {rewardBank.scheduledSeconds > 0 && (
                         <Button
@@ -19396,6 +20003,169 @@ export default function App() {
                       {formatMinutesHM(totalSessionMinutes)}
                     </span>{" "}
                     ({totalSessionMinutes} min)
+                  </div>
+                  <div className="rounded-xl border border-violet-200 bg-violet-50 p-3">
+                    <label className="flex min-h-11 items-center justify-between gap-3">
+                      <span>
+                        <strong className="block text-sm text-violet-950">
+                          Session Reward Goal
+                        </strong>
+                        <span className="block text-xs text-violet-700">
+                          Earn a protected rest activity by completing planned
+                          countdown work.
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="h-5 w-5"
+                        checked={sessionRewardEnabled}
+                        disabled={isTimerActive}
+                        onChange={(event) => {
+                          setSessionRewardEnabled(event.target.checked);
+                          if (!event.target.checked) {
+                            setSessionRewardMinutesDraft("");
+                            setSessionRewardMode("reserved");
+                          }
+                        }}
+                        aria-label="Enable Session Reward Goal"
+                      />
+                    </label>
+                    {sessionRewardEnabled && (
+                      <div className="mt-3 space-y-3 border-t border-violet-200 pt-3">
+                        <label className="block text-sm font-semibold text-violet-950">
+                          Reward Rest goal (minutes)
+                          <Input
+                            type="number"
+                            inputMode="numeric"
+                            min="1"
+                            max={Math.max(1, totalSessionMinutes - 1)}
+                            value={sessionRewardMinutesDraft}
+                            onChange={(event) =>
+                              setSessionRewardMinutesDraft(event.target.value)
+                            }
+                            placeholder="e.g. 60"
+                            className="mt-1 h-11 bg-white text-base"
+                          />
+                        </label>
+                        <div
+                          className="grid grid-cols-2 gap-2"
+                          role="radiogroup"
+                          aria-label="Reward allocation mode"
+                        >
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={sessionRewardMode === "reserved"}
+                            className={
+                              "min-h-11 rounded-lg border px-2 text-sm font-semibold " +
+                              (sessionRewardMode === "reserved"
+                                ? "border-violet-600 bg-violet-600 text-white"
+                                : "border-violet-200 bg-white text-violet-900")
+                            }
+                            onClick={() => setSessionRewardMode("reserved")}
+                          >
+                            Reserved slot
+                          </button>
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={sessionRewardMode === "live"}
+                            className={
+                              "min-h-11 rounded-lg border px-2 text-sm font-semibold " +
+                              (sessionRewardMode === "live"
+                                ? "border-violet-600 bg-violet-600 text-white"
+                                : "border-violet-200 bg-white text-violet-900")
+                            }
+                            onClick={() => setSessionRewardMode("live")}
+                          >
+                            Live fill
+                          </button>
+                        </div>
+                        {sessionRewardDraftSeconds > 0 && (
+                          <div
+                            className={
+                              "rounded-lg p-3 text-sm " +
+                              (sessionRewardDraftFeasibility.feasible
+                                ? "bg-white text-slate-700"
+                                : "border border-amber-300 bg-amber-50 text-amber-900")
+                            }
+                            role="status"
+                          >
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-1 tabular-nums">
+                              <span>Focused work</span>
+                              <strong className="text-right">
+                                {formatTime(
+                                  Math.max(
+                                    0,
+                                    totalSessionMinutes * 60 -
+                                      sessionRewardDraftSeconds,
+                                  ),
+                                )}
+                              </strong>
+                              <span>Reward Rest</span>
+                              <strong className="text-right">
+                                {formatTime(sessionRewardDraftSeconds)}
+                              </strong>
+                              <span>Earning pace</span>
+                              <strong className="text-right">
+                                {sessionRewardDraftSeconds > 0
+                                  ? (
+                                      Math.max(
+                                        0,
+                                        totalSessionMinutes * 60 -
+                                          sessionRewardDraftSeconds,
+                                      ) / sessionRewardDraftSeconds
+                                    ).toFixed(2) + " work : 1 rest"
+                                  : "—"}
+                              </strong>
+                            </div>
+                            {!sessionRewardDraftFeasibility.feasible && (
+                              <div className="mt-3 flex items-center justify-between gap-3">
+                                <span className="text-xs">
+                                  Maximum fundable goal:{" "}
+                                  {formatTime(
+                                    sessionRewardDraftFeasibility.fittedSeconds,
+                                  )}
+                                </span>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="min-h-11 shrink-0 bg-white"
+                                  disabled={
+                                    sessionRewardDraftFeasibility.fittedSeconds <
+                                    60
+                                  }
+                                  onClick={() =>
+                                    setSessionRewardMinutesDraft(
+                                      String(
+                                        Math.floor(
+                                          sessionRewardDraftFeasibility.fittedSeconds /
+                                            60,
+                                        ),
+                                      ),
+                                    )
+                                  }
+                                >
+                                  Fit goal
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {rewardBank.scheduledSeconds > 0 && (
+                          <p className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                            Unschedule the existing Bank-funded Reward Rest
+                            before starting this reward contract.
+                          </p>
+                        )}
+                        <p className="text-xs text-violet-700">
+                          Quick Reserve earning and spending are disabled only
+                          while this contract is running. The global Reward
+                          Bank remains separate.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-4">
@@ -19921,7 +20691,12 @@ export default function App() {
                   <Button
                     size="lg"
                     onClick={startSession}
-                    disabled={Math.abs(totalPercentage - 100) > 0.1}
+                    disabled={
+                      Math.abs(totalPercentage - 100) > 0.1 ||
+                      (sessionRewardEnabled &&
+                        (!sessionRewardDraftFeasibility.feasible ||
+                          rewardBank.scheduledSeconds > 0))
+                    }
                     className="w-full sm:w-auto px-8 py-4 text-lg h-12"
                   >
                     <Icon name="play" className="h-6 w-6 mr-3" />

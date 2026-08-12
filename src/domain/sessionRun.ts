@@ -15,6 +15,7 @@ export type SessionRunActivity = SessionActivityLike & {
   sharedId?: string;
   parentActivityId?: string;
   ownTimerCompleted?: boolean;
+  manualOnly?: boolean;
 };
 
 export type SessionAdvanceInput = {
@@ -83,7 +84,8 @@ const nextIncompleteIndex = (
     const index = (afterIndex + offset) % activities.length;
     if (
       !activities[index]?.isCompleted &&
-      !activities[index]?.ownTimerCompleted
+      !activities[index]?.ownTimerCompleted &&
+      !activities[index]?.manualOnly
     )
       return index;
   }
@@ -256,6 +258,19 @@ export function advanceSessionRun({
         safeSeconds(current.completedElapsedSeconds),
         plannedSeconds(current),
       );
+      const next = nextIncompleteIndex(activities, cursor);
+      if (next < 0) {
+        remainingBatch = 0;
+        break;
+      }
+      cursor = next;
+      continue;
+    }
+
+    if (current.manualOnly) {
+      current.isCompleted = true;
+      current.timeRemaining = 0;
+      completedActivityIds.push(current.id);
       const next = nextIncompleteIndex(activities, cursor);
       if (next < 0) {
         remainingBatch = 0;

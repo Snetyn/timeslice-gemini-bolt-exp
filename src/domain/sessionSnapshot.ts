@@ -7,6 +7,7 @@ export type SessionRunSnapshot = {
   lastReconciledAtMs: number | null;
   sessionPlanFrozen: boolean;
   initialAllocatedSeconds: number | null;
+  sessionRewardContract?: SessionRewardContract;
   // Compatibility fields retained for rollback to older TimeSlice builds.
   isTimerActive: boolean;
   isPaused: boolean;
@@ -35,6 +36,8 @@ export type PersistedSessionActivity = {
   priority?: boolean;
   isRewardRest?: boolean;
   rewardRestFunding?: RewardRestFunding;
+  sessionRewardTargetSeconds?: number;
+  manualOnly?: boolean;
   parentActivityId?: string;
   ownTimerCompleted?: boolean;
   subActivityFunding?: SubActivityFunding;
@@ -90,6 +93,7 @@ export const createSessionRunSnapshot = (input: {
   lastReconciledAtMs?: number | null;
   sessionPlanFrozen: boolean;
   initialAllocatedSeconds?: number | null;
+  sessionRewardContract?: SessionRewardContract;
 }): SessionRunSnapshot => {
   const running = input.status === "running";
   const active = input.status !== "idle";
@@ -97,6 +101,9 @@ export const createSessionRunSnapshot = (input: {
     ? nonNegativeInteger(input.lastReconciledAtMs ?? Date.now())
     : null;
   const initial = nonNegativeInteger(input.initialAllocatedSeconds);
+  const sessionRewardContract = normalizeSessionRewardContract(
+    input.sessionRewardContract,
+  );
   return {
     version: 1,
     status: input.status,
@@ -104,6 +111,7 @@ export const createSessionRunSnapshot = (input: {
     lastReconciledAtMs: anchor,
     sessionPlanFrozen: Boolean(input.sessionPlanFrozen),
     initialAllocatedSeconds: initial > 0 ? initial : null,
+    ...(sessionRewardContract ? { sessionRewardContract } : {}),
     isTimerActive: active,
     isPaused: input.status === "paused",
     lastActiveTimestamp: anchor,
@@ -136,6 +144,9 @@ export const normalizeSessionRunSnapshot = (
     ),
     sessionPlanFrozen: Boolean(record.sessionPlanFrozen),
     initialAllocatedSeconds: nonNegativeInteger(record.initialAllocatedSeconds),
+    sessionRewardContract: normalizeSessionRewardContract(
+      record.sessionRewardContract,
+    ),
   });
 };
 
@@ -186,6 +197,12 @@ export const normalizePersistedSessionActivity = (
     priority: Boolean(value.priority),
     isRewardRest: Boolean(value.isRewardRest),
     rewardRestFunding: normalizeRewardRestFunding(value.rewardRestFunding),
+    sessionRewardTargetSeconds: Number.isFinite(
+      Number(value.sessionRewardTargetSeconds),
+    )
+      ? Math.max(0, Number(value.sessionRewardTargetSeconds))
+      : undefined,
+    manualOnly: Boolean(value.manualOnly),
     parentActivityId:
       typeof value.parentActivityId === "string" &&
       value.parentActivityId.trim()
@@ -305,6 +322,10 @@ import {
   normalizeRewardRestFunding,
   type RewardRestFunding,
 } from "./bankedRest";
+import {
+  normalizeSessionRewardContract,
+  type SessionRewardContract,
+} from "./sessionRewardGoal";
 import {
   normalizeSessionHierarchy,
   normalizeSubActivityFunding,

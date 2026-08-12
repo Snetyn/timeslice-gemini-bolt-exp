@@ -26,6 +26,15 @@ export type SessionReport = {
     drained: number;
     received: number;
   };
+  reward?: {
+    mode: "reserved" | "live";
+    target: number;
+    earned: number;
+    consumed: number;
+    banked: number;
+    discarded: number;
+    shortfall: number;
+  };
 };
 
 export type ReportWheelSegment = {

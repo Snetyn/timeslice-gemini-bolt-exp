@@ -143,6 +143,45 @@ export function SessionReportModal({
           </div>
         )}
 
+        {report.reward && (
+          <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <strong className="text-sm text-violet-950">
+                Session Reward Goal
+              </strong>
+              <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold capitalize text-violet-800">
+                {report.reward.mode}
+              </span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs tabular-nums text-violet-900">
+              <span>Goal</span>
+              <strong className="text-right">{minutes(report.reward.target)}</strong>
+              <span>Earned</span>
+              <strong className="text-right">{minutes(report.reward.earned)}</strong>
+              <span>Used</span>
+              <strong className="text-right">{minutes(report.reward.consumed)}</strong>
+              <span>Banked</span>
+              <strong className="text-right">{minutes(report.reward.banked)}</strong>
+              {report.reward.shortfall > 0 && (
+                <>
+                  <span>Shortfall</span>
+                  <strong className="text-right text-amber-700">
+                    {minutes(report.reward.shortfall)}
+                  </strong>
+                </>
+              )}
+              {report.reward.discarded > 0 && (
+                <>
+                  <span>Discarded at Bank cap</span>
+                  <strong className="text-right text-rose-700">
+                    {minutes(report.reward.discarded)}
+                  </strong>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="mt-5 max-h-72 space-y-2 overflow-y-auto pr-1">
           {report.rows.slice().map((row) => {
             const scale = Math.max(row.planned, row.actual, 1);
